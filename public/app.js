@@ -14,7 +14,9 @@ const tags = [
 const tagMap = Object.fromEntries(tags.map(t => [t[1].toLowerCase(), t]));
 const attrButtons = [
   ["ID=", " id=\"\"", 5, "Insert id attribute"],
-  ["CLASS=", " class=\"\"", 8, "Insert class attribute"]
+  ["CLASS=", " class=\"\"", 8, "Insert class attribute"],
+  ["STYLE=", " style=\"\"", 8, "Insert style attribute"],
+  ["text-indent: 0", " style=\"text-indent: 0;\"", 23, "Insert no indent attribute"]
 ];
 const replaceableBlockKeys = new Set(["p", "r", "c", "1", "2", "3", "4", "5", "6", "d"]);
 
