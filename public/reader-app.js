@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { config: null, volume: null, page: null, source: "", savedSource: "", mtime: null, editable: true, dirty: false, mode: "visual", zoom: 1, matches: [], match: -1, undo: [], redo: [], pendingVisualScroll: null };
+const state = { config: null, volume: null, page: null, source: "", savedSource: "", mtime: null, editable: true, dirty: false, mode: "visual", zoom: 1, sideBySide: false, matches: [], match: -1, undo: [], redo: [], pendingVisualScroll: null };
 const tags = [
   ["B", "b", "<b>", "</b>", "Alt+B / b"], ["I", "i", "<i>", "</i>", "Alt+I / i"],
   ["Q", "q", "<blockquote>", "</blockquote>", "Alt+Q / q"], ["A", "a", "<a href=\"\" id=\"\">", "</a>", "Alt+A / a"],
@@ -38,12 +38,12 @@ function markDirty(on = true) {
 }
 
 function currentSnapshot() {
-  if (state.mode === "visual") syncFromVisual();
   const editor = document.getElementById("editor");
   const visualDocument = document.getElementById("visualEditor").contentDocument;
   const scroll = state.mode === "visual" ? (visualDocument?.scrollingElement?.scrollTop || 0) : editor.scrollTop;
   const scrollLeft = state.mode === "visual" ? (visualDocument?.scrollingElement?.scrollLeft || 0) : editor.scrollLeft;
-  return { text: state.mode === "source" ? editor.value : state.source, a: editor.selectionStart || 0, b: editor.selectionEnd || 0, scroll, scrollLeft }; 
+  const text = state.mode === "visual" ? sourceFromVisual() : editor.value;
+  return { text, a: editor.selectionStart || 0, b: editor.selectionEnd || 0, scroll, scrollLeft };
 }
 
 function updateHistoryButtons() {
@@ -134,7 +134,7 @@ function activeChapter() {
 
 function injectEditorDocument(source) {
   const base = `<base href="/api/reader/resource/${encodeURIComponent(state.volume)}/">`;
-  const style = `<style data-reader-editor>html{background:#fff}body{max-width:760px;margin:0 auto;padding:40px 48px 80px;color:#251f1b;font:18px/1.75 Georgia,"Noto Serif SC","SimSun",serif;outline:none}img{max-width:100%;height:auto}a{color:#8f2923}body:focus{box-shadow:inset 0 0 0 2px #9d2b2430}</style>`;
+  const style = `<style data-reader-editor>html{background:var(--reader-bg,#fff)}body{max-width:760px;margin:0 auto;padding:40px 48px 80px;background:var(--reader-bg,#fff);color:var(--reader-ink,#251f1b);font:18px/1.75 Georgia,"Noto Serif SC","SimSun",serif;outline:none}img{max-width:100%;height:auto}a{color:var(--reader-link,#8f2923)}.reader-ctrl-link a[href]{text-decoration:underline;cursor:pointer}body:focus{box-shadow:inset 0 0 0 2px #9d2b2430}</style>`;
   if (/<head\b[^>]*>/i.test(source)) return source.replace(/<head\b[^>]*>/i, (head) => `${head}${base}${style}`);
   if (/<html\b[^>]*>/i.test(source)) return source.replace(/<html\b[^>]*>/i, (html) => `${html}<head>${base}${style}</head>`);
   return `<!doctype html><html><head>${base}${style}</head><body>${source}</body></html>`;
@@ -145,13 +145,33 @@ function applyVisualTheme() {
   if (!doc?.body) return;
   const dark = document.body.classList.contains("dark");
   doc.documentElement.style.colorScheme = dark ? "dark" : "light";
-  doc.documentElement.style.backgroundColor = dark ? "#1e1e1e" : "#ffffff";
-  doc.body.style.backgroundColor = dark ? "#1e1e1e" : "#ffffff";
-  doc.body.style.color = dark ? "#d4d4d4" : "#251f1b";
-  doc.querySelectorAll("a").forEach((link) => { link.style.color = dark ? "#4fc1ff" : "#8f2923"; });
+  doc.documentElement.style.setProperty("--reader-bg", dark ? "#1e1e1e" : "#ffffff");
+  doc.documentElement.style.setProperty("--reader-ink", dark ? "#d4d4d4" : "#251f1b");
+  doc.documentElement.style.setProperty("--reader-link", dark ? "#4fc1ff" : "#8f2923");
 }
-function showVisual() {
+function setVisualLinkMode(doc, event) {
+  doc.documentElement.classList.toggle("reader-ctrl-link", event.ctrlKey || event.metaKey);
+}
+
+function openVisualLink(event, doc) {
+  const link = event.target.closest?.("a[href]");
+  if (!link || !(event.ctrlKey || event.metaKey)) return;
+  const href = link.getAttribute("href");
+  event.preventDefault();
+  if (href.startsWith("#")) {
+    const id = decodeURIComponent(href.slice(1));
+    const target = doc.getElementById(id) || doc.getElementsByName(id)[0];
+    if (target) {
+      target.scrollIntoView({ block: "center", inline: "nearest" });
+      note(`Jumped to ${href}`);
+    } else note(`Anchor not found: ${href}`);
+    return;
+  }
+  window.open(new URL(href, doc.baseURI).href, "_blank");
+}
+
   const frame = $("visualEditor");
+function showVisual() {
   frame.onload = () => {
     const doc = frame.contentDocument;
     if (!doc?.body) return;
@@ -162,26 +182,34 @@ function showVisual() {
     doc.addEventListener("keydown", historyKeydown);
     doc.addEventListener("keydown", tagKeydown);
     applyVisualTheme();
+    doc.addEventListener("click", (event) => openVisualLink(event, doc));
+    doc.addEventListener("keydown", (event) => setVisualLinkMode(doc, event));
+    doc.addEventListener("keyup", (event) => setVisualLinkMode(doc, event));
+    doc.addEventListener("mousemove", (event) => setVisualLinkMode(doc, event));
+    frame.contentWindow.addEventListener("blur", () => doc.documentElement.classList.remove("reader-ctrl-link"));
     if (state.pendingVisualScroll != null) { const position = state.pendingVisualScroll; state.pendingVisualScroll = null; requestAnimationFrame(() => { doc.scrollingElement.scrollTop = position.top; doc.scrollingElement.scrollLeft = position.left; }); }
-    if (!state.dirty && !state.undo.length && state.source === state.savedSource) { syncFromVisual(); state.savedSource = state.source; document.getElementById("editor").value = state.source; }
   };
   frame.srcdoc = injectEditorDocument(state.source);
 }
 
-function syncFromVisual() {
+function sourceFromVisual() {
   const live = $("visualEditor").contentDocument;
-  if (!live?.body) return;
+  if (!live?.body) return state.source;
   const parsed = new DOMParser().parseFromString(state.source, "text/html");
   parsed.body.innerHTML = live.body.innerHTML;
   parsed.head.querySelectorAll("[data-reader-editor]").forEach((node) => node.remove());
   const doctype = parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : "<!doctype html>";
-  state.source = `${doctype}\n${parsed.documentElement.outerHTML}`;
+  return `${doctype}\n${parsed.documentElement.outerHTML}`;
+}
+
+function syncFromVisual() {
+  state.source = sourceFromVisual();
 }
 
 function setMode(mode) {
   if (!state.page) return;
   if (mode === "source" && state.mode === "visual") {
-    syncFromVisual();
+    // Show the file text loaded by the server, not a serialization of the preview DOM.
     $("editor").value = state.source;
     updateHighlight();
   } else if (mode === "visual" && state.mode === "source") {
@@ -208,16 +236,15 @@ async function navigate(targetVolume, targetPage, force = false) {
   const actualPage = nextVolume.pages.includes(Number(targetPage)) ? Number(targetPage)
     : nextVolume.pages.reduce((best, item) => Math.abs(item - Number(targetPage)) < Math.abs(best - Number(targetPage)) ? item : best, nextVolume.pages[0]);
   try {
-    note("正在载入…");
     const data = await api(`/api/reader/page/${encodeURIComponent(nextVolume.id)}/${actualPage}`);
     state.volume = nextVolume.id; state.page = actualPage; state.source = data.text;
     state.savedSource = data.text; state.undo = []; state.redo = []; updateHistoryButtons();
     state.mtime = data.mtime; state.editable = data.editable; state.mode = "visual";
     $("volumeSelect").value = state.volume; $("pageInput").value = state.page;
     $("sourcePane").hidden = true; $("visualEditor").hidden = false; $("modeBtn").textContent = "源代码";
-    $("editor").value = state.source; markDirty(false); showVisual(); renderNavigation(); setImage(data.imageUrl);
+    $("editor").value = state.source; markDirty(false); showVisual(); renderNavigation(); setImages(data.imageUrl, imagePages(nextVolume, actualPage));
     history.replaceState(null, "", `?volume=${encodeURIComponent(state.volume)}&page=${state.page}`);
-    note(state.editable ? "页面已载入" : "远程页面：只读");
+    if (!state.editable) note("远程页面：只读");
     return true;
   } catch (error) {
     note(error.message);
@@ -250,12 +277,94 @@ function renderToc() {
   $("tocBtn").hidden = !current.toc.length;
 }
 
-function setImage(url) {
-  const image = $("scanImage");
-  state.zoom = 1; image.style.setProperty("--zoom", 1);
-  image.hidden = !url; $("scanMissing").hidden = Boolean(url); $("fullImage").disabled = !url;
-  image.src = url || ""; $("dialogImage").src = url || "";
-  image.onerror = () => { image.hidden = true; $("scanMissing").hidden = false; $("fullImage").disabled = true; };
+function imagePages(currentVolume, page) {
+  const index = currentVolume.pages.indexOf(page);
+  const nextPage = currentVolume.pages[index + 1];
+  const end = Number.isFinite(nextPage) ? nextPage : page + 1;
+  return Array.from({ length: Math.max(1, end - page) }, (_, offset) => page + offset);
+}
+
+function imageUrlForPage(url, sourcePage, targetPage) {
+  if (targetPage === sourcePage) return url;
+  const parsed = new URL(url, location.href);
+  const parts = parsed.pathname.split("/");
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const matches = [...parts[index].matchAll(/\d+/g)];
+    const match = matches.reverse().find((item) => Number(item[0]) === sourcePage);
+    if (!match) continue;
+    const replacement = String(targetPage).padStart(match[0].length, "0");
+    parts[index] = parts[index].slice(0, match.index) + replacement + parts[index].slice(match.index + match[0].length);
+    parsed.pathname = parts.join("/");
+    return parsed.href;
+  }
+  return url;
+}
+
+function updateImageLayout() {
+  const stage = $("scanStage");
+  const images = stage.querySelectorAll(".scan-page-image");
+  const canSpread = images.length > 1;
+  const button = $("imageLayout");
+  button.hidden = !canSpread;
+  button.setAttribute("aria-pressed", String(canSpread && state.sideBySide));
+  button.textContent = state.sideBySide ? "上下分布" : "左右分布";
+  stage.classList.toggle("side-by-side", canSpread && state.sideBySide);
+}
+
+function setZoom(zoom) {
+  state.zoom = Math.max(.25, Math.min(3, zoom));
+  document.querySelectorAll(".scan-page-image").forEach((image) => image.style.setProperty("--zoom", state.zoom));
+  $("zoomFit").textContent = `${Math.round(state.zoom * 100)}%`;
+}
+
+function setImages(url, pages) {
+  const stage = $("scanStage");
+  const dialog = $("imageDialog");
+  stage.querySelectorAll(".scan-page-image").forEach((image) => image.remove());
+  dialog.querySelectorAll(".dialog-page-image").forEach((image) => image.remove());
+  $("scanImage").hidden = true;
+  $("dialogImage").hidden = true;
+  setZoom(1);
+  let loaded = 0;
+
+  const urls = url ? pages.map((page) => imageUrlForPage(url, state.page, page)) : [];
+  $("scanMissing").hidden = Boolean(urls.length);
+  $("fullImage").disabled = !urls.length;
+
+  urls.forEach((imageUrl, index) => {
+    const image = document.createElement("img");
+    image.className = "scan-page-image";
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.style.setProperty("--zoom", 1);
+    image.onload = () => {
+      if (!image.isConnected) return;
+      loaded += 1; $("scanMissing").hidden = true; $("fullImage").disabled = false;
+    };
+    image.onerror = () => {
+      if (!image.isConnected) return;
+      image.remove();
+      updateImageLayout();
+      if (!loaded && !stage.querySelector(".scan-page-image")) {
+        $("scanMissing").hidden = false;
+        $("fullImage").disabled = true;
+      }
+    };
+    image.src = imageUrl;
+    stage.insertBefore(image, $("scanMissing"));
+
+    const fullImage = document.createElement("img");
+    fullImage.className = "dialog-page-image";
+    fullImage.alt = image.alt;
+    fullImage.loading = "lazy";
+    fullImage.decoding = "async";
+    fullImage.style.cssText = "display:block;max-width:none;margin:0 auto 16px";
+    fullImage.src = imageUrl;
+    fullImage.onerror = () => fullImage.remove();
+    dialog.appendChild(fullImage);
+  });
+  updateImageLayout();
 }
 
 async function save() {
@@ -270,17 +379,32 @@ async function save() {
   } catch (error) { note(error.message); }
 }
 
+function attrToken(raw, value) {
+  const link = raw.match(/^\s*href\s*=\s*(["'])([\s\S]*?)\1$/i);
+  if (link) return `<span class="tok-string">${esc(link[1])}</span><span class="tok-link" data-href="${esc(link[2])}" title="Ctrl+click to open">${esc(link[2])}</span><span class="tok-string">${esc(link[1])}</span>`;
+  return `<span class="tok-string">${esc(value)}</span>`;
+}
+
+function colorTag(raw) {
+  if (raw.startsWith("<!--")) return `<span class="tok-comment">${esc(raw)}</span>`;
+  let result = "", last = 0;
+  const pattern = /(<\/?)([A-Za-z][\w:-]*)|([\w:-]+)(\s*=\s*)("[^"]*"|'[^']*')|([<>\/=])/g;
+  for (let match; (match = pattern.exec(raw));) {
+    result += esc(raw.slice(last, match.index));
+    if (match[1]) result += `${esc(match[1])}<span class="tok-tag">${esc(match[2])}</span>`;
+    else if (match[3]) result += `<span class="tok-attr">${esc(match[3])}</span>${esc(match[4])}${attrToken(match[0], match[5])}`;
+    else result += esc(match[6]);
+    last = match.index + match[0].length;
+  }
+  return result + esc(raw.slice(last));
+}
+
 function colorHtml(text) {
   let result = "", last = 0;
   const pattern = /<!--[\s\S]*?-->|<\/?[A-Za-z][^>]*?>/g;
   for (let match; (match = pattern.exec(text));) {
-    result += esc(text.slice(last, match.index));
-    const token = match[0];
-    if (token.startsWith("<!--")) result += `<span class="tok-comment">${esc(token)}</span>`;
-    else result += esc(token)
-      .replace(/(&lt;\/?)([A-Za-z][\w:-]*)/, '$1<span class="tok-tag">$2</span>')
-      .replace(/([\w:-]+)(=)(&quot;.*?&quot;|'[^']*')/g, '<span class="tok-attr">$1</span>$2<span class="tok-string">$3</span>');
-    last = match.index + token.length;
+    result += esc(text.slice(last, match.index)) + colorTag(match[0]);
+    last = match.index + match[0].length;
   }
   return result + esc(text.slice(last)) + (text.endsWith("\n") ? " " : "");
 }
@@ -289,6 +413,60 @@ function updateHighlight() {
   $("highlight").innerHTML = colorHtml($("editor").value);
   $("highlight").scrollTop = $("editor").scrollTop; $("highlight").scrollLeft = $("editor").scrollLeft;
 }
+
+
+function scrollSelectionIntoView(editor, pos) {
+  const wrap = editor.parentElement;
+  const style = getComputedStyle(editor);
+  const mirror = document.createElement("div");
+  const marker = document.createElement("span");
+  mirror.style.cssText = `position:absolute;visibility:hidden;inset:0 auto auto 0;width:${editor.clientWidth}px;min-height:${editor.clientHeight}px;padding:${style.padding};border:0;margin:0;box-sizing:border-box;overflow-wrap:break-word;white-space:pre-wrap;font:${style.font};line-height:${style.lineHeight};letter-spacing:${style.letterSpacing};tab-size:${style.tabSize}`;
+  mirror.textContent = editor.value.slice(0, pos);
+  marker.textContent = "\u200b";
+  mirror.append(marker);
+  wrap.append(mirror);
+  editor.scrollTop = Math.max(0, marker.offsetTop - editor.clientHeight / 2);
+  editor.scrollLeft = Math.max(0, marker.offsetLeft - editor.clientWidth / 2);
+  mirror.remove();
+  updateHighlight();
+}
+
+function gotoAnchor(fragment) {
+  const id = decodeURIComponent(fragment.slice(1));
+  if (!id) return false;
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`\\bid\\s*=\\s*(["'])${escaped}\\1`, "i").exec($("editor").value);
+  if (!match) return false;
+  const start = match.index + match[0].lastIndexOf(id);
+  const editor = $("editor");
+  editor.focus();
+  editor.setSelectionRange(start, start + id.length);
+  scrollSelectionIntoView(editor, start);
+  note(`Jumped to ${fragment}`);
+  return true;
+}
+
+function openSourceHref(href) {
+  if (href.startsWith("#")) {
+    if (!gotoAnchor(href)) note(`Anchor not found: ${href}`);
+    return;
+  }
+  const base = `/api/reader/resource/${encodeURIComponent(state.volume)}/`;
+  window.open(new URL(href, location.origin + base).href, "_blank");
+}
+
+function openHighlightedLink(event) {
+  if (!(event.ctrlKey || event.metaKey)) return;
+  const link = event.target.closest(".tok-link[data-href]");
+  if (!link) return;
+  event.preventDefault();
+  openSourceHref(link.dataset.href);
+}
+
+function setLinkClickMode(event) {
+  document.querySelector(".editor-wrap")?.classList.toggle("ctrl-link", event.ctrlKey || event.metaKey);
+}
+
 
 function insertVisual(open, close) {
   remember();
@@ -400,12 +578,17 @@ $("tocList").onclick = (event) => { const link = event.target.closest("[data-pag
 document.getElementById("editor").addEventListener("beforeinput", remember);
 $("editor").oninput = () => { state.source = $("editor").value; markDirty(); updateHighlight(); };
 $("editor").onscroll = updateHighlight;
+$("highlight").addEventListener("click", openHighlightedLink);
 $("findBtn").onclick = nextMatch; $("nextBtn").onclick = nextMatch; $("replaceBtn").onclick = replaceOne; $("allBtn").onclick = replaceAll;
 $("findText").oninput = findAll; $("regexBox").onchange = findAll; $("caseBox").onchange = findAll;
-$("zoomIn").onclick = () => { state.zoom = Math.min(3, state.zoom + .25); $("scanImage").style.setProperty("--zoom", state.zoom); };
-$("zoomOut").onclick = () => { state.zoom = Math.max(.25, state.zoom - .25); $("scanImage").style.setProperty("--zoom", state.zoom); };
-$("zoomFit").onclick = () => { state.zoom = 1; $("scanImage").style.setProperty("--zoom", 1); };
+$("zoomIn").onclick = () => setZoom(state.zoom + .25);
+$("zoomOut").onclick = () => setZoom(state.zoom - .25);
+$("zoomFit").onclick = () => setZoom(1);
+$("imageLayout").onclick = () => { state.sideBySide = !state.sideBySide; updateImageLayout(); };
 $("fullImage").onclick = () => $("imageDialog").showModal(); $("dialogClose").onclick = () => $("imageDialog").close();
+document.addEventListener("keydown", setLinkClickMode);
+document.addEventListener("keyup", setLinkClickMode);
+window.addEventListener("blur", () => document.querySelector(".editor-wrap")?.classList.remove("ctrl-link"));
 $("darkBtn").onclick = () => { document.body.classList.toggle("dark"); localStorage.setItem("readerDark", document.body.classList.contains("dark") ? "1" : "0"); };
 document.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && ["z", "y"].includes(event.key.toLowerCase())) return historyKeydown(event);

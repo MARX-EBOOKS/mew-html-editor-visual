@@ -182,7 +182,8 @@ async function api(req, res, url) {
     }
     if (parts[2] === "image") {
       const volume = getVolume(decodeURIComponent(parts[3] || ""));
-      const page = getPage(volume, parts[4]);
+      const page = Number(parts[4]);
+      if (!Number.isInteger(page) || page < 1) throw new Error(`Invalid image page: ${parts[4]}`);
       if (!volume.imageRoot || volume.imageRoot.kind !== "file") return reply(res, 404, "Not found", "text/plain");
       const location = path.join(volume.imageRoot.path, formatPattern(volume.imagePattern, page, volume.id));
       return reply(res, 200, await fs.readFile(location), MIME[path.extname(location).toLowerCase()] || "application/octet-stream");

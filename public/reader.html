@@ -23,10 +23,10 @@
       <div class="editor-wrap"><pre id="highlight"></pre><textarea id="editor" spellcheck="false"></textarea></div>
     </div>
   </section>
-  <aside class="scan-pane"><div class="scan-tools"><strong>扫描原图</strong><button id="zoomOut">−</button><button id="zoomFit">适应</button><button id="zoomIn">＋</button><button id="fullImage">全屏</button></div>
-    <div id="scanStage"><img id="scanImage" alt="本页扫描原图"><p id="scanMissing" hidden>本页没有可用扫描图</p></div>
+  <aside class="scan-pane"><div class="scan-tools"><button id="imageLayout" type="button" aria-pressed="false" hidden>左右分布</button><button id="zoomOut">−</button><button id="zoomFit" title="恢复到 100%">100%</button><button id="zoomIn">＋</button><button id="fullImage">全屏</button></div>
+    <div id="scanStage"><img id="scanImage" alt="" hidden><p id="scanMissing" hidden></p></div>
   </aside>
 </main>
 <footer class="page-footer"><button id="prevBtn">← 上一页</button><span id="pagePosition"></span><button id="nextPageBtn">下一页 →</button></footer>
-<dialog id="imageDialog"><button id="dialogClose">关闭</button><img id="dialogImage" alt="扫描原图"></dialog>
+<dialog id="imageDialog"><button id="dialogClose">关闭</button><img id="dialogImage" alt="" hidden></dialog>
 <script src="reader-app.js"></script><script src="reader-tag-toggle.js"></script><script src="reader-ui.js"></script></body></html>
