@@ -2,10 +2,12 @@ const $ = id => document.getElementById(id);
 const state = { path: "", docs: new Map(), checkingFiles: false, checkingTree: false, cssText: "", treeText: "" };
 const tags = [
   ["B", "b", "<b>", "</b>", "Alt+B / b"], ["I", "i", "<i>", "</i>", "Alt+I / i"],
+  ["EM", "em", "<em>", "</em>", "Insert emphasis"],
   ["Q", "q", "<blockquote>", "</blockquote>", "Alt+Q / q"], ["A", "a", "<a href=\"\" id=\"\">", "</a>", "Alt+A / a"],
   ["ID", "x", "<a id=\"\">", "</a>", "Alt+X / x"],
   ["HREF", "l", "<a href=\"\">", "</a>", "Alt+L / l"], ["FN", "f", "<sup><a href=\"\" id=\"\">", "</a></sup>", "Alt+F / f"],
   ["R", "r", "<p align=\"right\">", "</p>", "Alt+R / r"], ["C", "c", "<p align=\"center\">", "</p>", "Alt+C / c"],
+  ["ltgt", "&lt;&gt;","&lt;","&gt;","Insert angle bracket"],
   ["H1", "1", "<h1>", "</h1>", "Alt+1 / 1"], ["H2", "2", "<h2>", "</h2>", "Alt+2 / 2"], ["H3", "3", "<h3>", "</h3>", "Alt+3 / 3"],
   ["H4", "4", "<h4>", "</h4>", "Alt+4 / 4"], ["H5", "5", "<h5>", "</h5>", "Alt+5 / 5"], ["H6", "6", "<h6>", "</h6>", "Alt+6 / 6"],
   ["P", "p", "<p>", "</p>", "Alt+P / p"], ["BR", "Enter", "<br>\n", "", "Alt+Enter"],
@@ -15,12 +17,15 @@ const tagMap = Object.fromEntries(tags.map(t => [t[1].toLowerCase(), t]));
 const attrButtons = [
   ["ID=", " id=\"\"", 5, "Insert id attribute"],
   ["CLASS=", " class=\"\"", 8, "Insert class attribute"],
-  ["STYLE=", " style=\"\"", 8, "Insert style attribute"],
-  ["text-indent: 0", " style=\"text-indent: 0;\"", 23, "Insert no indent attribute"]
+  ["无缩进", " style=\"text-indent: 0;\"", 23, "Insert no-indent style attribute"]
 ];
 const replaceableBlockKeys = new Set(["p", "r", "c", "1", "2", "3", "4", "5", "6", "d"]);
-
-
+const removableInlineKeys = new Set(["b", "i", "em"]);
+const UNDO_LIMIT = 100;
+const UNDO_CHAR_LIMIT = 10_000_000;
+const PREVIEW_DELAY = 200;
+let highlightFrame = 0;
+let previewTimer = 0;
 function api(url, options) {
   return fetch(url, options).then(async r => {
     const type = r.headers.get("content-type") || "";
@@ -29,17 +34,46 @@ function api(url, options) {
     return data;
   });
 }
+function postJson(url, data) {
+  return api(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(data)
+  });
+}
 function note(msg) { $("status").textContent = msg; setTimeout(() => { if ($("status").textContent === msg) $("status").textContent = ""; }, 2500); }
 function esc(s) { return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c])); }
 function fileLabel(path) { return path.split("/").pop() || path || "Untitled"; }
 function doc() { return state.docs.get(state.path); }
+function editorSnapshot(ed = $("editor")) {
+  return { text: ed.value, a: ed.selectionStart, b: ed.selectionEnd };
+}
+function restoreEditorSnapshot(snap, ed = $("editor")) {
+  ed.value = snap.text;
+  ed.focus();
+  ed.setSelectionRange(snap.a, snap.b);
+}
+function themeColors() {
+  const style = getComputedStyle(document.body);
+  return {
+    bg: style.getPropertyValue("--bg").trim(),
+    ink: style.getPropertyValue("--ink").trim()
+  };
+}
+async function saveSnapshot(d, text) {
+  const data = await postJson("/api/save", { path: d.path, text, mtime: d.mtime });
+  d.text = text;
+  d.mtime = data.mtime;
+  d.dirty = d.value !== d.text;
+  return data;
+}
 function persistEditor() {
   const d = doc();
   if (!d) return;
   const ed = $("editor");
   d.value = ed.value; d.selA = ed.selectionStart; d.selB = ed.selectionEnd;
 }
-function markDirty(v) {
+function markDirty(v, forceTabs = false) {
   const d = doc();
   if (!d) {
     $("fileName").textContent = "No file open";
@@ -47,9 +81,38 @@ function markDirty(v) {
     return;
   }
   d.value = $("editor").value;
+  const wasDirty = d.dirty;
   d.dirty = v ?? d.value !== d.text;
   $("fileName").textContent = d.path + (d.dirty ? " *" : "");
-  renderTabs();
+  if (forceTabs || wasDirty !== d.dirty) renderTabs();
+}
+function scheduleEditorRefresh() {
+  if (!highlightFrame) {
+    highlightFrame = requestAnimationFrame(() => {
+      highlightFrame = 0;
+      updateHighlight();
+    });
+  }
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(refreshPreview, PREVIEW_DELAY);
+}
+function commitEditorChange() {
+  markDirty();
+  scheduleEditorRefresh();
+}
+function refreshDocumentView() {
+  refreshPreview();
+  findAll();
+  updateHighlight();
+}
+function setActiveTreePath(path = "") {
+  document.querySelectorAll(".item.active").forEach(item => item.classList.remove("active"));
+  if (path) document.querySelector(`.item[data-path="${CSS.escape(path)}"]`)?.classList.add("active");
+}
+function trimUndo(d) {
+  while (d.undo.length > UNDO_LIMIT || d.undoSize > UNDO_CHAR_LIMIT) {
+    d.undoSize -= d.undo.shift().text.length;
+  }
 }
 function renderTabs() {
   const tabs = $("tabs");
@@ -64,24 +127,31 @@ function remember() {
   const ed = $("editor"), d = doc();
   if (!d) return;
   const last = d.undo[d.undo.length - 1];
-  const snap = { text: ed.value, a: ed.selectionStart, b: ed.selectionEnd };
-  if (!last || last.text !== snap.text || last.a !== snap.a || last.b !== snap.b) d.undo.push(snap);
-  if (d.undo.length > 100) d.undo.shift();
+  const snap = editorSnapshot(ed);
+  if (!last || last.text !== snap.text || last.a !== snap.a || last.b !== snap.b) {
+    d.undo.push(snap);
+    d.undoSize += snap.text.length;
+    trimUndo(d);
+  }
   d.redo = [];
 }
 function undo() {
   const ed = $("editor"), d = doc(), snap = d?.undo.pop();
   if (!snap) return note("Nothing to undo");
-  d.redo.push({ text: ed.value, a: ed.selectionStart, b: ed.selectionEnd });
-  ed.value = snap.text; ed.focus(); ed.setSelectionRange(snap.a, snap.b);
-  markDirty(); refreshPreview(); updateHighlight(); note("Undone");
+  d.undoSize -= snap.text.length;
+  d.redo.push(editorSnapshot(ed));
+  restoreEditorSnapshot(snap, ed);
+  commitEditorChange(); note("Undone");
 }
 function redo() {
   const ed = $("editor"), d = doc(), snap = d?.redo.pop();
   if (!snap) return note("Nothing to redo");
-  d.undo.push({ text: ed.value, a: ed.selectionStart, b: ed.selectionEnd });
-  ed.value = snap.text; ed.focus(); ed.setSelectionRange(snap.a, snap.b);
-  markDirty(); refreshPreview(); updateHighlight(); note("Redone");
+  const current = editorSnapshot(ed);
+  d.undo.push(current);
+  d.undoSize += current.text.length;
+  trimUndo(d);
+  restoreEditorSnapshot(snap, ed);
+  commitEditorChange(); note("Redone");
 }
 
 async function loadTree(rel = "", host = $("tree"), open = new Set()) {
@@ -146,7 +216,7 @@ async function refreshTree() {
 async function openFile(rel) {
   if (state.docs.has(rel)) return switchDoc(rel);
   const data = await api(`/api/file?path=${encodeURIComponent(rel)}`);
-  state.docs.set(data.path, { path: data.path, text: data.text, value: data.text, mtime: data.mtime, dirty: false, matches: [], match: -1, undo: [], redo: [], selA: 0, selB: 0 });
+  state.docs.set(data.path, { path: data.path, text: data.text, value: data.text, mtime: data.mtime, dirty: false, matches: [], match: -1, undo: [], undoSize: 0, redo: [], selA: 0, selB: 0 });
   switchDoc(data.path);
 }
 function switchDoc(path) {
@@ -155,9 +225,8 @@ function switchDoc(path) {
   if (!d) return;
   state.path = path;
   $("editor").value = d.value;
-  document.querySelectorAll(".item.active").forEach(x => x.classList.remove("active"));
-  document.querySelector(`.item[data-path="${CSS.escape(path)}"]`)?.classList.add("active");
-  markDirty(d.dirty); refreshPreview(); findAll(); updateHighlight(); $("editor").focus();
+  setActiveTreePath(path);
+  markDirty(d.dirty, true); refreshDocumentView(); $("editor").focus();
   $("editor").setSelectionRange(d.selA || 0, d.selB || 0);
 }
 function closeDoc(path) {
@@ -174,8 +243,8 @@ function closeDoc(path) {
     else {
       $("editor").value = "";
       $("preview").srcdoc = "";
-      document.querySelectorAll(".item.active").forEach(x => x.classList.remove("active"));
-      markDirty(false); findAll(); updateHighlight();
+      setActiveTreePath();
+      markDirty(false); refreshDocumentView();
     }
   } else {
     renderTabs();
@@ -195,9 +264,12 @@ function openFileWindow(rel = state.path) {
 async function save() {
   const d = doc();
   if (!d) return note("Open a file first");
+  const savedText = $("editor").value;
   try {
-    const data = await api("/api/save", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: d.path, text: $("editor").value, mtime: d.mtime }) });
-    d.text = $("editor").value; d.value = d.text; d.mtime = data.mtime; markDirty(false); note(`Saved ${data.path}`);
+    const data = await saveSnapshot(d, savedText);
+    if (d.path === state.path) markDirty();
+    else renderTabs();
+    note(`Saved ${data.path}${d.dirty ? "; newer edits remain unsaved" : ""}`);
   } catch (e) {
     note(e.message);
   }
@@ -206,43 +278,72 @@ async function saveAll() {
   persistEditor();
   for (const d of [...state.docs.values()]) {
     if (!d.dirty) continue;
+    const savedText = d.value;
     try {
-      const data = await api("/api/save", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: d.path, text: d.value, mtime: d.mtime }) });
-      d.text = d.value; d.mtime = data.mtime; d.dirty = false;
+      await saveSnapshot(d, savedText);
     } catch (e) {
       switchDoc(d.path); note(e.message); return;
     }
   }
-  markDirty(false); note("Saved all");
+  markDirty(); renderTabs();
+  note([...state.docs.values()].some(d => d.dirty) ? "Saved snapshots; newer edits remain unsaved" : "Saved all");
 }
 function refreshPreview() {
   if (!state.path) return;
   const dir = state.path.split("/").slice(0, -1).join("/");
-  const bg = getComputedStyle(document.body).getPropertyValue("--bg").trim();
-  const ink = getComputedStyle(document.body).getPropertyValue("--ink").trim();
-  const css = `<link rel="stylesheet" href="/mewde.css?t=${Date.now()}"><style>body{background:${bg};color:${ink}}</style>`;
+  const { bg, ink } = themeColors();
+  const css = `${state.cssText ? `<style>${state.cssText}</style>` : '<link rel="stylesheet" href="/mewde.css">'}<style>body{background:${bg};color:${ink}}</style>`;
   const base = `<base href="/raw/${encodeURI(dir)}${dir ? "/" : ""}">`;
   $("preview").srcdoc = base + css + $("editor").value;
 }
 function openRaw() {
   if (state.path) {
-    const bg = getComputedStyle(document.body).getPropertyValue("--bg").trim();
-    const fg = getComputedStyle(document.body).getPropertyValue("--ink").trim();
-    window.open(`/raw/${encodeURI(state.path)}?bg=${encodeURIComponent(bg)}&fg=${encodeURIComponent(fg)}`, "_blank");
+    const { bg, ink } = themeColors();
+    window.open(`/raw/${encodeURI(state.path)}?bg=${encodeURIComponent(bg)}&fg=${encodeURIComponent(ink)}`, "_blank");
   }
 }
-function insertTag(t) {
+function editTag(t) {
   const ed = $("editor"), [label, key, open, close] = t;
   const a = ed.selectionStart, b = ed.selectionEnd, selected = ed.value.slice(a, b);
   remember();
-  const block = replaceableBlockKeys.has(key.toLowerCase())
-    ? findReplaceableBlock(ed.value, a, b)
-    : null;
-  if (block) {
-    const removesBlock = blockKindForWebTag(key) === blockKindForOpenTag(block.open.token);
+  const lowerKey = key.toLowerCase();
+  const names = removableInlineKeys.has(lowerKey) ? lowerKey : replaceableBlockKeys.has(lowerKey) ? "p|h[1-6]|div" : "";
+  const candidates = [], stack = [];
+  if (names) {
+    const tagPattern = new RegExp(`<\\/?(?:${names})\\b(?:[^>"']|"[^"]*"|'[^']*')*>`, "gi");
+    let match;
+    while ((match = tagPattern.exec(ed.value))) {
+      const token = match[0], name = token.match(/^<\/?([^\s>]+)/)[1].toLowerCase();
+      if (!/^<\//.test(token) && !/\/\s*>$/.test(token)) stack.push({ name, token, start: match.index, end: tagPattern.lastIndex });
+      else if (/^<\//.test(token)) {
+        const openIndex = replaceableBlockKeys.has(lowerKey) ? stack.length - 1
+          : stack.map(item => item.name).lastIndexOf(name);
+        if (openIndex < 0) continue;
+        const open = stack.splice(openIndex, 1)[0], close = { start: match.index, end: tagPattern.lastIndex };
+        if ((open.end <= a && b <= close.start) || (open.start === a && close.end === b)) candidates.push({ open, close });
+      }
+    }
+  }
+  const enclosing = candidates.sort((x, y) => (x.close.end - x.open.start) - (y.close.end - y.open.start))[0];
+  const removableTag = removableInlineKeys.has(lowerKey) ? enclosing : null;
+  const block = replaceableBlockKeys.has(lowerKey) ? enclosing : null;
+  if (removableTag) {
+    const operation = deleteTag(ed.value, a, b, removableTag);
+    ed.setRangeText(operation.text, operation.start, operation.end, "select");
+    ed.setSelectionRange(
+      operation.start + operation.selectStart,
+      operation.start + operation.selectEnd
+    );
+    note(`Removed ${label}`);
+  } else if (block) {
+    const wantedKind = /^\d$/.test(key) ? `h${key}` : lowerKey === "d" ? "div" : lowerKey;
+    const currentName = block.open.token.match(/^<(p|h[1-6]|div)\b/i)[1].toLowerCase();
+    const align = (block.open.token.match(/\balign\s*=\s*["']?(center|right)/i)?.[1] || "").toLowerCase();
+    const currentKind = currentName === "p" && align ? (align === "center" ? "c" : "r") : currentName;
+    const removesBlock = wantedKind === currentKind;
     const operation = removesBlock
-      ? removeBlockOperation(ed.value, a, b, block)
-      : replaceBlockOperation(ed.value, a, b, open, close, block);
+      ? deleteTag(ed.value, a, b, block)
+      : insertTag(ed.value, a, b, open, close, block);
     ed.setRangeText(operation.text, operation.start, operation.end, "select");
     ed.setSelectionRange(
       operation.start + operation.selectStart,
@@ -261,77 +362,27 @@ function insertTag(t) {
     if (!selected && close) ed.setSelectionRange(a + open.length, a + open.length);
     note(`Inserted ${label}`);
   }
-  ed.focus(); markDirty(); refreshPreview(); updateHighlight();
+  ed.focus(); commitEditorChange();
 }
 
-function findReplaceableBlock(text, selectionStart, selectionEnd) {
-  const tagPattern = /<\/?(?:p|h[1-6]|div)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
-  const stack = [];
-  const candidates = [];
-  let match;
-
-  while ((match = tagPattern.exec(text))) {
-    const token = match[0];
-    const nameMatch = token.match(/^<\/?(p|h[1-6]|div)\b/i);
-    if (!nameMatch) continue;
-
-    const name = nameMatch[1].toLowerCase();
-    const isClosing = /^<\//.test(token);
-    if (!isClosing && !/\/\s*>$/.test(token)) {
-      stack.push({ name, token, start: match.index, end: tagPattern.lastIndex });
-      continue;
-    }
-    if (!isClosing) continue;
-
-    const open = stack.pop();
-    if (!open) continue;
-    const close = { name, token, start: match.index, end: tagPattern.lastIndex };
-    const containsContent = open.end <= selectionStart && selectionEnd <= close.start;
-    const selectsWholeBlock = open.start === selectionStart && close.end === selectionEnd;
-    if (containsContent || selectsWholeBlock) candidates.push({ open, close });
-  }
-
-  return candidates.sort((a, b) =>
-    (a.close.end - a.open.start) - (b.close.end - b.open.start)
-  )[0];
-}
-
-function blockKindForWebTag(key) {
-  if (/^\d$/.test(key)) return `h${key}`;
-  return key.toLowerCase() === "d" ? "div" : key.toLowerCase();
-}
-
-function blockKindForOpenTag(openTag) {
-  const nameMatch = openTag.match(/^<(p|h[1-6]|div)\b/i);
-  if (!nameMatch) return "";
-  const name = nameMatch[1].toLowerCase();
-  if (name !== "p") return name;
-
-  const alignMatch = openTag.match(/\balign\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
-  const align = (alignMatch?.[1] || alignMatch?.[2] || alignMatch?.[3] || "").trim().toLowerCase();
-  if (align === "center") return "c";
-  if (align === "right") return "r";
-  return "p";
-}
-
-function removeBlockOperation(text, selectionStart, selectionEnd, block) {
-  const inner = text.slice(block.open.end, block.close.start);
-  const selectsWholeBlock = selectionStart === block.open.start && selectionEnd === block.close.end;
-  const relativeStart = selectsWholeBlock ? 0 : selectionStart - block.open.end;
-  const relativeEnd = selectsWholeBlock ? inner.length : selectionEnd - block.open.end;
+function deleteTag(text, selectionStart, selectionEnd, replaceableTag) {
+  const inner = text.slice(replaceableTag.open.end, replaceableTag.close.start);
+  const selectsWholeTag = selectionStart === replaceableTag.open.start && selectionEnd === replaceableTag.close.end;
+  const relativeStart = selectsWholeTag ? 0 : selectionStart - replaceableTag.open.end;
+  const relativeEnd = selectsWholeTag ? inner.length : selectionEnd - replaceableTag.open.end;
   return {
-    start: block.open.start,
-    end: block.close.end,
+    start: replaceableTag.open.start,
+    end: replaceableTag.close.end,
     text: inner,
     selectStart: relativeStart,
     selectEnd: relativeEnd
   };
 }
-function replaceBlockOperation(text, selectionStart, selectionEnd, openTag, closeTag, block) {
+function insertTag(text, selectionStart, selectionEnd, openTag, closeTag, block) {
   const inner = text.slice(block.open.end, block.close.start);
-  const selectsWholeBlock = selectionStart === block.open.start && selectionEnd === block.close.end;
-  const relativeStart = selectsWholeBlock ? 0 : selectionStart - block.open.end;
-  const relativeEnd = selectsWholeBlock ? inner.length : selectionEnd - block.open.end;
+  const selectsWholeTag = selectionStart === block.open.start && selectionEnd === block.close.end;
+  const relativeStart = selectsWholeTag ? 0 : selectionStart - block.open.end;
+  const relativeEnd = selectsWholeTag ? inner.length : selectionEnd - block.open.end;
   return {
     start: block.open.start,
     end: block.close.end,
@@ -346,7 +397,7 @@ function insertAttr(attr) {
   ed.setRangeText(attr[1], a, b, "end");
   ed.focus();
   ed.setSelectionRange(a + attr[2], a + attr[2]);
-  markDirty(); refreshPreview(); updateHighlight(); note(`Inserted ${attr[0]}`);
+  commitEditorChange(); note(`Inserted ${attr[0]}`);
 }
 function buildTagBar() {
   $("tagBar").innerHTML = [
@@ -356,7 +407,7 @@ function buildTagBar() {
   $("tagBar").onclick = e => {
     const tag = e.target.closest("button[data-i]");
     const attr = e.target.closest("button[data-attr]");
-    if (tag) insertTag(tags[Number(tag.dataset.i)]);
+    if (tag) editTag(tags[Number(tag.dataset.i)]);
     if (attr) insertAttr(attrButtons[Number(attr.dataset.attr)]);
   };
 }
@@ -413,7 +464,7 @@ function replaceOne() {
   const ed = $("editor"), [a, b] = d.matches[d.match] || [];
   if (a == null) return;
   remember();
-  ed.setRangeText($("replaceText").value, a, b, "end"); markDirty(); refreshPreview(); updateHighlight(); gotoMatch();
+  ed.setRangeText($("replaceText").value, a, b, "end"); commitEditorChange(); gotoMatch();
 }
 function replaceAll() {
   let re; try { re = makePattern(); } catch (e) { return $("findInfo").textContent = e.message; }
@@ -422,7 +473,7 @@ function replaceAll() {
   const count = (before.match(re) || []).length;
   remember();
   ed.value = before.replace(re, $("replaceText").value);
-  markDirty(); refreshPreview(); updateHighlight(); findAll(); $("findInfo").textContent = `Replaced ${count}`;
+  commitEditorChange(); findAll(); $("findInfo").textContent = `Replaced ${count}`;
 }
 function filterTree() {
   const q = $("treeFilter").value.toLowerCase();
@@ -438,7 +489,7 @@ function keydown(e) {
   if (inEditor && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
   if (inEditor && (e.altKey || $("instant").checked) && !e.ctrlKey && !e.metaKey) {
     const k = e.key === "Enter" ? "Enter" : e.key.toLowerCase();
-    if (tagMap[k]) { e.preventDefault(); insertTag(tagMap[k]); }
+    if (tagMap[k]) { e.preventDefault(); editTag(tagMap[k]); }
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); $("findText").focus(); }
 }
@@ -532,21 +583,28 @@ function applyExternalUpdate(d, data) {
   d.value = data.text;
   d.mtime = data.mtime;
   d.dirty = false;
+  d.undo = [];
+  d.undoSize = 0;
+  d.redo = [];
   if (d.path !== state.path) return renderTabs();
   const ed = $("editor");
   const a = Math.min(ed.selectionStart, data.text.length), b = Math.min(ed.selectionEnd, data.text.length);
   ed.value = data.text;
   ed.setSelectionRange(a, b);
-  markDirty(false); refreshPreview(); findAll(); updateHighlight();
+  markDirty(false); refreshDocumentView();
   note(`Updated ${d.path}`);
 }
 async function checkExternalUpdates() {
   if (state.checkingFiles || !state.docs.size) return;
   state.checkingFiles = true;
   try {
-    for (const d of state.docs.values()) {
+    const docs = [...state.docs.values()];
+    const status = await postJson("/api/status", { paths: docs.map(d => d.path) });
+    for (const d of docs) {
+      const current = status.files[d.path];
+      if (!current || current.mtime === d.mtime) continue;
       const data = await api(`/api/file?path=${encodeURIComponent(d.path)}`);
-      if (data.mtime === d.mtime || data.text === d.text) { d.mtime = data.mtime; continue; }
+      if (data.text === d.text) { d.mtime = data.mtime; continue; }
       if (d.dirty || (d.path === state.path && $("editor").value !== d.text)) {
         note(`External update pending for ${d.path}; save or close local edits first`);
       } else {
@@ -562,8 +620,9 @@ async function checkExternalUpdates() {
 async function checkCssUpdate() {
   try {
     const text = await fetch(`/mewde.css?t=${Date.now()}`, { cache: "no-store" }).then(r => r.text());
-    if (state.cssText && text !== state.cssText) refreshPreview();
+    const changed = state.cssText && text !== state.cssText;
     state.cssText = text;
+    if (changed) refreshPreview();
   } catch {}
 }
 function toggleFull() {
@@ -578,7 +637,7 @@ function closeMenus(except) {
 
 buildTagBar(); refreshTree();
 $("editor").addEventListener("beforeinput", remember);
-$("editor").addEventListener("input", () => { markDirty(); refreshPreview(); updateHighlight(); });
+$("editor").addEventListener("input", commitEditorChange);
 $("editor").addEventListener("scroll", syncHighlightScroll);
 $("editor").addEventListener("keydown", keydown);
 $("editor").addEventListener("click", openEditorLink);
@@ -608,9 +667,9 @@ setDark(localStorage.getItem("mewDark") === "1");
 const startFile = new URLSearchParams(location.search).get("file");
 if (startFile) openFile(startFile);
 updateHighlight();
-setInterval(checkExternalUpdates, 1500);
-setInterval(refreshTree, 3000);
-setInterval(checkCssUpdate, 1500);
+setInterval(() => { if (!document.hidden) checkExternalUpdates(); }, 3000);
+setInterval(() => { if (!document.hidden) refreshTree(); }, 5000);
+setInterval(() => { if (!document.hidden) checkCssUpdate(); }, 5000);
 window.addEventListener("beforeunload", e => {
   persistEditor();
   if ([...state.docs.values()].some(d => d.dirty)) { e.preventDefault(); e.returnValue = ""; }

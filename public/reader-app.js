@@ -6,6 +6,7 @@ const tags = [
   ["ID", "x", "<a id=\"\">", "</a>", "Alt+X / x"],
   ["HREF", "l", "<a href=\"\">", "</a>", "Alt+L / l"], ["FN", "f", "<sup><a href=\"\" id=\"\">", "</a></sup>", "Alt+F / f"],
   ["R", "r", "<p align=\"right\">", "</p>", "Alt+R / r"], ["C", "c", "<p align=\"center\">", "</p>", "Alt+C / c"],
+  ["ltgt", "&lt;&gt;", "&lt;", "&gt;", "Insert angle bracket"],
   ["H1", "1", "<h1>", "</h1>", "Alt+1 / 1"], ["H2", "2", "<h2>", "</h2>", "Alt+2 / 2"], ["H3", "3", "<h3>", "</h3>", "Alt+3 / 3"],
   ["H4", "4", "<h4>", "</h4>", "Alt+4 / 4"], ["H5", "5", "<h5>", "</h5>", "Alt+5 / 5"], ["H6", "6", "<h6>", "</h6>", "Alt+6 / 6"],
   ["P", "p", "<p>", "</p>", "Alt+P / p"], ["BR", "Enter", "<br>\n", "", "Alt+Enter"],
@@ -13,6 +14,8 @@ const tags = [
 ];
 const tagMap = Object.fromEntries(tags.map((tag) => [tag[1].toLowerCase(), tag]));
 const attrs = [["ID=", ' id=""', 5],["CLASS=", ' class=""', 8],["STYLE=", ' style=""', 8],["text-indent: 0", " style=\"text-indent: 0;\"", 23]];
+const replaceableBlockKeys = new Set(["p", "r", "c", "1", "2", "3", "4", "5", "6", "d"]);
+const removableInlineKeys = new Set(["b", "i"]);
 
 function esc(value) {
   return String(value).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
@@ -100,7 +103,7 @@ function tagKeydown(event) {
   const tag = tagMap[key];
   if (!tag) return false;
   event.preventDefault();
-  insert(tag[2], tag[3]);
+  editTag(tag);
   return true;
 }
 function historyKeydown(event) {
@@ -481,6 +484,98 @@ function insertVisual(open, close) {
   markDirty();
   doc.body.focus();
 }
+function editTag(tag) {
+  if (state.mode === "visual") return insertVisual(tag[2], tag[3]);
+  const editor = $("editor"), [label, key, openTag, closeTag] = tag;
+  const selectionStart = editor.selectionStart, selectionEnd = editor.selectionEnd;
+  const selected = editor.value.slice(selectionStart, selectionEnd);
+  remember();
+  const lowerKey = key.toLowerCase();
+  const names = removableInlineKeys.has(lowerKey) ? lowerKey
+    : replaceableBlockKeys.has(lowerKey) ? "p|h[1-6]|div" : "";
+  const candidates = [], stack = [];
+  if (names) {
+    const tagPattern = new RegExp(`<\\/?(?:${names})\\b(?:[^>"']|"[^"]*"|'[^']*')*>`, "gi");
+    let match;
+    while ((match = tagPattern.exec(editor.value))) {
+      const token = match[0], name = token.match(/^<\/?([^\s>]+)/)[1].toLowerCase();
+      if (!/^<\//.test(token) && !/\/\s*>$/.test(token)) {
+        stack.push({ name, token, start: match.index, end: tagPattern.lastIndex });
+      } else if (/^<\//.test(token)) {
+        const openIndex = replaceableBlockKeys.has(lowerKey) ? stack.length - 1
+          : stack.map((item) => item.name).lastIndexOf(name);
+        if (openIndex < 0) continue;
+        const open = stack.splice(openIndex, 1)[0], close = { start: match.index, end: tagPattern.lastIndex };
+        if ((open.end <= selectionStart && selectionEnd <= close.start)
+          || (open.start === selectionStart && close.end === selectionEnd)) candidates.push({ open, close });
+      }
+    }
+  }
+  const enclosing = candidates.sort((left, right) =>
+    (left.close.end - left.open.start) - (right.close.end - right.open.start)
+  )[0];
+  const removableTag = removableInlineKeys.has(lowerKey) ? enclosing : null;
+  const block = replaceableBlockKeys.has(lowerKey) ? enclosing : null;
+  if (removableTag) {
+    applyTagOperation(editor, deleteTag(editor.value, selectionStart, selectionEnd, removableTag));
+    note(`Removed ${label}`);
+  } else if (block) {
+    const wantedKind = /^\d$/.test(key) ? `h${key}` : lowerKey === "d" ? "div" : lowerKey;
+    const currentName = block.open.token.match(/^<(p|h[1-6]|div)\b/i)[1].toLowerCase();
+    const align = (block.open.token.match(/\balign\s*=\s*["']?(center|right)/i)?.[1] || "").toLowerCase();
+    const currentKind = currentName === "p" && align ? (align === "center" ? "c" : "r") : currentName;
+    const removesBlock = wantedKind === currentKind;
+    const operation = removesBlock
+      ? deleteTag(editor.value, selectionStart, selectionEnd, block)
+      : insertTag(editor.value, selectionStart, selectionEnd, openTag, closeTag, block);
+    applyTagOperation(editor, operation);
+    note(removesBlock ? `Removed ${label}` : `Replaced with ${label}`);
+  } else if (closeTag && selected.startsWith(openTag) && selected.endsWith(closeTag)) {
+    const inner = selected.slice(openTag.length, selected.length - closeTag.length);
+    editor.setRangeText(inner, selectionStart, selectionEnd, "select");
+    editor.setSelectionRange(selectionStart, selectionStart + inner.length);
+    note(`Removed ${label}`);
+  } else if (closeTag
+    && editor.value.slice(selectionStart - openTag.length, selectionStart) === openTag
+    && editor.value.slice(selectionEnd, selectionEnd + closeTag.length) === closeTag) {
+    editor.setRangeText(selected, selectionStart - openTag.length, selectionEnd + closeTag.length, "select");
+    editor.setSelectionRange(selectionStart - openTag.length, selectionEnd - openTag.length);
+    note(`Removed ${label}`);
+  } else {
+    editor.setRangeText(openTag + selected + closeTag, selectionStart, selectionEnd, "end");
+    if (!selected && closeTag) editor.setSelectionRange(selectionStart + openTag.length, selectionStart + openTag.length);
+    note(`Inserted ${label}`);
+  }
+  state.source = editor.value; markDirty(); updateHighlight(); editor.focus();
+}
+function applyTagOperation(editor, operation) {
+  editor.setRangeText(operation.text, operation.start, operation.end, "select");
+  editor.setSelectionRange(operation.start + operation.selectStart, operation.start + operation.selectEnd);
+}
+function deleteTag(text, selectionStart, selectionEnd, replaceableTag) {
+  const inner = text.slice(replaceableTag.open.end, replaceableTag.close.start);
+  const selectsWholeTag = selectionStart === replaceableTag.open.start && selectionEnd === replaceableTag.close.end;
+  return {
+    start: replaceableTag.open.start,
+    end: replaceableTag.close.end,
+    text: inner,
+    selectStart: selectsWholeTag ? 0 : selectionStart - replaceableTag.open.end,
+    selectEnd: selectsWholeTag ? inner.length : selectionEnd - replaceableTag.open.end
+  };
+}
+function insertTag(text, selectionStart, selectionEnd, openTag, closeTag, block) {
+  const inner = text.slice(block.open.end, block.close.start);
+  const selectsWholeTag = selectionStart === block.open.start && selectionEnd === block.close.end;
+  const relativeStart = selectsWholeTag ? 0 : selectionStart - block.open.end;
+  const relativeEnd = selectsWholeTag ? inner.length : selectionEnd - block.open.end;
+  return {
+    start: block.open.start,
+    end: block.close.end,
+    text: openTag + inner + closeTag,
+    selectStart: openTag.length + relativeStart,
+    selectEnd: openTag.length + relativeEnd
+  };
+}
 function insert(open, close = "", offset = null) {
   if (state.mode === "visual") return insertVisual(open, close);
   remember();
@@ -540,7 +635,7 @@ function buildTools() {
   document.querySelectorAll("#tagBar [data-tag]").forEach((button) => { const tag = tags[Number(button.dataset.tag)]; button.title = "Alt+" + (tag[1] === "Enter" ? "Enter" : tag[1].toUpperCase()); });
   $("tagBar").onclick = (event) => {
     const tag = event.target.closest("[data-tag]"), attr = event.target.closest("[data-attr]");
-    if (tag) { const item = tags[Number(tag.dataset.tag)]; insert(item[2], item[3]); }
+    if (tag) editTag(tags[Number(tag.dataset.tag)]);
     if (attr) { if (state.mode === "visual") return note("属性按钮请在源代码模式使用"); const item = attrs[Number(attr.dataset.attr)]; insert(item[1], "", item[2]); }
   };
 }

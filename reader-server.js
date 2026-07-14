@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(HERE, "public");
 const CONFIG_FILE = path.resolve(valueOf(["-c", "--config"]) || process.env.CONFIG || path.join(HERE, "reader.config.mjs"));
-const PORT = Number(valueOf(["-p", "--port"]) || process.env.PORT || 4127);
+const PORT = Number(valueOf(["-p", "--port"]) || process.env.PORT || 49100);
 const MIME = {
   ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
