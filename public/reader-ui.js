@@ -1,13 +1,386 @@
 (() => {
+  "use strict";
+  const byId = (id) => document.getElementById(id);
   const root = document.documentElement;
   const body = document.body;
   const grid = document.querySelector(".reader-grid");
   const scanPane = document.querySelector(".scan-pane");
-  const tocButton = document.getElementById("tocBtn");
-  const tocClose = document.getElementById("tocClose");
-  const tocBackdrop = document.getElementById("tocBackdrop");
-  const darkButton = document.getElementById("darkBtn");
-  if (!grid || !scanPane) return;
+  const sourceEditor = byId("editor");
+  const visualFrame = byId("visualEditor");
+  const scanStage = byId("scanStage");
+  const imageDialog = byId("imageDialog");
+  const listeners = {};
+  let initialized = false;
+  let statusTimer = null;
+  let scanZoom = 1;
+  let dialogZoom = 1;
+  let sideBySide = false;
+  let imageInverted = false;
+
+  function emit(name, ...args) {
+    return listeners[name]?.(...args);
+  }
+
+  function bind(id, event, handler) {
+    byId(id)?.addEventListener(event, handler);
+  }
+
+  function setToc(open) {
+    root.classList.toggle("toc-open", open);
+    byId("tocBtn")?.setAttribute("aria-expanded", String(open));
+  }
+
+  function setTheme(dark) {
+    body.classList.toggle("dark", dark);
+    localStorage.setItem("readerDark", dark ? "1" : "0");
+    const button = byId("darkBtn");
+    if (button) button.textContent = dark ? "浅色" : "深色";
+    applyVisualTheme();
+  }
+
+  function applyVisualTheme() {
+    const doc = visualFrame?.contentDocument;
+    if (!doc?.body) return;
+    const dark = body.classList.contains("dark");
+    doc.documentElement.style.colorScheme = dark ? "dark" : "light";
+    doc.documentElement.style.setProperty("--reader-bg", dark ? "#1e1e1e" : "#ffffff");
+    doc.documentElement.style.setProperty("--reader-ink", dark ? "#d4d4d4" : "#251f1b");
+    doc.documentElement.style.setProperty("--reader-link", dark ? "#4fc1ff" : "#8f2923");
+  }
+
+  function setMode(mode) {
+    const sourceMode = mode === "source";
+    byId("sourcePane").hidden = !sourceMode;
+    visualFrame.hidden = sourceMode;
+    byId("modeBtn").textContent = sourceMode ? "可视化" : "源代码";
+    window.dispatchEvent(new Event("reader-mode-change"));
+  }
+
+  function notify(message, persistent = false) {
+    byId("status").textContent = message || "";
+    clearTimeout(statusTimer);
+    if (message && !persistent) statusTimer = setTimeout(() => { byId("status").textContent = ""; }, 2600);
+  }
+
+  function setDirty(dirty, positionText) {
+    byId("saveBtn").classList.toggle("dirty", dirty);
+    byId("saveBtn").textContent = dirty ? "保存*" : "保存";
+    if (positionText != null) byId("pagePosition").textContent = positionText;
+  }
+
+  function setHistoryButtons(canUndo, canRedo) {
+    byId("undoBtn").disabled = !canUndo;
+    byId("redoBtn").disabled = !canRedo;
+  }
+
+  function renderVolumes(volumes, selected) {
+    const select = byId("volumeSelect");
+    select.replaceChildren(...volumes.map((item) => {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = item.shortTitle;
+      return option;
+    }));
+    select.value = selected || "";
+  }
+
+  function renderToc(title, items) {
+    byId("tocTitle").textContent = `${title}目录`;
+    const list = byId("tocList");
+    list.replaceChildren(...items.map((item) => {
+      const li = document.createElement("li");
+      li.style.setProperty("--level", item.level);
+      const link = document.createElement("a");
+      link.href = "#";
+      link.dataset.page = item.page;
+      const page = document.createElement("span");
+      page.textContent = item.page;
+      link.append(page, item.title);
+      li.append(link);
+      return li;
+    }));
+    byId("tocBtn").hidden = !items.length;
+  }
+
+  function renderNavigation(view) {
+    byId("chapterTitle").textContent = view.chapterTitle;
+    byId("pageContext").textContent = view.pageContext;
+    byId("pagePosition").textContent = view.pagePosition;
+    byId("pageInput").value = view.page;
+    byId("volumeSelect").value = view.volume;
+    byId("prevBtn").disabled = !view.hasPrevious;
+    byId("nextPageBtn").disabled = !view.hasNext;
+    byId("saveBtn").disabled = !view.editable;
+    document.querySelectorAll("#tocList a").forEach((link) =>
+      link.classList.toggle("active", Number(link.dataset.page) === view.chapterPage));
+  }
+
+  function renderTools(tags, attrs) {
+    const bar = byId("tagBar");
+    bar.replaceChildren(
+      ...tags.map((tag, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.tag = index;
+        button.textContent = tag.label;
+        button.title = tag.hotkey ? `Alt+${tag.hotkey === "Enter" ? "Enter" : tag.hotkey.toUpperCase()}` : tag.title || tag.label;
+        return button;
+      }),
+      ...attrs.map((attr, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.attr = index;
+        button.textContent = attr.label;
+        return button;
+      })
+    );
+  }
+
+  function findOptions() {
+    return {
+      query: byId("findText").value,
+      replacement: byId("replaceText").value,
+      regex: byId("regexBox").checked,
+      caseSensitive: byId("caseBox").checked
+    };
+  }
+
+  function updateHighlight(html) {
+    const highlight = byId("highlight");
+    highlight.innerHTML = html;
+    highlight.scrollTop = sourceEditor.scrollTop;
+    highlight.scrollLeft = sourceEditor.scrollLeft;
+  }
+
+  function scrollSourceSelectionIntoView(position) {
+    const wrap = sourceEditor.parentElement;
+    const style = getComputedStyle(sourceEditor);
+    const mirror = document.createElement("div");
+    const marker = document.createElement("span");
+    mirror.style.cssText = `position:absolute;visibility:hidden;inset:0 auto auto 0;width:${sourceEditor.clientWidth}px;min-height:${sourceEditor.clientHeight}px;padding:${style.padding};border:0;margin:0;box-sizing:border-box;overflow-wrap:break-word;white-space:pre-wrap;font:${style.font};line-height:${style.lineHeight};letter-spacing:${style.letterSpacing};tab-size:${style.tabSize}`;
+    mirror.textContent = sourceEditor.value.slice(0, position);
+    marker.textContent = "\u200b";
+    mirror.append(marker);
+    wrap.append(mirror);
+    sourceEditor.scrollTop = Math.max(0, marker.offsetTop - sourceEditor.clientHeight / 2);
+    sourceEditor.scrollLeft = Math.max(0, marker.offsetLeft - sourceEditor.clientWidth / 2);
+    mirror.remove();
+    emit("sourceScroll");
+  }
+
+  function showVisual(source, options) {
+    visualFrame.onload = () => {
+      const doc = visualFrame.contentDocument;
+      if (!doc?.body) return;
+      doc.body.contentEditable = options.editable ? "true" : "false";
+      doc.body.spellcheck = false;
+      doc.body.addEventListener("beforeinput", () => emit("beforeEdit"));
+      doc.body.addEventListener("input", () => emit("visualInput"));
+      doc.addEventListener("dblclick", () => emit("visualDoubleClick", doc));
+      doc.addEventListener("keydown", (event) => emit("keyDown", event));
+      doc.addEventListener("click", (event) => emit("visualClick", event, doc));
+      const updateLinkMode = (event) => doc.documentElement.classList.toggle("reader-ctrl-link", event.ctrlKey || event.metaKey);
+      doc.addEventListener("keydown", updateLinkMode);
+      doc.addEventListener("keyup", updateLinkMode);
+      doc.addEventListener("mousemove", updateLinkMode);
+      visualFrame.contentWindow.addEventListener("blur", () => doc.documentElement.classList.remove("reader-ctrl-link"));
+      applyVisualTheme();
+      if (options.scroll) requestAnimationFrame(() => {
+        doc.scrollingElement.scrollTop = options.scroll.top;
+        doc.scrollingElement.scrollLeft = options.scroll.left;
+      });
+    };
+    visualFrame.srcdoc = source;
+  }
+
+  const clampZoom = (value) => Math.min(3, Math.max(.25, value));
+  function updateImageLayout() {
+    const images = scanStage.querySelectorAll(".scan-page-image");
+    const canSpread = images.length > 1;
+    const button = byId("imageLayout");
+    button.hidden = !canSpread;
+    button.setAttribute("aria-pressed", String(canSpread && sideBySide));
+    button.textContent = sideBySide ? "上下分布" : "左右分布";
+    scanStage.classList.toggle("side-by-side", canSpread && sideBySide);
+  }
+
+  function setScanZoom(value) {
+    scanZoom = clampZoom(value);
+    scanStage.querySelectorAll(".scan-page-image").forEach((image) => image.style.setProperty("--zoom", scanZoom));
+    byId("zoomFit").textContent = `${Math.round(scanZoom * 100)}%`;
+  }
+
+  function setDialogZoom(value) {
+    dialogZoom = clampZoom(value);
+    imageDialog.querySelectorAll(".dialog-page-image").forEach((image) => {
+      if (image.naturalWidth) image.style.width = `${image.naturalWidth * dialogZoom}px`;
+    });
+  }
+
+  function setImageInverted(inverted) {
+    imageInverted = Boolean(inverted);
+    body.classList.toggle("image-inverted", imageInverted);
+    const button = byId("imageInvert");
+    button?.setAttribute("aria-pressed", String(imageInverted));
+    if (button) {
+      button.textContent = imageInverted ? "还原" : "反色";
+      button.title = imageInverted ? "恢复扫描图片的原始颜色，并记住此设置" : "反转扫描图片的颜色，并记住此设置";
+    }
+    localStorage.setItem("readerImageInverted", imageInverted ? "1" : "0");
+  }
+
+  function setImages(urls) {
+    scanStage.querySelectorAll(".scan-page-image").forEach((image) => image.remove());
+    imageDialog.querySelectorAll(".dialog-page-image").forEach((image) => image.remove());
+    byId("scanImage").hidden = true;
+    byId("dialogImage").hidden = true;
+    setScanZoom(1);
+    let loaded = 0;
+    byId("scanMissing").hidden = Boolean(urls.length);
+    byId("fullImage").disabled = !urls.length;
+    urls.forEach((url) => {
+      const image = document.createElement("img");
+      image.className = "scan-page-image";
+      image.alt = "";
+      image.loading = "lazy";
+      image.decoding = "async";
+      image.style.setProperty("--zoom", scanZoom);
+      image.onload = () => {
+        if (!image.isConnected) return;
+        loaded += 1;
+        byId("scanMissing").hidden = true;
+        byId("fullImage").disabled = false;
+      };
+      image.onerror = () => {
+        if (!image.isConnected) return;
+        image.remove();
+        updateImageLayout();
+        if (!loaded && !scanStage.querySelector(".scan-page-image")) {
+          byId("scanMissing").hidden = false;
+          byId("fullImage").disabled = true;
+        }
+      };
+      image.src = url;
+      scanStage.insertBefore(image, byId("scanMissing"));
+      const fullImage = image.cloneNode();
+      fullImage.className = "dialog-page-image";
+      fullImage.style.cssText = "display:block;max-width:none;margin:0 auto 16px";
+      fullImage.onerror = () => fullImage.remove();
+      imageDialog.append(fullImage);
+    });
+    updateImageLayout();
+  }
+
+  function preservePoint(container, image, event, applyZoom) {
+    const before = image.getBoundingClientRect();
+    if (!before.width || !before.height) return;
+    const pointX = (event.clientX - before.left) / before.width;
+    const pointY = (event.clientY - before.top) / before.height;
+    applyZoom();
+    requestAnimationFrame(() => {
+      if (!image.isConnected) return;
+      const after = image.getBoundingClientRect();
+      container.scrollLeft += after.left + pointX * after.width - event.clientX;
+      container.scrollTop += after.top + pointY * after.height - event.clientY;
+    });
+  }
+
+  function installPan(container, selector) {
+    let drag = null;
+    container.addEventListener("dragstart", (event) => { if (event.target.closest(selector)) event.preventDefault(); });
+    container.addEventListener("pointerdown", (event) => {
+      const image = event.target.closest(selector);
+      if (event.button !== 0 || !image) return;
+      drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      container.classList.add("image-panning");
+      image.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+    });
+    container.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      container.scrollLeft -= event.clientX - drag.x;
+      container.scrollTop -= event.clientY - drag.y;
+      drag.x = event.clientX;
+      drag.y = event.clientY;
+      event.preventDefault();
+    });
+    const stop = (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      drag = null;
+      container.classList.remove("image-panning");
+    };
+    container.addEventListener("pointerup", stop);
+    container.addEventListener("pointercancel", stop);
+  }
+
+  function init(handlers) {
+    Object.assign(listeners, handlers);
+    if (initialized) return;
+    initialized = true;
+    bind("modeBtn", "click", () => emit("mode"));
+    bind("saveBtn", "click", () => emit("save"));
+    bind("undoBtn", "click", () => emit("undo"));
+    bind("redoBtn", "click", () => emit("redo"));
+    bind("volumeSelect", "change", (event) => emit("volume", event.target.value));
+    bind("pageForm", "submit", (event) => { event.preventDefault(); emit("page", Number(byId("pageInput").value)); });
+    bind("prevBtn", "click", () => emit("adjacent", -1));
+    bind("nextPageBtn", "click", () => emit("adjacent", 1));
+    bind("tocBtn", "click", () => setToc(!root.classList.contains("toc-open")));
+    bind("tocClose", "click", () => setToc(false));
+    bind("tocBackdrop", "click", () => setToc(false));
+    bind("tocList", "click", (event) => {
+      const link = event.target.closest("[data-page]");
+      if (!link) return;
+      event.preventDefault();
+      setToc(false);
+      emit("page", Number(link.dataset.page));
+    });
+    bind("darkBtn", "click", () => setTheme(!body.classList.contains("dark")));
+    bind("tagBar", "click", (event) => {
+      const tag = event.target.closest("[data-tag]");
+      const attr = event.target.closest("[data-attr]");
+      if (tag) emit("tag", Number(tag.dataset.tag));
+      if (attr) emit("attr", Number(attr.dataset.attr));
+    });
+    sourceEditor.addEventListener("beforeinput", () => emit("beforeEdit"));
+    sourceEditor.addEventListener("input", () => emit("sourceInput"));
+    sourceEditor.addEventListener("scroll", () => emit("sourceScroll"));
+    sourceEditor.addEventListener("dblclick", () => emit("sourceDoubleClick"));
+    byId("highlight").addEventListener("click", (event) => emit("highlightClick", event));
+    bind("findBtn", "click", () => emit("find"));
+    bind("nextBtn", "click", () => emit("nextMatch"));
+    bind("replaceBtn", "click", () => emit("replace"));
+    bind("allBtn", "click", () => emit("replaceAll"));
+    ["findText", "regexBox", "caseBox"].forEach((id) => bind(id, id === "findText" ? "input" : "change", () => emit("findChanged")));
+    bind("zoomIn", "click", () => setScanZoom(scanZoom + .25));
+    bind("zoomOut", "click", () => setScanZoom(scanZoom - .25));
+    bind("zoomFit", "click", () => setScanZoom(1));
+    bind("imageLayout", "click", () => { sideBySide = !sideBySide; updateImageLayout(); });
+    bind("imageInvert", "click", () => setImageInverted(!imageInverted));
+    bind("fullImage", "click", () => { setDialogZoom(1); imageDialog.showModal(); });
+    bind("dialogClose", "click", () => imageDialog.close());
+    document.addEventListener("keydown", (event) => emit("keyDown", event));
+    window.addEventListener("blur", () => document.querySelector(".editor-wrap")?.classList.remove("ctrl-link"));
+    window.addEventListener("beforeunload", (event) => emit("beforeUnload", event));
+    setTheme(localStorage.getItem("readerDark") === "1");
+    setImageInverted(localStorage.getItem("readerImageInverted") === "1");
+
+    scanStage.addEventListener("wheel", (event) => {
+      const image = event.target.closest(".scan-page-image");
+      if (!image) return;
+      event.preventDefault();
+      preservePoint(scanStage, image, event, () => setScanZoom(scanZoom * Math.exp(-event.deltaY * .0015)));
+    }, { passive: false });
+    imageDialog.addEventListener("load", (event) => { if (event.target.matches?.(".dialog-page-image")) setDialogZoom(dialogZoom); }, true);
+    imageDialog.addEventListener("wheel", (event) => {
+      const image = event.target.closest(".dialog-page-image");
+      if (!image) return;
+      event.preventDefault();
+      preservePoint(imageDialog, image, event, () => setDialogZoom(dialogZoom * Math.exp(-event.deltaY * .0015)));
+    }, { passive: false });
+    installPan(scanStage, ".scan-page-image");
+    installPan(imageDialog, ".dialog-page-image");
+  }
 
   const splitter = document.createElement("div");
   splitter.className = "pane-splitter";
@@ -72,27 +445,441 @@
     localStorage.setItem("readerLeftPane", currentWidth.toFixed(2));
   });
 
-  const setToc = (open) => {
-    root.classList.toggle("toc-open", open);
-    tocButton?.setAttribute("aria-expanded", String(open));
+  window.ReaderUI = {
+    init, notify, setDirty, setHistoryButtons, renderVolumes, renderToc, renderNavigation, renderTools,
+    setMode, setToc, setImages, applyVisualTheme, showVisual, findOptions,
+    setFindInfo: (text) => { byId("findInfo").textContent = text; },
+    getSource: () => sourceEditor.value,
+    setSource: (text) => { sourceEditor.value = text; },
+    getSourceSelection: () => ({ start: sourceEditor.selectionStart || 0, end: sourceEditor.selectionEnd || 0 }),
+    setSourceSelection: (start, end = start) => sourceEditor.setSelectionRange(start, end),
+    replaceSourceRange: (text, start, end, selectionMode = "end") => sourceEditor.setRangeText(text, start, end, selectionMode),
+    focusSource: () => sourceEditor.focus(),
+    sourceScroll: () => ({ top: sourceEditor.scrollTop, left: sourceEditor.scrollLeft }),
+    setSourceScroll: ({ top = 0, left = 0 }) => { sourceEditor.scrollTop = top; sourceEditor.scrollLeft = left; },
+    scrollSourceSelectionIntoView,
+    updateHighlight,
+    getVisualDocument: () => visualFrame.contentDocument,
+    setSourceLinkMode: (active) => document.querySelector(".editor-wrap")?.classList.toggle("ctrl-link", active),
+    selectedVolume: () => byId("volumeSelect").value
   };
+})();
 
-  if (tocButton) {
-    tocButton.onclick = () => setToc(!root.classList.contains("toc-open"));
-  }
-  if (tocClose) tocClose.onclick = () => setToc(false);
-  if (tocBackdrop) tocBackdrop.onclick = () => setToc(false);
+/* =====================================================================
+ * 编辑工具面板：可停靠 / 可浮动 / 可拉伸
+ * 适用面板：
+ *   - 编辑按钮框（#tagBar）：可停靠编辑框上/下方（与编辑框等宽）、
+ *     窗口顶部/底部（与窗口等宽），或自由浮动。
+ *   - 查找替换框（#findBar）：同上。
+ * 交互：
+ *   - 按住标题栏拖动 → 自由浮动；拖到窗口上/下边缘 → 自动停靠（全宽）。
+ *   - 浮动状态四边/四角可拉伸；停靠状态下沿可用边沿拉伸高度。
+ *   - 标题栏上的按钮可精确停靠；双击标题栏恢复默认（停靠编辑框上方）。
+ *   布局与位置均记忆在 localStorage("readerDockPanels.v1")。
+ * ===================================================================== */
+(() => {
+  "use strict";
+  const LS_KEY = "readerDockPanels.v1";
+  const SNAP = 56;       // 拖拽靠近上/下边缘的吸附距离
+  const MIN_CONTROL_HEIGHT = 16;
+  const BASE_CONTROL_HEIGHT = 28;
+  const MAX_CONTROL_HEIGHT = 35;
 
-  const updateDarkLabel = () => {
-    if (darkButton) darkButton.textContent = body.classList.contains("dark") ? "浅色" : "深色";
-  };
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (_) { saved = {}; }
 
-  if (darkButton) {
-    darkButton.onclick = () => {
-      body.classList.toggle("dark");
-      localStorage.setItem("readerDark", body.classList.contains("dark") ? "1" : "0");
-      updateDarkLabel();
+  const DOCK_DEFS = [
+    ["editor-top",    "编辑上", "停靠编辑框上方（与编辑框等宽）"],
+    ["editor-bottom", "编辑下", "停靠编辑框下方（与编辑框等宽）"],
+    ["window-top",    "窗口上", "停靠窗口顶部（与窗口等宽）"],
+    ["window-bottom", "窗口下", "停靠窗口底部（与窗口等宽）"],
+    ["floating",      "浮动",   "自由浮动（可拖动、可拉伸）"]
+  ];
+
+  const snapTop = document.createElement("div");
+  snapTop.className = "fp-snap fp-snap-top";
+  const snapBottom = document.createElement("div");
+  snapBottom.className = "fp-snap fp-snap-bottom";
+  document.body.append(snapTop, snapBottom);
+
+  const panels = {};
+
+  function chromeHeights() {
+    return {
+      header: Math.round(document.querySelector(".site-header")?.getBoundingClientRect().height || 0),
+      footer: Math.round(document.querySelector(".page-footer")?.getBoundingClientRect().height || 0)
     };
   }
-  updateDarkLabel();
+
+  function visibleWindowPanels(dock) {
+    return Object.values(panels).filter((st) => st.dock === dock && st.panel.getClientRects().length);
+  }
+
+  function panelMinHeight(st) {
+    const headerHeight = st.header?.getBoundingClientRect().height || 27;
+    return Math.ceil(headerHeight + MIN_CONTROL_HEIGHT);
+  }
+
+  function updateControlScale(st, height = st.panel.getBoundingClientRect().height) {
+    const headerHeight = st.header.getBoundingClientRect().height || 27;
+    const naturalContent = Math.max(20, st.naturalH - headerHeight);
+    const contentHeight = Math.max(MIN_CONTROL_HEIGHT, height - headerHeight);
+    // Let controls respond to the panel without becoming comically large or
+    // too small to click. Extra space beyond this range remains as breathing
+    // room around the vertically centred control group.
+    const controlHeight = Math.min(MAX_CONTROL_HEIGHT, Math.max(
+      MIN_CONTROL_HEIGHT,
+      BASE_CONTROL_HEIGHT * contentHeight / naturalContent
+    ));
+    st.panel.style.setProperty("--fp-header-height", `${headerHeight}px`);
+    st.panel.style.setProperty("--fp-control-height", `${controlHeight.toFixed(2)}px`);
+    st.panel.style.setProperty("--fp-pad-y", `${Math.max(1, controlHeight / BASE_CONTROL_HEIGHT * 5).toFixed(2)}px`);
+  }
+
+  const panelResizeObserver = new ResizeObserver((entries) => {
+    for (const { target } of entries) {
+      const st = panels[target.dataset.panel];
+      // Auto-height panels are content-sized, so scaling them here would feed
+      // back into their height. User-resized panels always have an explicit h.
+      if (st?.h != null) updateControlScale(st);
+    }
+  });
+
+  // Window-docked panels take up real layout space and stack instead of covering one another.
+  function updateWindowDockLayout() {
+    const { header, footer } = chromeHeights();
+    const topPanels = visibleWindowPanels("window-top");
+    const bottomPanels = visibleWindowPanels("window-bottom");
+    const windowPanels = [...topPanels, ...bottomPanels];
+    let remaining = Math.max(
+      windowPanels.reduce((sum, st) => sum + panelMinHeight(st), 0),
+      innerHeight - header - footer - 120
+    );
+    windowPanels.forEach((st, index) => {
+      const reserved = windowPanels.slice(index + 1).reduce((sum, other) => sum + panelMinHeight(other), 0);
+      const minimum = panelMinHeight(st);
+      const current = Math.max(minimum, st.panel.getBoundingClientRect().height);
+      const height = Math.min(current, Math.max(minimum, remaining - reserved));
+      st.panel.style.height = `${height}px`;
+      if (st.h != null) st.h = height;
+      updateControlScale(st, height);
+      remaining -= height;
+    });
+    let top = 0;
+    for (const st of topPanels) {
+      st.panel.style.top = `${header + top}px`;
+      top += Math.round(st.panel.getBoundingClientRect().height);
+    }
+    let bottom = 0;
+    for (const st of bottomPanels) {
+      st.panel.style.bottom = `${footer + bottom}px`;
+      bottom += Math.round(st.panel.getBoundingClientRect().height);
+    }
+    document.documentElement.style.setProperty("--window-dock-top", `${top}px`);
+    document.documentElement.style.setProperty("--window-dock-bottom", `${bottom}px`);
+    snapTop.style.top = `${header + top}px`;
+    snapBottom.style.bottom = `${footer + bottom}px`;
+  }
+
+  function clampFloatingPanel(st) {
+    if (st.dock !== "floating") return;
+    const { header, footer } = chromeHeights();
+    const height = st.panel.getBoundingClientRect().height || st.h || st.naturalH;
+    st.w = Math.min(Math.max(150, st.w), innerWidth);
+    st.h = Math.min(Math.max(panelMinHeight(st), st.h || height), Math.max(80, innerHeight - header - footer));
+    st.x = Math.min(innerWidth - 36, Math.max(36 - st.w, st.x));
+    st.y = Math.min(innerHeight - footer - 28, Math.max(header, st.y));
+    st.panel.style.left = `${st.x}px`;
+    st.panel.style.top = `${st.y}px`;
+    st.panel.style.width = `${st.w}px`;
+    st.panel.style.height = `${st.h}px`;
+  }
+
+  function panelHeightLimit(st) {
+    const { header, footer } = chromeHeights();
+    const available = Math.max(80, innerHeight - header - footer);
+    if (st.dock.startsWith("window-")) {
+      const occupied = Object.values(panels).reduce((sum, other) => {
+        if (other === st || !other.dock.startsWith("window-") || !other.panel.getClientRects().length) return sum;
+        return sum + other.panel.getBoundingClientRect().height;
+      }, 0);
+      return Math.max(panelMinHeight(st), available - occupied - 120);
+    }
+    if (st.dock.startsWith("editor-")) {
+      return Math.max(panelMinHeight(st), st.panel.parentElement.getBoundingClientRect().height - 100);
+    }
+    return available;
+  }
+
+  /* ---------------- 布局应用 ---------------- */
+  function applyPanel(st) {
+    const panel = st.panel;
+    const parent = panel.parentElement;
+    panel.classList.remove("dock-editor-top", "dock-editor-bottom", "dock-window-top", "dock-window-bottom", "floating");
+    parent.classList.remove("bar-fixed", "bar-bottom");
+
+    switch (st.dock) {
+      case "editor-top":
+        panel.classList.add("dock-editor-top");
+        break;
+      case "editor-bottom":
+        panel.classList.add("dock-editor-bottom");
+        parent.classList.add("bar-bottom");
+        break;
+      case "window-top":
+        panel.classList.add("dock-window-top");
+        parent.classList.add("bar-fixed");
+        break;
+      case "window-bottom":
+        panel.classList.add("dock-window-bottom");
+        parent.classList.add("bar-fixed");
+        break;
+      case "floating":
+        panel.classList.add("floating");
+        parent.classList.add("bar-fixed");
+        break;
+    }
+
+    panel.style.left = panel.style.top = panel.style.right = panel.style.bottom = panel.style.width = "";
+    if (st.dock === "floating") {
+      panel.style.left = `${st.x}px`;
+      panel.style.top = `${st.y}px`;
+      panel.style.width = `${st.w}px`;
+    }
+
+    const fixed = st.dock === "window-top" || st.dock === "window-bottom" || st.dock === "floating";
+    let h = fixed ? (st.h != null ? st.h : st.naturalH) : (st.h != null ? st.h : null);
+    if (h != null) {
+      h = Math.min(Math.max(panelMinHeight(st), h), panelHeightLimit(st));
+      st.h = st.h == null && st.dock !== "floating" ? null : h;
+    }
+    panel.style.height = h != null ? `${h}px` : "";
+    updateControlScale(st, h || panel.getBoundingClientRect().height || st.naturalH);
+    clampFloatingPanel(st);
+
+    panel.querySelectorAll(".fp-dock").forEach((btn) =>
+      btn.classList.toggle("active", btn.dataset.dock === st.dock));
+    requestAnimationFrame(updateWindowDockLayout);
+  }
+
+  function dock(st, target) {
+    if (target === "floating" && st.dock !== "floating") {
+      const rect = st.panel.getBoundingClientRect();
+      st.x = rect.left; st.y = rect.top;
+      st.w = rect.width;
+      if (st.h == null) st.h = Math.round(rect.height);
+    }
+    st.dock = target;
+    applyPanel(st);
+    save();
+  }
+
+  /* ---------------- 拖动（自由移动 + 吸附停靠） ---------------- */
+  function bindDrag(st) {
+    st.header.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if (event.target.closest(".fp-dock, .fp-handle")) return;
+      event.preventDefault();
+
+      const rect = st.panel.getBoundingClientRect();
+      if (st.dock !== "floating") {
+        st.dock = "floating";
+        st.x = rect.left; st.y = rect.top;
+        st.w = rect.width;
+        if (st.h == null) st.h = Math.round(rect.height);
+        applyPanel(st);
+      }
+      const offsetX = event.clientX - st.x;
+      const offsetY = event.clientY - st.y;
+      let snap = null;
+      document.body.classList.add("panel-dragging");
+
+      const move = (ev) => {
+        const { header, footer } = chromeHeights();
+        const panelWidth = st.panel.getBoundingClientRect().width;
+        st.x = Math.min(innerWidth - 36, Math.max(36 - panelWidth, ev.clientX - offsetX));
+        st.y = Math.min(innerHeight - footer - 28, Math.max(header, ev.clientY - offsetY));
+        st.panel.style.left = `${st.x}px`;
+        st.panel.style.top = `${st.y}px`;
+        const nearTop = ev.clientY < header + SNAP + 6;
+        const nearBottom = ev.clientY > innerHeight - footer - SNAP - 6;
+        snap = nearTop ? "top" : nearBottom ? "bottom" : null;
+        snapTop.classList.toggle("active", snap === "top");
+        snapBottom.classList.toggle("active", snap === "bottom");
+      };
+
+      const clean = () => {
+        snapTop.classList.remove("active");
+        snapBottom.classList.remove("active");
+        document.body.classList.remove("panel-dragging");
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", clean);
+      };
+
+      const up = () => {
+        clean();
+        if (snap === "top") dock(st, "window-top");
+        else if (snap === "bottom") dock(st, "window-bottom");
+        else save();
+      };
+
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up, { once: true });
+      window.addEventListener("pointercancel", clean, { once: true });
+    });
+  }
+
+  /* ---------------- 拉伸 ---------------- */
+  function bindResize(st, handle, dir) {
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      const rect = st.panel.getBoundingClientRect();
+      const startX = event.clientX, startY = event.clientY;
+      const base = { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
+      document.body.classList.add("panel-dragging");
+
+      const move = (ev) => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        let { x, y, w, h } = base;
+        const maxHeight = panelHeightLimit(st);
+        if (dir.includes("e")) w = Math.min(innerWidth - x, Math.max(150, base.w + dx));
+        if (dir.includes("w")) {
+          w = Math.min(base.x + base.w, Math.max(150, base.w - dx));
+          x = base.x + base.w - w;
+        }
+        if (dir.includes("s")) h = Math.min(maxHeight, Math.max(panelMinHeight(st), base.h + dy));
+        if (dir.includes("n")) { h = Math.min(maxHeight, Math.max(panelMinHeight(st), base.h - dy)); y = base.y + (base.h - h); }
+        st.x = x; st.y = y; st.w = w; st.h = h;
+        if (st.dock === "floating") {
+          st.panel.style.left = `${x}px`;
+          st.panel.style.top = `${y}px`;
+          st.panel.style.width = `${w}px`;
+        }
+        st.panel.style.height = `${h}px`;
+        updateControlScale(st, h);
+        updateWindowDockLayout();
+      };
+
+      const clean = () => {
+        document.body.classList.remove("panel-dragging");
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", clean);
+      };
+
+      const up = () => {
+        clean();
+        save();
+      };
+
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up, { once: true });
+      window.addEventListener("pointercancel", clean, { once: true });
+    });
+  }
+
+  /* ---------------- 持久化 ---------------- */
+  function save() {
+    const data = {};
+    for (const id in panels) {
+      const s = panels[id];
+      data[id] = {
+        dock: s.dock,
+        x: Math.round(s.x), y: Math.round(s.y),
+        w: Math.round(s.w),
+        h: s.h == null ? null : Math.round(s.h)
+      };
+    }
+    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch (_) { /* ignore */ }
+  }
+
+  /* ---------------- 面板装配 ---------------- */
+  function setupPanel(id, contentSelector, title, fallbackH) {
+    const content = document.querySelector(contentSelector);
+    if (!content) return null;
+
+    const panel = document.createElement("div");
+    panel.className = "float-panel";
+    panel.dataset.panel = id;
+
+    const header = document.createElement("div");
+    header.className = "fp-header";
+    header.title = `${title}：按住标题栏拖动可自由浮动，拖到窗口上/下边缘可停靠，双击恢复默认`;
+
+    const grip = document.createElement("span");
+    grip.className = "fp-grip";
+    grip.textContent = "≡";
+
+    const titleEl = document.createElement("span");
+    titleEl.className = "fp-title";
+    titleEl.textContent = title;
+
+    const actions = document.createElement("div");
+    actions.className = "fp-actions";
+    for (const [dockName, label, tip] of DOCK_DEFS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "fp-dock";
+      btn.dataset.dock = dockName;
+      btn.textContent = label;
+      btn.title = tip;
+      actions.appendChild(btn);
+    }
+    header.append(grip, titleEl, actions);
+
+    content.parentNode.insertBefore(panel, content);
+    panel.append(header, content);
+
+    const st = Object.assign({
+      id, dock: "editor-top",
+      x: 60, y: 96, w: 520, h: null, naturalH: Math.max(28, fallbackH || 48)
+    }, saved[id] || {});
+    st.panel = panel;
+    st.header = header;
+    st.content = content;
+    panels[id] = st;
+    panelResizeObserver.observe(panel);
+
+    // 隐藏面板采用回退高度，避免为了测量而短暂显示并与异步模式切换发生竞争。
+    const measured = Math.round(panel.offsetHeight);
+    if (measured > 0) st.naturalH = measured;
+
+    for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
+      const handle = document.createElement("div");
+      handle.className = `fp-handle fp-handle-${dir}`;
+      handle.dataset.dir = dir;
+      panel.appendChild(handle);
+      bindResize(st, handle, dir);
+    }
+
+    bindDrag(st);
+    actions.addEventListener("click", (event) => {
+      const btn = event.target.closest(".fp-dock");
+      if (btn) dock(st, btn.dataset.dock);
+    });
+    header.addEventListener("dblclick", (event) => {
+      if (event.target.closest(".fp-actions, .fp-dock")) return;
+      st.dock = "editor-top";
+      st.h = null;
+      st.x = 60; st.y = 96; st.w = 520;
+      applyPanel(st);
+      save();
+    });
+
+    applyPanel(st);
+    return st;
+  }
+
+  setupPanel("tagBar", "#tagBar", "编辑按钮", 56);
+  setupPanel("findBar", "#findBar", "查找替换", 80);
+  window.addEventListener("reader-mode-change", updateWindowDockLayout);
+  window.addEventListener("resize", () => {
+    Object.values(panels).forEach(clampFloatingPanel);
+    updateWindowDockLayout();
+  });
+  updateWindowDockLayout();
 })();

@@ -5,9 +5,10 @@
 <header class="site-header">
   <div class="brand"><span>M</span>MEW 对照阅读编辑器</div>
   <div class="context"><strong id="chapterTitle">正在载入…</strong><small id="pageContext"></small></div>
-  <div class="actions"><select id="volumeSelect"></select><button id="modeBtn">源代码</button><button id="tocBtn">目录</button>
-    <form id="pageForm"><input id="pageInput" type="number" min="1" aria-label="页码"><button>跳转</button></form>
-    <button id="saveBtn">保存</button><button id="darkBtn">深色</button></div><output id="status"></output>
+  <div class="actions"><select id="volumeSelect" aria-label="卷册"></select><button id="modeBtn" type="button">源代码</button><button id="tocBtn" type="button" aria-controls="tocDrawer" aria-expanded="false">目录</button>
+    <form id="pageForm"><input id="pageInput" type="number" min="1" aria-label="页码"><button type="submit">跳转</button></form>
+    <button id="undoBtn" type="button" title="撤销 Ctrl+Z">撤销</button><button id="redoBtn" type="button" title="重做 Ctrl+Y">重做</button>
+    <button id="saveBtn" type="button">保存</button><button id="darkBtn" type="button">深色</button></div><output id="status" aria-live="polite"></output>
 </header>
 <button id="tocBackdrop" class="toc-backdrop" aria-label="关闭目录"></button>
 <aside id="tocDrawer" class="toc-drawer"><div class="toc-header"><strong id="tocTitle">目录</strong><button id="tocClose">×</button></div><ol id="tocList"></ol></aside>
@@ -16,17 +17,17 @@
     <div id="tagBar" class="tag-bar"></div>
     <iframe id="visualEditor" title="可视化编辑器" sandbox="allow-same-origin"></iframe>
     <div id="sourcePane" class="source-pane" hidden>
-        <div class="find-bar"><input id="findText" placeholder="查找文本或正则"><input id="replaceText" placeholder="替换为">
+        <div id="findBar" class="find-bar"><textarea id="findText" rows="2" spellcheck="false" placeholder="查找文本或正则"></textarea><textarea id="replaceText" rows="2" spellcheck="false" placeholder="替换为"></textarea>
         <label><input id="regexBox" type="checkbox" checked>正则</label><label><input id="caseBox" type="checkbox">区分大小写</label>
         <button id="findBtn">查找</button><button id="nextBtn">下一个</button><button id="replaceBtn">替换</button><button id="allBtn">全部</button><span id="findInfo"></span>
       </div>
       <div class="editor-wrap"><pre id="highlight"></pre><textarea id="editor" spellcheck="false"></textarea></div>
     </div>
   </section>
-  <aside class="scan-pane"><div class="scan-tools"><button id="imageLayout" type="button" aria-pressed="false" hidden>左右分布</button><button id="zoomOut">−</button><button id="zoomFit" title="恢复到 100%">100%</button><button id="zoomIn">＋</button><button id="fullImage">全屏</button></div>
+  <aside class="scan-pane"><div class="scan-tools"><button id="imageLayout" type="button" aria-pressed="false" hidden>左右分布</button><button id="imageInvert" type="button" aria-pressed="false" title="反转扫描图片的颜色，并记住此设置">反色</button><button id="zoomOut">−</button><button id="zoomFit" title="恢复到 100%">100%</button><button id="zoomIn">＋</button><button id="fullImage">全屏</button></div>
     <div id="scanStage"><img id="scanImage" alt="" hidden><p id="scanMissing" hidden></p></div>
   </aside>
 </main>
-<footer class="page-footer"><button id="prevBtn">← 上一页</button><span id="pagePosition"></span><button id="nextPageBtn">下一页 →</button></footer>
+<footer class="page-footer"><button id="prevBtn" title="Alt+←">← 上一页</button><span id="pagePosition"></span><button id="nextPageBtn" title="Alt+→">下一页 →</button></footer>
 <dialog id="imageDialog"><button id="dialogClose">关闭</button><img id="dialogImage" alt="" hidden></dialog>
-<script src="reader-app.js"></script><script src="reader-tag-toggle.js"></script><script src="reader-ui.js"></script><script src="reader-image-editor.js"></script></body></html>
+<script src="reader-ui.js"></script><script src="reader-app.js"></script></body></html>
