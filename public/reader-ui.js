@@ -8,15 +8,21 @@
   const sourceEditor = byId("editor");
   const visualFrame = byId("visualEditor");
   const scanStage = byId("scanStage");
-  const imageDialog = byId("imageDialog");
   const listeners = {};
   let initialized = false;
   let statusTimer = null;
-  let scanZoom = 1;
-  let dialogZoom = 1;
-  let sideBySide = false;
+  let horizontalPages = false;
   let imageInverted = false;
-  const SCAN_ZOOM_KEY = "readerImageZoom";
+  let pdfRuntimePromise = null;
+  let pdfViewer = null;
+  let pdfLinkService = null;
+  let pdfLoadingTask = null;
+  let pdfUrl = "";
+  let pdfPageLabels = null;
+  let pendingPdfLabel = "1";
+  let pdfRevision = 0;
+  let scrollMode = null;
+  const PDF_SCALE_KEY = "readerPdfScaleValue";
 
   function emit(name, ...args) {
     return listeners[name]?.(...args);
@@ -199,37 +205,41 @@
     visualFrame.srcdoc = source;
   }
 
-  const clampZoom = (value) => Math.min(3, Math.max(.25, value));
-  function applyScanZoom(image) {
-    if (image.naturalWidth) image.style.width = `${image.naturalWidth * scanZoom}px`;
+  function updatePdfDirection() {
+    const button = byId("pdfDirection");
+    button.setAttribute("aria-pressed", String(horizontalPages));
+    button.textContent = horizontalPages ? "上下翻页" : "左右翻页";
+    button.title = horizontalPages ? "改为上下连续翻页" : "改为左右连续翻页";
+    if (pdfViewer && scrollMode) {
+      pdfViewer.scrollMode = horizontalPages ? scrollMode.HORIZONTAL : scrollMode.VERTICAL;
+    }
+    localStorage.setItem("readerPdfHorizontal", horizontalPages ? "1" : "0");
   }
 
-  function updateImageLayout() {
-    const images = scanStage.querySelectorAll(".scan-page-image");
-    const canSpread = images.length > 1;
-    const button = byId("imageLayout");
-    button.hidden = !canSpread;
-    button.setAttribute("aria-pressed", String(canSpread && sideBySide));
-    button.textContent = sideBySide ? "上下分布" : "左右分布";
-    scanStage.classList.toggle("side-by-side", canSpread && sideBySide);
-  }
-
-  function setScanZoom(value, persist = true) {
-    scanZoom = Math.round(clampZoom(value) * 1000) / 1000;
-    scanStage.querySelectorAll(".scan-page-image").forEach(applyScanZoom);
-    const percent = Number((scanZoom * 100).toFixed(1));
+  function updatePdfScale(scale, presetValue = "") {
+    if (!Number.isFinite(scale)) return;
+    const percent = Number((scale * 100).toFixed(1));
     const button = byId("zoomFit");
     button.textContent = `${percent}%`;
-    button.title = `当前为原图像素的 ${percent}%；点击恢复到 100%（此比例会自动记忆）`;
+    button.title = `PDF.js 当前缩放 ${percent}%；点击适合页宽（此比例会自动记忆）`;
     button.setAttribute("aria-label", button.title);
-    if (persist) localStorage.setItem(SCAN_ZOOM_KEY, String(scanZoom));
+    localStorage.setItem(PDF_SCALE_KEY, presetValue || String(scale));
   }
 
-  function setDialogZoom(value) {
-    dialogZoom = clampZoom(value);
-    imageDialog.querySelectorAll(".dialog-page-image").forEach((image) => {
-      if (image.naturalWidth) image.style.width = `${image.naturalWidth * dialogZoom}px`;
-    });
+  function setPdfStatus(message = "") {
+    const missing = byId("scanMissing");
+    missing.hidden = !message;
+    if (message) missing.textContent = message;
+    byId("fullImage").disabled = Boolean(message);
+  }
+
+  function showPendingPdfLabel() {
+    if (!pdfViewer?.pdfDocument) return;
+    if (pdfViewer.pageLabelToPageNumber(pendingPdfLabel) == null) {
+      notify(`PDF 中找不到页面标签“${pendingPdfLabel}”`, true);
+      return;
+    }
+    pdfViewer.currentPageLabel = pendingPdfLabel;
   }
 
   function setImageInverted(inverted) {
@@ -239,92 +249,91 @@
     button?.setAttribute("aria-pressed", String(imageInverted));
     if (button) {
       button.textContent = imageInverted ? "还原" : "反色";
-      button.title = imageInverted ? "恢复扫描图片的原始颜色，并记住此设置" : "反转扫描图片的颜色，并记住此设置";
+      button.title = imageInverted ? "恢复 PDF 页面的原始颜色，并记住此设置" : "反转 PDF 页面颜色，并记住此设置";
     }
     localStorage.setItem("readerImageInverted", imageInverted ? "1" : "0");
   }
 
-  function setImages(urls) {
-    scanStage.querySelectorAll(".scan-page-image").forEach((image) => image.remove());
-    imageDialog.querySelectorAll(".dialog-page-image").forEach((image) => image.remove());
-    byId("scanImage").hidden = true;
-    byId("dialogImage").hidden = true;
-    let loaded = 0;
-    byId("scanMissing").hidden = Boolean(urls.length);
-    byId("fullImage").disabled = !urls.length;
-    urls.forEach((url) => {
-      const image = document.createElement("img");
-      image.className = "scan-page-image";
-      image.alt = "";
-      image.loading = "lazy";
-      image.decoding = "async";
-      image.onload = () => {
-        if (!image.isConnected) return;
-        applyScanZoom(image);
-        loaded += 1;
-        byId("scanMissing").hidden = true;
-        byId("fullImage").disabled = false;
-      };
-      image.onerror = () => {
-        if (!image.isConnected) return;
-        image.remove();
-        updateImageLayout();
-        if (!loaded && !scanStage.querySelector(".scan-page-image")) {
-          byId("scanMissing").hidden = false;
-          byId("fullImage").disabled = true;
-        }
-      };
-      image.src = url;
-      scanStage.insertBefore(image, byId("scanMissing"));
-      const fullImage = image.cloneNode();
-      fullImage.className = "dialog-page-image";
-      fullImage.style.cssText = "display:block;max-width:none;margin:0 auto 16px";
-      fullImage.onerror = () => fullImage.remove();
-      imageDialog.append(fullImage);
-    });
-    updateImageLayout();
+  async function ensurePdfRuntime() {
+    if (pdfRuntimePromise) return pdfRuntimePromise;
+    pdfRuntimePromise = (async () => {
+      const pdfjs = await import("/vendor/pdfjs/build/pdf.mjs");
+      // pdf_viewer.mjs reads the display-layer API from this global while the
+      // module is evaluated, so its import must happen after registration.
+      globalThis.pdfjsLib = pdfjs;
+      const viewer = await import("/vendor/pdfjs/web/pdf_viewer.mjs");
+      pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/build/pdf.worker.mjs";
+      const eventBus = new viewer.EventBus();
+      pdfLinkService = new viewer.PDFLinkService({ eventBus });
+      pdfViewer = new viewer.PDFViewer({
+        container: scanStage,
+        viewer: byId("pdfViewer"),
+        eventBus,
+        linkService: pdfLinkService,
+        imageResourcesPath: "/vendor/pdfjs/web/images/"
+      });
+      pdfLinkService.setViewer(pdfViewer);
+      scrollMode = viewer.ScrollMode;
+      eventBus.on("pagesinit", () => {
+        const savedScale = localStorage.getItem(PDF_SCALE_KEY) || "page-width";
+        pdfViewer.setPageLabels(pdfPageLabels);
+        pdfViewer.currentScaleValue = savedScale;
+        updatePdfDirection();
+        showPendingPdfLabel();
+        setPdfStatus();
+      });
+      eventBus.on("pagechanging", ({ pageLabel }) => {
+        if (pageLabel != null) emit("pdfPageLabel", pageLabel);
+      });
+      eventBus.on("scalechanging", ({ scale, presetValue }) => updatePdfScale(scale, presetValue));
+      return pdfjs;
+    })();
+    return pdfRuntimePromise;
   }
 
-  function preservePoint(container, image, event, applyZoom) {
-    const before = image.getBoundingClientRect();
-    if (!before.width || !before.height) return;
-    const pointX = (event.clientX - before.left) / before.width;
-    const pointY = (event.clientY - before.top) / before.height;
-    applyZoom();
-    requestAnimationFrame(() => {
-      if (!image.isConnected) return;
-      const after = image.getBoundingClientRect();
-      container.scrollLeft += after.left + pointX * after.width - event.clientX;
-      container.scrollTop += after.top + pointY * after.height - event.clientY;
-    });
+  async function setPdf({ url, pageLabel }) {
+    pendingPdfLabel = String(pageLabel ?? "1");
+    const revision = ++pdfRevision;
+    const pdfjs = await ensurePdfRuntime();
+    if (revision !== pdfRevision) return;
+    if (url === pdfUrl && (pdfViewer.pdfDocument || pdfLoadingTask)) {
+      showPendingPdfLabel();
+      return;
+    }
+    pdfUrl = url || "";
+    setPdfStatus(url ? "正在载入 PDF…" : "此卷未配置 PDF");
+    pdfViewer.setDocument(null);
+    pdfLinkService.setDocument(null);
+    pdfPageLabels = null;
+    await pdfLoadingTask?.destroy();
+    pdfLoadingTask = null;
+    if (!url || revision !== pdfRevision) return;
+    try {
+      pdfLoadingTask = pdfjs.getDocument({
+        url,
+        cMapUrl: "/vendor/pdfjs/cmaps/",
+        cMapPacked: true,
+        standardFontDataUrl: "/vendor/pdfjs/standard_fonts/",
+        wasmUrl: "/vendor/pdfjs/wasm/"
+      });
+      const document = await pdfLoadingTask.promise;
+      if (revision !== pdfRevision) return document.destroy();
+      pdfPageLabels = await document.getPageLabels()
+        || Array.from({ length: document.numPages }, (_, index) => String(index + 1));
+      if (revision !== pdfRevision) return document.destroy();
+      pdfViewer.setDocument(document);
+      pdfLinkService.setDocument(document);
+    } catch (error) {
+      if (revision !== pdfRevision) return;
+      pdfLoadingTask = null;
+      setPdfStatus(`PDF 载入失败：${error.message}`);
+      notify(`PDF 载入失败：${error.message}`, true);
+    }
   }
 
-  function installPan(container, selector) {
-    let drag = null;
-    container.addEventListener("dragstart", (event) => { if (event.target.closest(selector)) event.preventDefault(); });
-    container.addEventListener("pointerdown", (event) => {
-      const image = event.target.closest(selector);
-      if (event.button !== 0 || !image) return;
-      drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-      container.classList.add("image-panning");
-      image.setPointerCapture?.(event.pointerId);
-      event.preventDefault();
-    });
-    container.addEventListener("pointermove", (event) => {
-      if (!drag || event.pointerId !== drag.pointerId) return;
-      container.scrollLeft -= event.clientX - drag.x;
-      container.scrollTop -= event.clientY - drag.y;
-      drag.x = event.clientX;
-      drag.y = event.clientY;
-      event.preventDefault();
-    });
-    const stop = (event) => {
-      if (!drag || event.pointerId !== drag.pointerId) return;
-      drag = null;
-      container.classList.remove("image-panning");
-    };
-    container.addEventListener("pointerup", stop);
-    container.addEventListener("pointercancel", stop);
+  async function toggleFullscreen() {
+    if (document.fullscreenElement === scanPane) await document.exitFullscreen();
+    else await scanPane.requestFullscreen();
   }
 
   function init(handlers) {
@@ -366,36 +375,26 @@
     bind("replaceBtn", "click", () => emit("replace"));
     bind("allBtn", "click", () => emit("replaceAll"));
     ["findText", "regexBox", "caseBox"].forEach((id) => bind(id, id === "findText" ? "input" : "change", () => emit("findChanged")));
-    bind("zoomIn", "click", () => setScanZoom(scanZoom + .25));
-    bind("zoomOut", "click", () => setScanZoom(scanZoom - .25));
-    bind("zoomFit", "click", () => setScanZoom(1));
-    bind("imageLayout", "click", () => { sideBySide = !sideBySide; updateImageLayout(); });
+    bind("zoomIn", "click", () => pdfViewer?.increaseScale());
+    bind("zoomOut", "click", () => pdfViewer?.decreaseScale());
+    bind("zoomFit", "click", () => { if (pdfViewer) pdfViewer.currentScaleValue = "page-width"; });
+    bind("pdfDirection", "click", () => { horizontalPages = !horizontalPages; updatePdfDirection(); });
     bind("imageInvert", "click", () => setImageInverted(!imageInverted));
-    bind("fullImage", "click", () => { setDialogZoom(1); imageDialog.showModal(); });
-    bind("dialogClose", "click", () => imageDialog.close());
+    bind("fullImage", "click", () => toggleFullscreen().catch((error) => notify(error.message, true)));
     document.addEventListener("keydown", (event) => emit("keyDown", event));
     window.addEventListener("blur", () => document.querySelector(".editor-wrap")?.classList.remove("ctrl-link"));
     window.addEventListener("beforeunload", (event) => emit("beforeUnload", event));
     setTheme(localStorage.getItem("readerDark") === "1");
     setImageInverted(localStorage.getItem("readerImageInverted") === "1");
-    const savedScanZoom = Number(localStorage.getItem(SCAN_ZOOM_KEY));
-    setScanZoom(Number.isFinite(savedScanZoom) && savedScanZoom > 0 ? savedScanZoom : 1, false);
-
-    scanStage.addEventListener("wheel", (event) => {
-      const image = event.target.closest(".scan-page-image");
-      if (!image) return;
-      event.preventDefault();
-      preservePoint(scanStage, image, event, () => setScanZoom(scanZoom * Math.exp(-event.deltaY * .0015)));
-    }, { passive: false });
-    imageDialog.addEventListener("load", (event) => { if (event.target.matches?.(".dialog-page-image")) setDialogZoom(dialogZoom); }, true);
-    imageDialog.addEventListener("wheel", (event) => {
-      const image = event.target.closest(".dialog-page-image");
-      if (!image) return;
-      event.preventDefault();
-      preservePoint(imageDialog, image, event, () => setDialogZoom(dialogZoom * Math.exp(-event.deltaY * .0015)));
-    }, { passive: false });
-    installPan(scanStage, ".scan-page-image");
-    installPan(imageDialog, ".dialog-page-image");
+    horizontalPages = localStorage.getItem("readerPdfHorizontal") === "1"
+      || localStorage.getItem("readerPdfSpread") === "1";
+    localStorage.removeItem("readerPdfSpread");
+    updatePdfDirection();
+    document.addEventListener("fullscreenchange", () => {
+      const active = document.fullscreenElement === scanPane;
+      byId("fullImage").textContent = active ? "退出全屏" : "全屏";
+      requestAnimationFrame(() => pdfViewer?.update());
+    });
   }
 
   const splitter = document.createElement("div");
@@ -484,7 +483,7 @@
 
   window.ReaderUI = {
     init, notify, setDirty, setHistoryButtons, renderVolumes, renderToc, renderNavigation, renderTools,
-    setMode, setToc, setImages, applyVisualTheme, showVisual, findOptions,
+    setMode, setToc, setPdf, applyVisualTheme, showVisual, findOptions,
     setFindInfo: (text) => { byId("findInfo").textContent = text; },
     getSource: () => sourceEditor.value,
     setSource: (text) => { sourceEditor.value = text; },

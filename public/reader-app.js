@@ -207,26 +207,11 @@
     return pages.reduce((best, page) => Math.abs(page - requested) < Math.abs(best - requested) ? page : best);
   }
 
-  function imagePages(volume, page) {
-    const index = volume.pages.indexOf(page);
-    const nextPage = volume.pages[index + 1];
-    const end = Number.isFinite(nextPage) ? nextPage : page + 1;
-    return Array.from({ length: Math.max(1, end - page) }, (_, offset) => page + offset);
-  }
-
-  function imageUrlForPage(url, sourcePage, targetPage) {
-    if (targetPage === sourcePage) return url;
-    const parsed = new URL(url, location.href);
-    const parts = parsed.pathname.split("/");
-    for (let index = parts.length - 1; index >= 0; index--) {
-      const match = [...parts[index].matchAll(/\d+/g)].reverse().find((item) => Number(item[0]) === sourcePage);
-      if (!match) continue;
-      const replacement = String(targetPage).padStart(match[0].length, "0");
-      parts[index] = parts[index].slice(0, match.index) + replacement + parts[index].slice(match.index + match[0].length);
-      parsed.pathname = parts.join("/");
-      return parsed.href;
-    }
-    return url;
+  function htmlPageForPdfLabel(volume, pdfLabel) {
+    const numericPrefix = String(pdfLabel).match(/^(\d+)/)?.[1];
+    if (!numericPrefix) return null;
+    const labeledPage = Number(numericPrefix);
+    return volume.pages.findLast((page) => page <= labeledPage) ?? null;
   }
 
   function renderNavigation() {
@@ -246,7 +231,7 @@
     });
   }
 
-  async function navigate(targetVolume, targetPage, force = false) {
+  async function navigate(targetVolume, targetPage, force = false, pdfLabel = null) {
     if (!force && state.dirty && !(await save())) return false;
     const volume = state.config.volumes.find((item) => item.id === String(targetVolume));
     if (!volume) return false;
@@ -274,10 +259,8 @@
       // opened file must begin at the top when shown as source.
       setMode(state.mode, { resetSourceScroll: true });
       renderNavigation();
-      const urls = data.imageUrl
-        ? imagePages(volume, page).map((imagePage) => imageUrlForPage(data.imageUrl, page, imagePage))
-        : [];
-      ui.setImages(urls);
+      ui.setPdf({ url: volume.pdfUrl, pageLabel: String(pdfLabel ?? page) })
+        .catch((error) => ui.notify(`PDF 载入失败：${error.message}`, true));
       if (!state.editable) ui.notify("远程页面：只读");
       return true;
     } catch (error) {
@@ -751,6 +734,12 @@
       visualDoubleClick: trimVisualWordSelection,
       visualClick: openVisualLink,
       highlightClick: openHighlightedLink,
+      pdfPageLabel: (pdfLabel) => {
+        const volume = currentVolume();
+        if (!volume) return;
+        const page = htmlPageForPdfLabel(volume, pdfLabel);
+        if (page != null && page !== state.page) navigate(volume.id, page, false, pdfLabel);
+      },
       find: nextMatch,
       nextMatch,
       replace: replaceOne,

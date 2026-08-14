@@ -1,4 +1,5 @@
 import http from "node:http";
+import { createReadStream } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,7 +10,8 @@ const CONFIG_FILE = path.resolve(valueOf(["-c", "--config"]) || process.env.CONF
 const PORT = Number(valueOf(["-p", "--port"]) || process.env.PORT || 49100);
 const MIME = {
   ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".pdf": "application/pdf", ".wasm": "application/wasm",
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
   ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"
 };
@@ -45,12 +47,45 @@ function resolveResource(raw, base) {
 }
 
 function formatPattern(pattern, page, volume) {
-  return String(pattern).replaceAll("{volume}", volume)
-    .replace(/\{page(?::(\d+))?\}/, (_, width) => String(page).padStart(Number(width || 0), "0"));
+  return String(pattern)
+    .replace(/\{volume(?::(\d+))?\}/g, (_, width) => String(volume).padStart(Number(width || 0), "0"))
+    .replace(/\{page(?::(\d+))?\}/g, (_, width) => String(page).padStart(Number(width || 0), "0"));
 }
 
 async function exists(target) {
   try { await fs.access(target); return true; } catch { return false; }
+}
+
+async function replyFile(req, res, location, type) {
+  const stat = await fs.stat(location);
+  const range = req.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
+  if (!range) {
+    res.writeHead(200, {
+      "content-type": type,
+      "content-length": stat.size,
+      "accept-ranges": "bytes",
+      "cache-control": "no-store"
+    });
+    if (req.method === "HEAD") return res.end();
+    return createReadStream(location).pipe(res);
+  }
+  let start = range[1] ? Number(range[1]) : 0;
+  let end = range[2] ? Number(range[2]) : stat.size - 1;
+  if (!range[1] && range[2]) start = Math.max(0, stat.size - Number(range[2]));
+  end = Math.min(end, stat.size - 1);
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start > end) {
+    res.writeHead(416, { "content-range": `bytes */${stat.size}` });
+    return res.end();
+  }
+  res.writeHead(206, {
+    "content-type": type,
+    "content-length": end - start + 1,
+    "content-range": `bytes ${start}-${end}/${stat.size}`,
+    "accept-ranges": "bytes",
+    "cache-control": "no-store"
+  });
+  if (req.method === "HEAD") return res.end();
+  return createReadStream(location, { start, end }).pipe(res);
 }
 
 function pageFromName(name, volume) {
@@ -69,6 +104,7 @@ async function loadLibrary() {
   const config = imported.default || imported;
   const base = path.dirname(CONFIG_FILE);
   let htmlRoot = resolveResource(config.htmlRoot, base);
+  const pdfRoot = resolveResource(config.pdfRoot || "../马恩全集德文", base);
   if (htmlRoot.kind === "file" && !(await exists(htmlRoot.path)) && config.htmlRoot === "./MEWB") {
     htmlRoot = resolveResource("../MEWB", base);
   }
@@ -89,13 +125,6 @@ async function loadLibrary() {
     pages = [...new Set(pages)].sort((a, b) => a - b);
     if (!pages.length) continue;
 
-    let imageRoot = override.images?.directory ? resolveResource(override.images.directory, base) : null;
-    if (!imageRoot) {
-      for (const template of config.imageRoots || []) {
-        const candidate = resolveResource(formatPattern(template, 0, id), base);
-        if (candidate.kind === "url" || await exists(candidate.path)) { imageRoot = candidate; break; }
-      }
-    }
     const toc = (override.toc || config.inhalt?.[id] || []).map((entry) => Array.isArray(entry)
       ? {
           title: String(entry[0]).replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "").trim(),
@@ -104,10 +133,17 @@ async function loadLibrary() {
         }
       : { title: entry.title, level: Number(entry.level || 1), page: Number(entry.page) }
     ).filter((entry) => entry.title && Number.isFinite(entry.page));
+    const pdfName = override.pdf?.file || formatPattern(config.pdfPattern || "mew_band{volume:02}.pdf", 0, id);
+    const pdf = override.pdf?.url
+      ? resolveResource(override.pdf.url, base)
+      : (pdfRoot.kind === "url"
+        ? { kind: "url", path: `${pdfRoot.path}/${pdfName}` }
+        : { kind: "file", path: path.resolve(pdfRoot.path, pdfName) });
     volumes.push({
       id, title: override.title || `马克思恩格斯全集 第${id}卷`,
-      shortTitle: override.shortTitle || `第${id}卷`, pages, toc, pageDir, imageRoot,
-      pagePattern: override.pages?.pattern || "", imagePattern: override.images?.pattern || config.imagePattern
+      shortTitle: override.shortTitle || `第${id}卷`, pages, toc, pageDir,
+      pagePattern: override.pages?.pattern || "",
+      pdf
     });
   }
   library = { config, volumes };
@@ -154,19 +190,24 @@ async function api(req, res, url) {
     const parts = url.pathname.split("/").filter(Boolean);
     if (url.pathname === "/api/reader/config") {
       return reply(res, 200, {
-        volumes: library.volumes.map(({ id, title, shortTitle, pages, toc }) => ({ id, title, shortTitle, pages, toc }))
+        volumes: library.volumes.map(({ id, title, shortTitle, pages, toc, pdf }) => ({
+          id, title, shortTitle, pages, toc,
+          pdfUrl: pdf?.kind === "url" ? pdf.path : `/api/reader/pdf/${encodeURIComponent(id)}`
+        }))
       });
+    }
+    if (parts[2] === "pdf") {
+      const volume = getVolume(decodeURIComponent(parts[3] || ""));
+      if (!volume.pdf || volume.pdf.kind !== "file" || !(await exists(volume.pdf.path))) {
+        return reply(res, 404, "PDF not found", "text/plain; charset=utf-8");
+      }
+      return replyFile(req, res, volume.pdf.path, "application/pdf");
     }
     if (parts[2] === "page") {
       const volume = getVolume(decodeURIComponent(parts[3] || ""));
       const page = getPage(volume, parts[4]);
       if (req.method === "GET") {
-        const imageUrl = volume.imageRoot
-          ? (volume.imageRoot.kind === "url"
-            ? `${volume.imageRoot.path}/${formatPattern(volume.imagePattern, page, volume.id)}`
-            : `/api/reader/image/${encodeURIComponent(volume.id)}/${page}`)
-          : "";
-        return reply(res, 200, { volume: volume.id, page, imageUrl, ...(await readPage(volume, page)) });
+        return reply(res, 200, { volume: volume.id, page, ...(await readPage(volume, page)) });
       }
       if (req.method === "PUT") {
         if (volume.pageDir.kind !== "file") return reply(res, 403, { error: "远程页面为只读" });
@@ -179,14 +220,6 @@ async function api(req, res, url) {
         await fs.writeFile(location, String(body.text ?? ""), "utf8");
         return reply(res, 200, { ok: true, mtime: (await fs.stat(location)).mtimeMs });
       }
-    }
-    if (parts[2] === "image") {
-      const volume = getVolume(decodeURIComponent(parts[3] || ""));
-      const page = Number(parts[4]);
-      if (!Number.isInteger(page) || page < 1) throw new Error(`Invalid image page: ${parts[4]}`);
-      if (!volume.imageRoot || volume.imageRoot.kind !== "file") return reply(res, 404, "Not found", "text/plain");
-      const location = path.join(volume.imageRoot.path, formatPattern(volume.imagePattern, page, volume.id));
-      return reply(res, 200, await fs.readFile(location), MIME[path.extname(location).toLowerCase()] || "application/octet-stream");
     }
     if (parts[2] === "resource") {
       const volume = getVolume(decodeURIComponent(parts[3] || ""));
@@ -213,8 +246,22 @@ async function staticFile(res, pathname) {
   }
 }
 
+async function vendorFile(res, pathname) {
+  const relative = pathname.slice("/vendor/pdfjs/".length);
+  const packageRoot = path.join(HERE, "node_modules", "pdfjs-dist");
+  const full = path.resolve(packageRoot, relative);
+  if (full !== packageRoot && !full.startsWith(`${packageRoot}${path.sep}`)) return reply(res, 403, "Forbidden", "text/plain");
+  try {
+    return reply(res, 200, await fs.readFile(full), MIME[path.extname(full).toLowerCase()] || "application/octet-stream");
+  } catch {
+    return reply(res, 404, "Not found", "text/plain");
+  }
+}
+
 await loadLibrary();
 http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  return url.pathname.startsWith("/api/reader/") ? api(req, res, url) : staticFile(res, url.pathname);
+  if (url.pathname.startsWith("/api/reader/")) return api(req, res, url);
+  if (url.pathname.startsWith("/vendor/pdfjs/")) return vendorFile(res, url.pathname);
+  return staticFile(res, url.pathname);
 }).listen(PORT, () => console.log(`MEW 对照阅读编辑器：http://localhost:${PORT}（${library.volumes.length} 卷）`));
