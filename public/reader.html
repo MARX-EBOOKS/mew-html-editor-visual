@@ -3,15 +3,17 @@
 <title>MEW 对照阅读编辑器</title><link rel="stylesheet" href="reader.css"><link rel="stylesheet" href="reader-vscode.css"></head>
 <body>
 <header class="site-header">
-  <div class="brand"><span>M</span>MEW 对照阅读编辑器</div>
-  <div class="context"><strong id="chapterTitle">正在载入…</strong><small id="pageContext"></small></div>
-  <div class="actions"><select id="volumeSelect" aria-label="卷册"></select><button id="modeBtn" type="button">源代码</button><button id="tocBtn" type="button" aria-controls="tocDrawer" aria-expanded="false">目录</button>
-    <form id="pageForm"><input id="pageInput" type="number" min="1" aria-label="页码"><button type="submit">跳转</button></form>
-    <button id="undoBtn" type="button" title="撤销 Ctrl+Z">撤销</button><button id="redoBtn" type="button" title="重做 Ctrl+Y">重做</button>
-    <button id="saveBtn" type="button">保存</button><button id="darkBtn" type="button">深色</button></div><output id="status" aria-live="polite"></output>
+  <div class="brand"><span aria-hidden="true">M</span><span class="brand-name">MEW 对照阅读编辑器</span></div>
+  <div class="context"><strong id="chapterTitle">正在载入…</strong><div class="context-meta"><small id="pageContext"></small><output id="status" aria-live="polite" aria-atomic="true"></output></div></div>
+  <nav class="actions" aria-label="阅读与编辑工具">
+    <div class="action-group action-group-file"><select id="volumeSelect" aria-label="选择卷册" title="选择卷册"></select><button id="tocBtn" type="button" aria-controls="tocDrawer" aria-expanded="false">目录</button></div>
+    <div class="action-group action-group-page"><form id="pageForm" aria-label="跳转页码"><input id="pageInput" type="number" min="1" inputmode="numeric" aria-label="页码" placeholder="页码"><button type="submit">跳转</button></form></div>
+    <div class="action-group action-group-edit"><button id="undoBtn" type="button" title="撤销 Ctrl+Z">撤销</button><button id="redoBtn" type="button" title="重做 Ctrl+Y">重做</button><button id="saveBtn" type="button" title="保存 Ctrl+S">保存</button></div>
+    <div class="action-group action-group-view"><button id="modeBtn" type="button">源代码</button><button id="darkBtn" type="button">深色</button></div>
+  </nav>
 </header>
 <button id="tocBackdrop" class="toc-backdrop" aria-label="关闭目录"></button>
-<aside id="tocDrawer" class="toc-drawer"><div class="toc-header"><strong id="tocTitle">目录</strong><button id="tocClose">×</button></div><ol id="tocList"></ol></aside>
+<aside id="tocDrawer" class="toc-drawer" aria-labelledby="tocTitle"><div class="toc-header"><strong id="tocTitle">目录</strong><button id="tocClose" type="button" aria-label="关闭目录">×</button></div><ol id="tocList"></ol></aside>
 <main class="reader-grid">
   <section class="text-pane">
     <div id="tagBar" class="tag-bar"></div>
@@ -24,10 +26,10 @@
       <div class="editor-wrap"><pre id="highlight"></pre><textarea id="editor" spellcheck="false"></textarea></div>
     </div>
   </section>
-  <aside class="scan-pane"><div class="scan-tools"><button id="imageLayout" type="button" aria-pressed="false" hidden>左右分布</button><button id="imageInvert" type="button" aria-pressed="false" title="反转扫描图片的颜色，并记住此设置">反色</button><button id="zoomOut">−</button><button id="zoomFit" title="恢复到 100%">100%</button><button id="zoomIn">＋</button><button id="fullImage">全屏</button></div>
+  <aside class="scan-pane"><div class="scan-tools" role="toolbar" aria-label="扫描图像工具"><div class="scan-tool-group"><button id="imageLayout" type="button" aria-pressed="false" hidden>左右分布</button><button id="imageInvert" type="button" aria-pressed="false" title="反转扫描图片的颜色，并记住此设置">反色</button></div><div class="scan-tool-group zoom-tools" aria-label="缩放"><button id="zoomOut" type="button" title="缩小扫描图片" aria-label="缩小扫描图片">−</button><button id="zoomFit" type="button" title="当前数字为原图像素缩放比例；点击恢复到 100%">100%</button><button id="zoomIn" type="button" title="放大扫描图片" aria-label="放大扫描图片">＋</button></div><div class="scan-tool-group"><button id="fullImage" type="button">全屏</button></div></div>
     <div id="scanStage"><img id="scanImage" alt="" hidden><p id="scanMissing" hidden></p></div>
   </aside>
 </main>
-<footer class="page-footer"><button id="prevBtn" title="Alt+←">← 上一页</button><span id="pagePosition"></span><button id="nextPageBtn" title="Alt+→">下一页 →</button></footer>
-<dialog id="imageDialog"><button id="dialogClose">关闭</button><img id="dialogImage" alt="" hidden></dialog>
+<footer class="page-footer" aria-label="翻页导航"><button id="prevBtn" type="button" title="Alt+←">← 上一页</button><span id="pagePosition" aria-live="polite"></span><button id="nextPageBtn" type="button" title="Alt+→">下一页 →</button></footer>
+<dialog id="imageDialog" aria-label="扫描图像全屏预览"><button id="dialogClose" type="button">关闭</button><img id="dialogImage" alt="" hidden></dialog>
 <script src="reader-ui.js"></script><script src="reader-app.js"></script></body></html>

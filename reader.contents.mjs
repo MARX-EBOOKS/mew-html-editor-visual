@@ -7125,7 +7125,20 @@ export const inhalt = {
       "<h2>ZWEIUNDFÜNFZIGSTES KAPITEL<br>Die Klassen</h2>",
       892
     ]
-  ]
+  ],
+  "27": [],
+  "28": [],
+  "29": [],
+  "30": [],
+  "31": [],
+  "32": [],
+  "33": [],
+  "34": [],
+  "35": [],
+  "36": [],
+  "37": [],
+  "38": [],
+  "39": []
 };
 
 export default inhalt;

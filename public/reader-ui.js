@@ -16,6 +16,7 @@
   let dialogZoom = 1;
   let sideBySide = false;
   let imageInverted = false;
+  const SCAN_ZOOM_KEY = "readerImageZoom";
 
   function emit(name, ...args) {
     return listeners[name]?.(...args);
@@ -52,7 +53,10 @@
     const sourceMode = mode === "source";
     byId("sourcePane").hidden = !sourceMode;
     visualFrame.hidden = sourceMode;
-    byId("modeBtn").textContent = sourceMode ? "可视化" : "源代码";
+    const modeButton = byId("modeBtn");
+    modeButton.textContent = sourceMode ? "可视化" : "源代码";
+    modeButton.setAttribute("aria-pressed", String(sourceMode));
+    modeButton.title = sourceMode ? "切换到可视化编辑" : "切换到源代码编辑";
     window.dispatchEvent(new Event("reader-mode-change"));
   }
 
@@ -65,6 +69,8 @@
   function setDirty(dirty, positionText) {
     byId("saveBtn").classList.toggle("dirty", dirty);
     byId("saveBtn").textContent = dirty ? "保存*" : "保存";
+    byId("prevBtn").title = dirty ? "Alt+← & 保存" : "Alt+←";
+    byId("nextPageBtn").title = dirty ? "Alt+→ & 保存" : "Alt+→";
     if (positionText != null) byId("pagePosition").textContent = positionText;
   }
 
@@ -194,6 +200,10 @@
   }
 
   const clampZoom = (value) => Math.min(3, Math.max(.25, value));
+  function applyScanZoom(image) {
+    if (image.naturalWidth) image.style.width = `${image.naturalWidth * scanZoom}px`;
+  }
+
   function updateImageLayout() {
     const images = scanStage.querySelectorAll(".scan-page-image");
     const canSpread = images.length > 1;
@@ -204,10 +214,15 @@
     scanStage.classList.toggle("side-by-side", canSpread && sideBySide);
   }
 
-  function setScanZoom(value) {
-    scanZoom = clampZoom(value);
-    scanStage.querySelectorAll(".scan-page-image").forEach((image) => image.style.setProperty("--zoom", scanZoom));
-    byId("zoomFit").textContent = `${Math.round(scanZoom * 100)}%`;
+  function setScanZoom(value, persist = true) {
+    scanZoom = Math.round(clampZoom(value) * 1000) / 1000;
+    scanStage.querySelectorAll(".scan-page-image").forEach(applyScanZoom);
+    const percent = Number((scanZoom * 100).toFixed(1));
+    const button = byId("zoomFit");
+    button.textContent = `${percent}%`;
+    button.title = `当前为原图像素的 ${percent}%；点击恢复到 100%（此比例会自动记忆）`;
+    button.setAttribute("aria-label", button.title);
+    if (persist) localStorage.setItem(SCAN_ZOOM_KEY, String(scanZoom));
   }
 
   function setDialogZoom(value) {
@@ -234,7 +249,6 @@
     imageDialog.querySelectorAll(".dialog-page-image").forEach((image) => image.remove());
     byId("scanImage").hidden = true;
     byId("dialogImage").hidden = true;
-    setScanZoom(1);
     let loaded = 0;
     byId("scanMissing").hidden = Boolean(urls.length);
     byId("fullImage").disabled = !urls.length;
@@ -244,9 +258,9 @@
       image.alt = "";
       image.loading = "lazy";
       image.decoding = "async";
-      image.style.setProperty("--zoom", scanZoom);
       image.onload = () => {
         if (!image.isConnected) return;
+        applyScanZoom(image);
         loaded += 1;
         byId("scanMissing").hidden = true;
         byId("fullImage").disabled = false;
@@ -364,6 +378,8 @@
     window.addEventListener("beforeunload", (event) => emit("beforeUnload", event));
     setTheme(localStorage.getItem("readerDark") === "1");
     setImageInverted(localStorage.getItem("readerImageInverted") === "1");
+    const savedScanZoom = Number(localStorage.getItem(SCAN_ZOOM_KEY));
+    setScanZoom(Number.isFinite(savedScanZoom) && savedScanZoom > 0 ? savedScanZoom : 1, false);
 
     scanStage.addEventListener("wheel", (event) => {
       const image = event.target.closest(".scan-page-image");
@@ -387,6 +403,8 @@
   splitter.setAttribute("role", "separator");
   splitter.setAttribute("aria-label", "调整正文与扫描原图宽度");
   splitter.setAttribute("aria-orientation", "vertical");
+  splitter.setAttribute("aria-valuemin", "25");
+  splitter.setAttribute("aria-valuemax", "75");
   splitter.tabIndex = 0;
   grid.insertBefore(splitter, scanPane);
 
@@ -405,6 +423,7 @@
 
   let dragging = false;
   let currentWidth = savedWidth || 54;
+  splitter.setAttribute("aria-valuenow", String(Math.round(currentWidth)));
 
   splitter.addEventListener("pointerdown", (event) => {
     if (matchMedia("(max-width: 850px)").matches) return;
@@ -433,17 +452,35 @@
   splitter.addEventListener("dblclick", () => {
     currentWidth = 54;
     grid.style.setProperty("--left-pane", "54%");
+    splitter.setAttribute("aria-valuenow", "54");
     localStorage.removeItem("readerLeftPane");
   });
 
   splitter.addEventListener("keydown", (event) => {
-    if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    if (event.key === "Home") currentWidth = 54;
-    else currentWidth = Math.min(75, Math.max(25, currentWidth + (event.key === "ArrowRight" ? 2 : -2)));
+    if (event.key === "Home") currentWidth = 25;
+    else if (event.key === "End") currentWidth = 75;
+    else {
+      const step = event.shiftKey ? 5 : 2;
+      currentWidth = Math.min(75, Math.max(25, currentWidth + (event.key === "ArrowRight" ? step : -step)));
+    }
     grid.style.setProperty("--left-pane", `${currentWidth}%`);
+    splitter.setAttribute("aria-valuenow", String(Math.round(currentWidth)));
     localStorage.setItem("readerLeftPane", currentWidth.toFixed(2));
   });
+
+  const syncChromeMetrics = () => {
+    const headerHeight = document.querySelector(".site-header")?.getBoundingClientRect().height || 64;
+    const footerHeight = document.querySelector(".page-footer")?.getBoundingClientRect().height || 48;
+    root.style.setProperty("--app-header-height", `${Math.round(headerHeight)}px`);
+    root.style.setProperty("--app-footer-height", `${Math.round(footerHeight)}px`);
+    window.dispatchEvent(new Event("reader-chrome-resize"));
+  };
+  const chromeResizeObserver = new ResizeObserver(syncChromeMetrics);
+  chromeResizeObserver.observe(document.querySelector(".site-header"));
+  chromeResizeObserver.observe(document.querySelector(".page-footer"));
+  syncChromeMetrics();
 
   window.ReaderUI = {
     init, notify, setDirty, setHistoryButtons, renderVolumes, renderToc, renderNavigation, renderTools,
@@ -484,16 +521,18 @@
   const MIN_CONTROL_HEIGHT = 16;
   const BASE_CONTROL_HEIGHT = 28;
   const MAX_CONTROL_HEIGHT = 35;
+  const TAG_BAR_MIN_HEIGHT = BASE_CONTROL_HEIGHT;
+  const FIND_BAR_MIN_HEIGHT = 54;
 
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (_) { saved = {}; }
 
   const DOCK_DEFS = [
-    ["editor-top",    "编辑上", "停靠编辑框上方（与编辑框等宽）"],
-    ["editor-bottom", "编辑下", "停靠编辑框下方（与编辑框等宽）"],
-    ["window-top",    "窗口上", "停靠窗口顶部（与窗口等宽）"],
-    ["window-bottom", "窗口下", "停靠窗口底部（与窗口等宽）"],
-    ["floating",      "浮动",   "自由浮动（可拖动、可拉伸）"]
+    ["editor-top",    "栏上", "停靠编辑框上方（与编辑框等宽）"],
+    ["editor-bottom", "栏下", "停靠编辑框下方（与编辑框等宽）"],
+    ["window-top",    "窗上", "停靠窗口顶部（与窗口等宽）"],
+    ["window-bottom", "窗下", "停靠窗口底部（与窗口等宽）"],
+    ["floating",      "浮动", "自由浮动（可拖动、可拉伸）"]
   ];
 
   const snapTop = document.createElement("div");
@@ -517,7 +556,7 @@
 
   function panelMinHeight(st) {
     const headerHeight = st.header?.getBoundingClientRect().height || 27;
-    return Math.ceil(headerHeight + MIN_CONTROL_HEIGHT);
+    return Math.ceil(headerHeight + st.contentMinHeight);
   }
 
   function updateControlScale(st, height = st.panel.getBoundingClientRect().height) {
@@ -657,8 +696,11 @@
     updateControlScale(st, h || panel.getBoundingClientRect().height || st.naturalH);
     clampFloatingPanel(st);
 
-    panel.querySelectorAll(".fp-dock").forEach((btn) =>
-      btn.classList.toggle("active", btn.dataset.dock === st.dock));
+    panel.querySelectorAll(".fp-dock").forEach((btn) => {
+      const active = btn.dataset.dock === st.dock;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", String(active));
+    });
     requestAnimationFrame(updateWindowDockLayout);
   }
 
@@ -820,6 +862,8 @@
 
     const actions = document.createElement("div");
     actions.className = "fp-actions";
+    actions.setAttribute("role", "group");
+    actions.setAttribute("aria-label", `${title}停靠位置`);
     for (const [dockName, label, tip] of DOCK_DEFS) {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -827,6 +871,7 @@
       btn.dataset.dock = dockName;
       btn.textContent = label;
       btn.title = tip;
+      btn.setAttribute("aria-label", tip);
       actions.appendChild(btn);
     }
     header.append(grip, titleEl, actions);
@@ -838,10 +883,12 @@
       id, dock: "editor-top",
       x: 60, y: 96, w: 520, h: null, naturalH: Math.max(28, fallbackH || 48)
     }, saved[id] || {});
+    st.contentMinHeight = id === "findBar" ? FIND_BAR_MIN_HEIGHT : TAG_BAR_MIN_HEIGHT;
     st.panel = panel;
     st.header = header;
     st.content = content;
     panels[id] = st;
+    panel.style.setProperty("--fp-content-min-height", `${st.contentMinHeight}px`);
     panelResizeObserver.observe(panel);
 
     // 隐藏面板采用回退高度，避免为了测量而短暂显示并与异步模式切换发生竞争。
@@ -875,8 +922,9 @@
   }
 
   setupPanel("tagBar", "#tagBar", "编辑按钮", 56);
-  setupPanel("findBar", "#findBar", "查找替换", 80);
+  setupPanel("findBar", "#findBar", "查找替换", 82);
   window.addEventListener("reader-mode-change", updateWindowDockLayout);
+  window.addEventListener("reader-chrome-resize", updateWindowDockLayout);
   window.addEventListener("resize", () => {
     Object.values(panels).forEach(clampFloatingPanel);
     updateWindowDockLayout();
