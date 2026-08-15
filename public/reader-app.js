@@ -19,6 +19,7 @@
     redo: [],
     pendingVisualScroll: null,
     navigationRevision: 0,
+    workingCopyRevision: 0,
     savePromise: null
   };
 
@@ -112,6 +113,16 @@
     return state.mode === "visual" ? sourceFromVisual() : ui.getSource();
   }
 
+  function updateWorkingCopy(source = currentSource()) {
+    if (source !== state.source) state.workingCopyRevision += 1;
+    state.source = source;
+    // Keep the hidden source editor current while the visual editor is active.
+    // This makes state.source the single live working copy in both modes.
+    if (state.mode === "visual") ui.setSource(source);
+    markDirty(source !== state.savedSource);
+    return source;
+  }
+
   function currentSnapshot() {
     const selection = ui.getSourceSelection();
     const visual = ui.getVisualDocument();
@@ -134,7 +145,7 @@
   }
 
   function applySnapshot(snapshot) {
-    state.source = snapshot.text;
+    updateWorkingCopy(snapshot.text);
     if (state.mode === "source") {
       ui.setSource(snapshot.text);
       ui.setSourceSelection(Math.min(snapshot.start, snapshot.text.length), Math.min(snapshot.end, snapshot.text.length));
@@ -145,7 +156,6 @@
       state.pendingVisualScroll = snapshot.scroll;
       renderVisual();
     }
-    markDirty(state.source !== state.savedSource);
     invalidateFind();
     updateHistoryButtons();
   }
@@ -183,7 +193,7 @@
   function setMode(mode = state.mode === "visual" ? "source" : "visual", { resetSourceScroll = false } = {}) {
     if (state.page == null) return;
     const next = mode === "visual" ? "visual" : "source";
-    if (next !== state.mode) state.source = currentSource();
+    if (next !== state.mode) updateWorkingCopy();
     state.mode = next;
     ui.setMode(next);
     if (next === "source") {
@@ -238,14 +248,24 @@
     const page = nearestPage(volume.pages, Number(targetPage));
     if (page == null) return false;
     const revision = ++state.navigationRevision;
+    const workingCopyRevision = state.workingCopyRevision;
     try {
       const data = await api(`/api/reader/page/${encodeURIComponent(volume.id)}/${page}`);
       if (revision !== state.navigationRevision) return true;
+      // Typing is still possible while the requested page is loading. Never let
+      // that older response replace the newer local working copy: save it, then
+      // fetch the target again so same-page reloads cannot apply stale content.
+      if (workingCopyRevision !== state.workingCopyRevision || state.dirty) {
+        if (!(await save())) return false;
+        if (revision !== state.navigationRevision) return true;
+        return navigate(volume.id, page, true, pdfLabel);
+      }
       const volumeChanged = state.volume !== volume.id;
       state.volume = volume.id;
       state.page = page;
       state.source = data.text;
       state.savedSource = data.text;
+      state.workingCopyRevision += 1;
       state.mtime = data.mtime;
       state.editable = data.editable;
       state.undo = [];
@@ -271,7 +291,7 @@
 
   async function performSave() {
     if (!state.editable || state.page == null) return true;
-    state.source = currentSource();
+    updateWorkingCopy();
     const context = {
       volume: state.volume,
       page: state.page,
@@ -287,8 +307,7 @@
       if (context.volume === state.volume && context.page === state.page) {
         state.mtime = result.mtime;
         state.savedSource = context.text;
-        state.source = currentSource();
-        markDirty(state.source !== context.text);
+        updateWorkingCopy();
       }
       ui.notify("已保存");
       return true;
@@ -557,7 +576,8 @@
         selection.addRange(nextRange);
       }
     }
-    markDirty();
+    updateWorkingCopy();
+    invalidateFind();
     doc.body.focus();
     return action;
   }
@@ -585,8 +605,7 @@
       if (!selected && close) ui.setSourceSelection(selection.start + (offset ?? text.length));
       else if (offset != null) ui.setSourceSelection(selection.start + offset);
     }
-    state.source = ui.getSource();
-    markDirty();
+    updateWorkingCopy(ui.getSource());
     invalidateFind();
     refreshHighlight();
     ui.focusSource();
@@ -645,8 +664,7 @@
     const [start, end] = state.matches[state.match];
     remember();
     ui.replaceSourceRange(ui.findOptions().replacement, start, end, "end");
-    state.source = ui.getSource();
-    markDirty();
+    updateWorkingCopy(ui.getSource());
     refreshHighlight();
     findAll(true);
   }
@@ -661,8 +679,7 @@
         ? ui.getSource().replace(compiled.pattern, replacement)
         : ui.getSource().replace(compiled.pattern, () => replacement);
       ui.setSource(replaced);
-      state.source = replaced;
-      markDirty();
+      updateWorkingCopy(replaced);
       refreshHighlight();
       findAll(true);
     } catch (error) {
@@ -727,8 +744,8 @@
         insertSource(attr.text, "", attr.offset);
       },
       beforeEdit: remember,
-      sourceInput: () => { state.source = ui.getSource(); markDirty(); refreshHighlight(); invalidateFind(); },
-      visualInput: () => markDirty(),
+      sourceInput: () => { updateWorkingCopy(ui.getSource()); refreshHighlight(); invalidateFind(); },
+      visualInput: () => { updateWorkingCopy(); refreshHighlight(); invalidateFind(); },
       sourceScroll: refreshHighlight,
       sourceDoubleClick: trimSourceWordSelection,
       visualDoubleClick: trimVisualWordSelection,
