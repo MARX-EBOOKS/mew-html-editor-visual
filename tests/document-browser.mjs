@@ -48,6 +48,8 @@ try {
   const editorFile = path.join(fixture, 'a.html');
   const readerFile = path.join(folder, 'ME01-001.html');
   await writeFile(editorFile, base); await writeFile(path.join(fixture, 'b.html'), second);
+  const tabFiles = Array.from({ length: 12 }, (_, index) => `legacy-long-tab-name-${String(index + 1).padStart(2, '0')}.html`);
+  for (const file of tabFiles) await writeFile(path.join(fixture, file), html(file));
   await writeFile(readerFile, base); await writeFile(path.join(folder, 'ME01-002.html'), second);
   await writeFile(path.join(fixture, 'config.mjs'), 'export default { htmlRoot: ".", volumes: [{id:"1"}] };');
   await start('server.js', 41871, ['-r', fixture]);
@@ -59,7 +61,7 @@ try {
   for (const reader of [false, true]) {
     const page = await context.newPage(); page.setDefaultTimeout(10000);
     const file = reader ? readerFile : editorFile;
-    const url = reader ? 'http://127.0.0.1:41872/?volume=1&page=1&mode=source' : 'http://127.0.0.1:41871/?file=a.html';
+    const url = reader ? 'http://127.0.0.1:41872/?volume=1&page=1&mode=source' : 'http://127.0.0.1:41871/legacy.html?file=a.html';
     const dirty = () => page.evaluate(isReader => isReader
       ? document.querySelector('#saveBtn').classList.contains('dirty')
       : document.querySelector('#fileName').textContent.endsWith(' *'), reader);
@@ -93,7 +95,7 @@ try {
     const page = await context.newPage(); page.setDefaultTimeout(10000);
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', dialog => dialog.accept());
-    const url = reader ? 'http://127.0.0.1:41872/?volume=1&page=1&mode=source' : 'http://127.0.0.1:41871/?file=./a.html';
+    const url = reader ? 'http://127.0.0.1:41872/?volume=1&page=1&mode=source' : 'http://127.0.0.1:41871/legacy.html?file=./a.html';
     const file = reader ? readerFile : editorFile;
     await page.goto(url); await valueEquals(page, base);
     const changed = html('edited');
@@ -182,6 +184,27 @@ try {
       await diskEquals(file, html('tab a')); await diskEquals(path.join(fixture, 'b.html'), html('tab b'));
       await page.locator('.tab[data-path="a.html"]').click(); await valueEquals(page, html('tab a'));
       await page.locator('[data-close="a.html"]').click(); await valueEquals(page, html('tab b'));
+      for (const tabFile of tabFiles) {
+        await page.locator(`.item[data-path="${tabFile}"]`).click();
+        await valueEquals(page, html(tabFile));
+      }
+      assert.equal(await page.evaluate(() => {
+        const tabs = document.querySelector('#tabs').getBoundingClientRect();
+        const active = document.querySelector('#tabs .tab.active').getBoundingClientRect();
+        return active.left >= tabs.left && active.right <= tabs.right;
+      }), true, 'legacy newly active tab is visible');
+      await page.locator('.tab[data-path="b.html"]').click();
+      assert.equal(await page.evaluate(() => {
+        const tabs = document.querySelector('#tabs').getBoundingClientRect();
+        const active = document.querySelector('#tabs .tab.active').getBoundingClientRect();
+        return active.left >= tabs.left && active.right <= tabs.right;
+      }), true, 'legacy previously opened active tab is brought back into view');
+      await page.locator('#darkBtn').click();
+      assert.equal(await page.evaluate(() => document.body.classList.contains('dark')), true);
+      await page.locator('#closeAllBtn').click();
+      await page.waitForFunction(() => document.querySelectorAll('#tabs .tab').length === 0);
+      assert.equal(await page.locator('#preview').isHidden(), true, 'legacy close all reveals the preview pane background');
+      await page.screenshot({ path: path.join(tmpdir(), 'mew-legacy-empty-preview.png') });
       console.log('editor: tabs / save all / close passed');
     }
     assert.deepEqual(errors, []); await page.close();

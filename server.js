@@ -1,11 +1,13 @@
 import http from "node:http";
-import { promises as fs, watch } from "node:fs";
+import { promises as fs, watch, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = getRoot();
 const PUBLIC = path.join(__dirname, "public");
+const MONACO = existsSync(path.join(__dirname, "monaco", "min", "vs", "loader.js"))
+  ? path.join(__dirname, "monaco") : path.join(__dirname, "node_modules", "monaco-editor");
 const MEWDE = path.join(ROOT, "mewde.css");
 const PORT = getPort();
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
@@ -142,11 +144,13 @@ async function api(req, res, url) {
 async function staticFile(res, pathname) {
   const reqPath = pathname === "/" ? "/index.html" : pathname;
   if (reqPath === "/mewde.css") return send(res, 200, await customCss(), TYPES[".css"]);
-  const full = path.resolve(PUBLIC, "." + reqPath);
-  if (!full.startsWith(PUBLIC + path.sep)) return send(res, 403, "Forbidden", "text/plain");
+  const assetRoot = reqPath.startsWith("/monaco/") ? MONACO : PUBLIC;
+  const assetPath = reqPath.startsWith("/monaco/") ? reqPath.slice(7) : reqPath;
   try {
+    const full = path.resolve(assetRoot, "." + decodeURIComponent(assetPath));
+    if (!full.startsWith(assetRoot + path.sep)) return send(res, 403, "Forbidden", "text/plain");
     const ext = path.extname(full).toLowerCase();
-    send(res, 200, await fs.readFile(full), TYPES[ext] || "text/plain; charset=utf-8");
+    send(res, 200, await fs.readFile(full), TYPES[ext] || (ext === ".ttf" ? "font/ttf" : "application/octet-stream"));
   } catch {
     send(res, 404, "Not found", "text/plain");
   }

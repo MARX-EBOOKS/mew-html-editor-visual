@@ -1,0 +1,5 @@
+/* Scope the old textarea rules away from Monaco's hidden input and widgets. */
+#monacoEditor { position: absolute; inset: 0; }
+.monaco-editor button { border-radius: 0; min-height: 0; }
+#positionInfo { margin-left: auto; color: var(--muted); font-size: 12px; }
+#tree [role="treeitem"]:focus { outline: 1px solid var(--tag); }

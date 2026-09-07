@@ -243,6 +243,7 @@ function renderTabs() {
       <span class="tabClose" data-close="${esc(d.path)}" title="Close">x</span>
     </button>
   `).join("");
+  tabs.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 function remember() {
   doc()?.remember(editorSnapshot());
@@ -378,6 +379,7 @@ function closeDocs(paths) {
     if (next) switchDoc(next);
     else {
       $("editor").value = "";
+      $("preview").hidden = true;
       $("preview").srcdoc = "";
       setActiveTreePath();
       markDirty(false); refreshDocumentView();
@@ -425,6 +427,7 @@ async function saveAll() {
 function refreshPreview() {
   clearTimeout(previewTimer);
   if (!state.path) return;
+  $("preview").hidden = false;
   const dir = state.path.split("/").slice(0, -1).join("/");
   const { bg, ink } = themeColors();
   const css = `${state.cssText ? `<style>${state.cssText}</style>` : '<link rel="stylesheet" href="/mewde.css">'}<style>body{background:${bg};color:${ink}}</style>`;
