@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(HERE, "public");
+const SETTINGS_FILE = path.join(HERE, "reader.settings.json");
 const CONFIG_FILE = path.resolve(valueOf(["-c", "--config"]) || process.env.CONFIG || path.join(HERE, "reader.config.mjs"));
 const PORT = Number(valueOf(["-p", "--port"]) || process.env.PORT || 49100);
 const MIME = {
@@ -37,6 +38,21 @@ async function jsonBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+}
+
+function readerSettings(value = {}) {
+  const color = (input, fallback) => /^#[0-9a-f]{6}$/i.test(String(input)) ? String(input).toLowerCase() : fallback;
+  return {
+    brightness: Math.max(50, Math.min(160, Number(value.brightness) || 100)),
+    paper: color(value.paper, "#ffffff"), ink: color(value.ink, "#000000"),
+    invert: Boolean(value.invert), horizontal: Boolean(value.horizontal),
+    scale: typeof value.scale === "string" && value.scale.length <= 32 ? value.scale : "page-width"
+  };
+}
+
+async function loadReaderSettings() {
+  try { return readerSettings(JSON.parse(await fs.readFile(SETTINGS_FILE, "utf8"))); }
+  catch { return readerSettings(); }
 }
 
 function resolveResource(raw, base) {
@@ -195,6 +211,15 @@ async function api(req, res, url) {
           pdfUrl: pdf?.kind === "url" ? pdf.path : `/api/reader/pdf/${encodeURIComponent(id)}`
         }))
       });
+    }
+    if (url.pathname === "/api/reader/settings") {
+      if (req.method === "GET") return reply(res, 200, await loadReaderSettings());
+      if (req.method === "PUT") {
+        const settings = readerSettings(await jsonBody(req));
+        await fs.writeFile(SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+        return reply(res, 200, settings);
+      }
+      return reply(res, 405, { error: "仅支持 GET 或 PUT" });
     }
     if (parts[2] === "pdf") {
       const volume = getVolume(decodeURIComponent(parts[3] || ""));

@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%238f2923'/%3E%3Ctext x='16' y='24' text-anchor='middle' font-family='serif' font-size='25' fill='white'%3EM%3C/text%3E%3C/svg%3E">
 <title>MEW 对照阅读编辑器</title><link rel="stylesheet" href="/vendor/pdfjs/web/pdf_viewer.css"><link rel="stylesheet" href="reader.css"><link rel="stylesheet" href="reader-vscode.css"></head>
 <body>
 <header class="site-header">
@@ -26,9 +27,7 @@
       <div class="editor-wrap"><pre id="highlight"></pre><textarea id="editor" spellcheck="false"></textarea></div>
     </div>
   </section>
-  <aside class="scan-pane"><div class="scan-tools" role="toolbar" aria-label="PDF 扫描工具"><div class="scan-tool-group"><button id="pdfDirection" type="button" aria-pressed="false">左右翻页</button><button id="imageInvert" type="button" aria-pressed="false" title="反转 PDF 页面颜色，并记住此设置">反色</button></div><div class="scan-tool-group zoom-tools" aria-label="PDF 缩放"><button id="zoomOut" type="button" title="缩小 PDF" aria-label="缩小 PDF">−</button><button id="zoomFit" type="button" title="当前 PDF.js 缩放比例；点击适合页宽">适合页宽</button><button id="zoomIn" type="button" title="放大 PDF" aria-label="放大 PDF">＋</button></div><div class="scan-tool-group"><button id="fullImage" type="button">全屏</button></div></div>
-    <div id="scanStage" tabindex="0" aria-label="PDF 浏览器"><div id="pdfViewer" class="pdfViewer"></div><p id="scanMissing">正在载入 PDF…</p></div>
-  </aside>
+  <aside class="scan-pane"><div id="pdfFrame" role="region" aria-label="PDF 扫描图窗"></div></aside>
 </main>
 <footer class="page-footer" aria-label="翻页导航"><button id="prevBtn" type="button" title="Alt+←">← 上一页</button><span id="pagePosition" aria-live="polite"></span><button id="nextPageBtn" type="button" title="Alt+→">下一页 →</button></footer>
 <script src="reader-ui.js"></script><script src="reader-app.js"></script></body></html>

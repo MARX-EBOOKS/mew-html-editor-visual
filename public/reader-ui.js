@@ -7,22 +7,17 @@
   const scanPane = document.querySelector(".scan-pane");
   const sourceEditor = byId("editor");
   const visualFrame = byId("visualEditor");
-  const scanStage = byId("scanStage");
+  const pdfFrame = byId("pdfFrame");
   const listeners = {};
   let initialized = false;
   let statusTimer = null;
-  let horizontalPages = false;
-  let imageInverted = false;
-  let pdfRuntimePromise = null;
-  let pdfViewer = null;
-  let pdfLinkService = null;
-  let pdfLoadingTask = null;
-  let pdfUrl = "";
-  let pdfPageLabels = null;
-  let pendingPdfLabel = "1";
-  let pdfRevision = 0;
-  let scrollMode = null;
-  const PDF_SCALE_KEY = "readerPdfScaleValue";
+  let pendingPdfOptions = null;
+  let pdfRuntimePromise = null, pdfViewer = null, pdfLinkService = null, pdfLoadingTask = null;
+  let pdfUrl = "", pdfPageLabels = null, pdfFrameReady = false, scrollMode = null, pdfWriteTimer = null, pdfRevision = 0, pdfRoot = null;
+  const PDF_SETTINGS_KEY = "readerPdfSettings.v1";
+  const PDF_DEFAULTS = { brightness: 100, paper: "#ffffff", ink: "#000000", invert: false, horizontal: false, scale: "page-width" };
+  let pdfSettings = { ...PDF_DEFAULTS };
+  const PDF_DIRECT_HTML = `<svg aria-hidden="true" width="0" height="0"><filter id="scanColorFilter" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR id="filterR" type="table" tableValues="0 1"/><feFuncG id="filterG" type="table" tableValues="0 1"/><feFuncB id="filterB" type="table" tableValues="0 1"/></feComponentTransfer></filter></svg><div class="pdf-tools"><div class="pdf-group"><button id="direction" type="button">左右翻页</button><button id="settings" type="button">显示设置</button></div><div class="pdf-group pdf-zoom"><button id="zoomOut" type="button">−</button><button id="zoomFit" type="button">适合页宽</button><button id="zoomIn" type="button">＋</button></div><button id="full" type="button">全屏</button></div><div id="stage"><div id="viewer" class="pdfViewer"></div><p id="missing">正在载入 PDF…</p></div><dialog id="settingsDialog"><form method="dialog"><header><strong>扫描件显示设置</strong><button value="close">×</button></header><label>亮度 <output id="brightnessValue"></output><input id="brightness" type="range" min="50" max="160"></label><label>背景色 <input id="paper" type="color"></label><label>文字色 <input id="ink" type="color"></label><label class="toggle"><input id="invert" type="checkbox">反色</label><footer><button id="reset" type="button">恢复默认</button><button value="close">完成</button></footer></form></dialog>`;
 
   function emit(name, ...args) {
     return listeners[name]?.(...args);
@@ -158,8 +153,12 @@
   }
 
   function updateHighlight(html) {
+    byId("highlight").innerHTML = html;
+    syncHighlightScroll();
+  }
+
+  function syncHighlightScroll() {
     const highlight = byId("highlight");
-    highlight.innerHTML = html;
     highlight.scrollTop = sourceEditor.scrollTop;
     highlight.scrollLeft = sourceEditor.scrollLeft;
   }
@@ -177,7 +176,7 @@
     sourceEditor.scrollTop = Math.max(0, marker.offsetTop - sourceEditor.clientHeight / 2);
     sourceEditor.scrollLeft = Math.max(0, marker.offsetLeft - sourceEditor.clientWidth / 2);
     mirror.remove();
-    emit("sourceScroll");
+    syncHighlightScroll();
   }
 
   function showVisual(source, options) {
@@ -205,141 +204,106 @@
     visualFrame.srcdoc = source;
   }
 
-  function updatePdfDirection() {
-    const button = byId("pdfDirection");
-    button.setAttribute("aria-pressed", String(horizontalPages));
-    button.textContent = horizontalPages ? "上下翻页" : "左右翻页";
-    button.title = horizontalPages ? "改为上下连续翻页" : "改为左右连续翻页";
-    if (pdfViewer && scrollMode) {
-      pdfViewer.scrollMode = horizontalPages ? scrollMode.HORIZONTAL : scrollMode.VERTICAL;
-    }
-    localStorage.setItem("readerPdfHorizontal", horizontalPages ? "1" : "0");
+  const frameId = (id) => pdfRoot?.querySelector(`#${id}`);
+  function normalizedPdfSettings(value = {}) {
+    const color = (input, fallback) => /^#[0-9a-f]{6}$/i.test(String(input)) ? String(input).toLowerCase() : fallback;
+    const scale = typeof value.scale === "string" && value.scale.length <= 32 ? value.scale : PDF_DEFAULTS.scale;
+    return { ...PDF_DEFAULTS, ...value, brightness: Math.max(50, Math.min(160, Number(value.brightness) || 100)), paper: color(value.paper, PDF_DEFAULTS.paper), ink: color(value.ink, PDF_DEFAULTS.ink), invert: Boolean(value.invert), horizontal: Boolean(value.horizontal), scale };
   }
-
-  function updatePdfScale(scale, presetValue = "") {
-    if (!Number.isFinite(scale)) return;
-    const percent = Number((scale * 100).toFixed(1));
-    const button = byId("zoomFit");
-    button.textContent = `${percent}%`;
-    button.title = `PDF.js 当前缩放 ${percent}%；点击适合页宽（此比例会自动记忆）`;
-    button.setAttribute("aria-label", button.title);
-    localStorage.setItem(PDF_SCALE_KEY, presetValue || String(scale));
+  function applyPdfSettings() {
+    const stage = frameId("stage");
+    if (!stage) return;
+    stage.style.setProperty("--paper", pdfSettings.paper);
+    const channels = (hex) => [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+    const ink = channels(pdfSettings.ink), paper = channels(pdfSettings.paper);
+    ["filterR", "filterG", "filterB"].forEach((id, index) => frameId(id)?.setAttribute("tableValues", `${ink[index]} ${paper[index]}`));
+    const filter = [];
+    if (pdfSettings.ink !== PDF_DEFAULTS.ink || pdfSettings.paper !== PDF_DEFAULTS.paper) filter.push("url(#scanColorFilter)");
+    if (pdfSettings.brightness !== 100) filter.push(`brightness(${pdfSettings.brightness}%)`);
+    if (pdfSettings.invert) filter.push("invert(1)");
+    stage.style.setProperty("--scan-filter", filter.join(" ") || "none");
+    frameId("brightness").value = pdfSettings.brightness; frameId("brightnessValue").value = `${pdfSettings.brightness}%`;
+    frameId("paper").value = pdfSettings.paper; frameId("ink").value = pdfSettings.ink; frameId("invert").checked = pdfSettings.invert;
+    const direction = frameId("direction"); direction.setAttribute("aria-pressed", String(pdfSettings.horizontal)); direction.textContent = pdfSettings.horizontal ? "上下翻页" : "左右翻页";
+    if (pdfViewer && scrollMode) pdfViewer.scrollMode = pdfSettings.horizontal ? scrollMode.HORIZONTAL : scrollMode.VERTICAL;
   }
-
-  function setPdfStatus(message = "") {
-    const missing = byId("scanMissing");
-    missing.hidden = !message;
-    if (message) missing.textContent = message;
-    byId("fullImage").disabled = Boolean(message);
+  function savePdfSettings() {
+    localStorage.setItem(PDF_SETTINGS_KEY, JSON.stringify(pdfSettings));
+    clearTimeout(pdfWriteTimer); pdfWriteTimer = setTimeout(() => fetch("/api/reader/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(pdfSettings) }).catch(() => {}), 350);
   }
-
-  function showPendingPdfLabel() {
-    if (!pdfViewer?.pdfDocument) return;
-    if (pdfViewer.pageLabelToPageNumber(pendingPdfLabel) == null) {
-      notify(`PDF 中找不到页面标签“${pendingPdfLabel}”`, true);
-      return;
-    }
-    pdfViewer.currentPageLabel = pendingPdfLabel;
+  function changePdfSettings(patch) { pdfSettings = normalizedPdfSettings({ ...pdfSettings, ...patch }); applyPdfSettings(); savePdfSettings(); }
+  function setPdfStatus(message = "") { const node = frameId("missing"); if (!node) return; node.hidden = !message; if (message) node.textContent = message; }
+  function pdfPageNumberForLabel(label) {
+    const matches = pdfPageLabels?.map((value, index) => String(value) === String(label) ? index + 1 : 0).filter(Boolean);
+    const current = pdfViewer?.currentPageNumber || matches?.[0];
+    return matches?.reduce((best, page) => Math.abs(page - current) < Math.abs(best - current) ? page : best, matches[0]) || null;
   }
-
-  function setImageInverted(inverted) {
-    imageInverted = Boolean(inverted);
-    body.classList.toggle("image-inverted", imageInverted);
-    const button = byId("imageInvert");
-    button?.setAttribute("aria-pressed", String(imageInverted));
-    if (button) {
-      button.textContent = imageInverted ? "还原" : "反色";
-      button.title = imageInverted ? "恢复 PDF 页面的原始颜色，并记住此设置" : "反转 PDF 页面颜色，并记住此设置";
-    }
-    localStorage.setItem("readerImageInverted", imageInverted ? "1" : "0");
-  }
-
+  function showPendingPdfPage() { const page = pdfPageNumberForLabel(pendingPdfOptions?.pageLabel); if (page) pdfViewer.currentPageNumber = page; }
   async function ensurePdfRuntime() {
     if (pdfRuntimePromise) return pdfRuntimePromise;
     pdfRuntimePromise = (async () => {
-      const pdfjs = await import("/vendor/pdfjs/build/pdf.mjs");
-      // pdf_viewer.mjs reads the display-layer API from this global while the
-      // module is evaluated, so its import must happen after registration.
-      globalThis.pdfjsLib = pdfjs;
-      const viewer = await import("/vendor/pdfjs/web/pdf_viewer.mjs");
-      pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/build/pdf.worker.mjs";
-      const eventBus = new viewer.EventBus();
-      pdfLinkService = new viewer.PDFLinkService({ eventBus });
-      pdfViewer = new viewer.PDFViewer({
-        container: scanStage,
-        viewer: byId("pdfViewer"),
-        eventBus,
-        linkService: pdfLinkService,
-        imageResourcesPath: "/vendor/pdfjs/web/images/"
-      });
-      pdfLinkService.setViewer(pdfViewer);
-      scrollMode = viewer.ScrollMode;
-      eventBus.on("pagesinit", () => {
-        const savedScale = localStorage.getItem(PDF_SCALE_KEY) || "page-width";
-        pdfViewer.setPageLabels(pdfPageLabels);
-        pdfViewer.currentScaleValue = savedScale;
-        updatePdfDirection();
-        showPendingPdfLabel();
-        setPdfStatus();
-      });
-      eventBus.on("pagechanging", ({ pageLabel }) => {
-        if (pageLabel != null) emit("pdfPageLabel", pageLabel);
-      });
-      eventBus.on("scalechanging", ({ scale, presetValue }) => updatePdfScale(scale, presetValue));
+      const pdfjs = await import("/vendor/pdfjs/build/pdf.mjs"); globalThis.pdfjsLib = pdfjs;
+      const viewerModule = await import("/vendor/pdfjs/web/pdf_viewer.mjs"); pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/build/pdf.worker.mjs";
+      const eventBus = new viewerModule.EventBus(); pdfLinkService = new viewerModule.PDFLinkService({ eventBus });
+      pdfViewer = new viewerModule.PDFViewer({ container: frameId("stage"), viewer: frameId("viewer"), eventBus, linkService: pdfLinkService, imageResourcesPath: "/vendor/pdfjs/web/images/" });
+      pdfLinkService.setViewer(pdfViewer); scrollMode = viewerModule.ScrollMode;
+      eventBus.on("pagesinit", () => { pdfViewer.setPageLabels(pdfPageLabels); pdfViewer.currentScaleValue = pdfSettings.scale; applyPdfSettings(); showPendingPdfPage(); setPdfStatus(); });
+      eventBus.on("pagechanging", ({ pageNumber, pageLabel }) => { if (pageNumber != null) emit("pdfPageChange", { pageNumber, pageLabel }); });
+      eventBus.on("scalechanging", ({ scale, presetValue }) => { pdfSettings.scale = presetValue || String(scale); frameId("zoomFit").textContent = `${Math.round(scale * 100)}%`; savePdfSettings(); });
       return pdfjs;
-    })();
+    })().catch((error) => { pdfRuntimePromise = null; throw error; });
     return pdfRuntimePromise;
   }
-
-  async function setPdf({ url, pageLabel }) {
-    pendingPdfLabel = String(pageLabel ?? "1");
-    const revision = ++pdfRevision;
+  async function setPdf(options) {
+    pendingPdfOptions = options;
+    if (!pdfFrameReady) return;
     const pdfjs = await ensurePdfRuntime();
-    if (revision !== pdfRevision) return;
-    if (url === pdfUrl && (pdfViewer.pdfDocument || pdfLoadingTask)) {
-      showPendingPdfLabel();
-      return;
-    }
-    pdfUrl = url || "";
-    setPdfStatus(url ? "正在载入 PDF…" : "此卷未配置 PDF");
-    pdfViewer.setDocument(null);
-    pdfLinkService.setDocument(null);
-    pdfPageLabels = null;
-    await pdfLoadingTask?.destroy();
-    pdfLoadingTask = null;
+    const url = options.url || "";
+    if (url === pdfUrl && (pdfViewer.pdfDocument || pdfLoadingTask)) return showPendingPdfPage();
+    const revision = ++pdfRevision;
+    pdfUrl = url; setPdfStatus(url ? "正在载入 PDF…" : "此卷未配置 PDF");
+    pdfViewer.setDocument(null); pdfLinkService.setDocument(null); pdfPageLabels = null;
+    const oldTask = pdfLoadingTask; pdfLoadingTask = null; await oldTask?.destroy();
     if (!url || revision !== pdfRevision) return;
     try {
-      pdfLoadingTask = pdfjs.getDocument({
-        url,
-        cMapUrl: "/vendor/pdfjs/cmaps/",
-        cMapPacked: true,
-        standardFontDataUrl: "/vendor/pdfjs/standard_fonts/",
-        wasmUrl: "/vendor/pdfjs/wasm/"
-      });
-      const document = await pdfLoadingTask.promise;
+      const task = pdfjs.getDocument({ url, cMapUrl: "/vendor/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/vendor/pdfjs/standard_fonts/", wasmUrl: "/vendor/pdfjs/wasm/" });
+      pdfLoadingTask = task;
+      const document = await task.promise;
+      if (revision !== pdfRevision || task !== pdfLoadingTask) return document.destroy();
+      pdfPageLabels = await document.getPageLabels() || Array.from({ length: document.numPages }, (_, index) => String(index + 1));
       if (revision !== pdfRevision) return document.destroy();
-      pdfPageLabels = await document.getPageLabels()
-        || Array.from({ length: document.numPages }, (_, index) => String(index + 1));
-      if (revision !== pdfRevision) return document.destroy();
-      pdfViewer.setDocument(document);
-      pdfLinkService.setDocument(document);
+      pdfViewer.setDocument(document); pdfLinkService.setDocument(document);
     } catch (error) {
       if (revision !== pdfRevision) return;
-      pdfLoadingTask = null;
-      setPdfStatus(`PDF 载入失败：${error.message}`);
-      notify(`PDF 载入失败：${error.message}`, true);
+      pdfLoadingTask = null; setPdfStatus(`PDF 载入失败：${error.message}`); notify(`PDF 载入失败：${error.message}`, true);
     }
   }
-
-  async function toggleFullscreen() {
-    if (document.fullscreenElement === scanPane) await document.exitFullscreen();
-    else await scanPane.requestFullscreen();
+  function initPdfFrame() {
+    pdfRoot = pdfFrame;
+    pdfRoot.innerHTML = PDF_DIRECT_HTML;
+    (async () => {
+      pdfFrameReady = true;
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem(PDF_SETTINGS_KEY) || "{}"); } catch { localStorage.removeItem(PDF_SETTINGS_KEY); }
+      const legacy = {};
+      if (localStorage.getItem("readerPdfHorizontal") != null) legacy.horizontal = localStorage.getItem("readerPdfHorizontal") === "1";
+      if (localStorage.getItem("readerImageInverted") != null) legacy.invert = localStorage.getItem("readerImageInverted") === "1";
+      if (localStorage.getItem("readerPdfScaleValue")) legacy.scale = localStorage.getItem("readerPdfScaleValue");
+      saved = { ...legacy, ...saved };
+      try { pdfSettings = normalizedPdfSettings({ ...(await fetch("/api/reader/settings").then((r) => r.ok ? r.json() : {})), ...saved }); } catch { pdfSettings = normalizedPdfSettings(saved); }
+      applyPdfSettings();
+      frameId("zoomIn").onclick = () => pdfViewer?.increaseScale(); frameId("zoomOut").onclick = () => pdfViewer?.decreaseScale(); frameId("zoomFit").onclick = () => { if (pdfViewer) pdfViewer.currentScaleValue = "page-width"; };
+      frameId("direction").onclick = () => changePdfSettings({ horizontal: !pdfSettings.horizontal }); frameId("settings").onclick = () => frameId("settingsDialog").showModal(); frameId("brightness").oninput = (event) => changePdfSettings({ brightness: event.target.value }); frameId("paper").oninput = (event) => changePdfSettings({ paper: event.target.value }); frameId("ink").oninput = (event) => changePdfSettings({ ink: event.target.value }); frameId("invert").onchange = (event) => changePdfSettings({ invert: event.target.checked }); frameId("reset").onclick = () => changePdfSettings(PDF_DEFAULTS); frameId("full").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : pdfFrame.requestFullscreen()).catch((error) => notify(error.message, true));
+      document.addEventListener("fullscreenchange", () => { frameId("full").textContent = document.fullscreenElement ? "退出全屏" : "全屏"; requestAnimationFrame(() => pdfViewer?.update()); });
+      if (pendingPdfOptions) setPdf(pendingPdfOptions);
+    })().catch((error) => notify(error.message, true));
   }
 
   function init(handlers) {
     Object.assign(listeners, handlers);
     if (initialized) return;
     initialized = true;
+    initPdfFrame();
     bind("modeBtn", "click", () => emit("mode"));
     bind("saveBtn", "click", () => emit("save"));
     bind("undoBtn", "click", () => emit("undo"));
@@ -367,7 +331,7 @@
     });
     sourceEditor.addEventListener("beforeinput", () => emit("beforeEdit"));
     sourceEditor.addEventListener("input", () => emit("sourceInput"));
-    sourceEditor.addEventListener("scroll", () => emit("sourceScroll"));
+    sourceEditor.addEventListener("scroll", syncHighlightScroll);
     sourceEditor.addEventListener("dblclick", () => emit("sourceDoubleClick"));
     byId("highlight").addEventListener("click", (event) => emit("highlightClick", event));
     bind("findBtn", "click", () => emit("find"));
@@ -375,26 +339,10 @@
     bind("replaceBtn", "click", () => emit("replace"));
     bind("allBtn", "click", () => emit("replaceAll"));
     ["findText", "regexBox", "caseBox"].forEach((id) => bind(id, id === "findText" ? "input" : "change", () => emit("findChanged")));
-    bind("zoomIn", "click", () => pdfViewer?.increaseScale());
-    bind("zoomOut", "click", () => pdfViewer?.decreaseScale());
-    bind("zoomFit", "click", () => { if (pdfViewer) pdfViewer.currentScaleValue = "page-width"; });
-    bind("pdfDirection", "click", () => { horizontalPages = !horizontalPages; updatePdfDirection(); });
-    bind("imageInvert", "click", () => setImageInverted(!imageInverted));
-    bind("fullImage", "click", () => toggleFullscreen().catch((error) => notify(error.message, true)));
     document.addEventListener("keydown", (event) => emit("keyDown", event));
     window.addEventListener("blur", () => document.querySelector(".editor-wrap")?.classList.remove("ctrl-link"));
     window.addEventListener("beforeunload", (event) => emit("beforeUnload", event));
     setTheme(localStorage.getItem("readerDark") === "1");
-    setImageInverted(localStorage.getItem("readerImageInverted") === "1");
-    horizontalPages = localStorage.getItem("readerPdfHorizontal") === "1"
-      || localStorage.getItem("readerPdfSpread") === "1";
-    localStorage.removeItem("readerPdfSpread");
-    updatePdfDirection();
-    document.addEventListener("fullscreenchange", () => {
-      const active = document.fullscreenElement === scanPane;
-      byId("fullImage").textContent = active ? "退出全屏" : "全屏";
-      requestAnimationFrame(() => pdfViewer?.update());
-    });
   }
 
   const splitter = document.createElement("div");

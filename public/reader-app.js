@@ -1,5 +1,160 @@
 (() => {
   "use strict";
+  const tags = [
+    { id: "b", label: "B", shortcut: "b", open: "<b>", close: "</b>", title: "Alt+B / b" },
+    { id: "i", label: "I", shortcut: "i", open: "<i>", close: "</i>", title: "Alt+I / i" },
+    { id: "em", label: "EM", shortcut: "em", open: "<em>", close: "</em>", title: "Insert emphasis" },
+    { id: "q", label: "Q", shortcut: "q", open: "<blockquote>", close: "</blockquote>", title: "Alt+Q / q" },
+    { id: "a", label: "A", shortcut: "a", open: "<a href=\"\" id=\"\">", close: "</a>", title: "Alt+A / a" },
+    { id: "x", label: "AID", shortcut: "x", open: "<a id=\"\">", close: "</a>", title: "Alt+X / x" },
+    { id: "l", label: "HREF", shortcut: "l", open: "<a href=\"\">", close: "</a>", title: "Alt+L / l" },
+    { id: "f", label: "FN", shortcut: "f", open: "<sup><a href=\"\" id=\"\">", close: "</a></sup>", title: "Alt+F / f" },
+    { id: "r", label: "R", shortcut: "r", open: "<p align=\"right\">", close: "</p>", title: "Alt+R / r" },
+    { id: "c", label: "C", shortcut: "c", open: "<p align=\"center\">", close: "</p>", title: "Alt+C / c" },
+    { id: "ltgt", label: "&lt;&gt;", shortcut: "&lt;&gt;", open: "&lt;", close: "&gt;", title: "Insert angle bracket" },
+    { id: "h1", label: "H1", shortcut: "1", open: "<h1>", close: "</h1>", title: "Alt+1 / 1" },
+    { id: "h2", label: "H2", shortcut: "2", open: "<h2>", close: "</h2>", title: "Alt+2 / 2" },
+    { id: "h3", label: "H3", shortcut: "3", open: "<h3>", close: "</h3>", title: "Alt+3 / 3" },
+    { id: "h4", label: "H4", shortcut: "4", open: "<h4>", close: "</h4>", title: "Alt+4 / 4" },
+    { id: "h5", label: "H5", shortcut: "5", open: "<h5>", close: "</h5>", title: "Alt+5 / 5" },
+    { id: "h6", label: "H6", shortcut: "6", open: "<h6>", close: "</h6>", title: "Alt+6 / 6" },
+    { id: "p", label: "P", shortcut: "p", open: "<p>", close: "</p>", title: "Alt+P / p" },
+    { id: "div", label: "DIV", shortcut: "d", open: "<div>", close: "</div>", title: "Alt+D / d" },
+    { id: "span", label: "SPAN", shortcut: "s", open: "<span>", close: "</span>", title: "Alt+S / s" },
+    { id: "aside", label: "ASIDE", shortcut: "aside", open: "<aside>", close: "</aside>", title: "Aside" },
+    { id: "sup", label: "SUP", shortcut: "sup", open: "<sup>", close: "</sup>", title: "Insert Superscript" },
+    { id: "sub", label: "SUB", shortcut: "sub", open: "<sub>", close: "</sub>", title: "Insert Subscript" }
+  ];
+  const tagMap = new Map(tags.filter((tag) => tag.shortcut).map((tag) => [tag.shortcut.toLowerCase(), tag]));
+  const attrs = [
+    { id: "idAttr", label: "ID=", text: " id=\"\"", cursorOffset: 5, title: "Insert id attribute" },
+    { id: "classAttr", label: "CLASS=", text: " class=\"\"", cursorOffset: 8, title: "Insert class attribute" },
+    { id: "styleAttr", label: "STYLE=", text: " style=\"\"", cursorOffset: 8, title: "Insert style attribute" },
+    { id: "hrs", label: "HRS", text: "<hr style=\"width: 20%;\">", cursorOffset: 22, title: "Insert short hardline" },
+    { id: "noIndentAttr", label: "NO INDENT", text: " style=\"text-indent: 0;\"", cursorOffset: 23, title: "Insert no-indent style attribute" },
+    { id: "HR", label: "HR", text: "<hr>", cursorOffset: 3, title: "Insert hardline" },
+    { id: "BR", label: "BR", text: "<br>", cursorOffset: 3, title: "Insert change line" }
+  ];
+  const blockTagNames = new Set(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6"]);
+  const blockSelector = [...blockTagNames].join(",");
+  const blockTagIds = new Set(["p", "r", "c", "h1", "h2", "h3", "h4", "h5", "h6", "div"]);
+  const voidTagNames = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+  const rawTagNames = new Set(["script", "style", "textarea", "title"]);
+  const tagPattern = /<!--[\s\S]*?-->|<\/?[A-Za-z][\w:-]*\b(?:[^>"']|"[^"]*"|'[^']*')*>/g;
+  class DocumentModel {
+    static async load(options) {
+      return new DocumentModel({ ...options, ...await options.read() });
+    }
+
+    constructor({ text = "", mtime = null, editable = true, read, write } = {}) {
+      this.content = text;
+      this.savedContent = text;
+      this.mtime = mtime;
+      this.editable = editable;
+      this.revision = 0;
+      this.reloadRevision = 0;
+      this.undoStack = [];
+      this.redoStack = [];
+      this.read = read;
+      this.write = write;
+      this.pending = Promise.resolve();
+    }
+
+    get dirty() { return this.content !== this.savedContent; }
+
+    textFromEditor(text) {
+      // Textareas normalize CRLF and CR to LF. Keep the original bytes when
+      // the editor still represents the current or saved source.
+      const normalize = value => value.replace(/\r\n?/g, "\n");
+      for (const source of [this.content, this.savedContent]) {
+        if (normalize(source) === normalize(text)) return source;
+      }
+      return text;
+    }
+
+    update(text) {
+      if (text !== this.content) this.revision += 1;
+      this.content = text;
+    }
+
+    pushHistory(stack, snapshot) {
+      stack.push(snapshot);
+      let size = stack.reduce((sum, item) => sum + item.text.length, 0);
+      while (stack.length > 100 || size > 10_000_000) size -= stack.shift().text.length;
+    }
+
+    remember(snapshot) {
+      const last = this.undoStack.at(-1);
+      if (!last || ["text", "start", "end"].some(key => last[key] !== snapshot[key])) {
+        this.pushHistory(this.undoStack, snapshot);
+      }
+      this.redoStack = [];
+    }
+
+    restore(from, to, current) {
+      const snapshot = from.pop();
+      if (!snapshot) return null;
+      this.pushHistory(to, current);
+      this.update(snapshot.text);
+      return snapshot;
+    }
+
+    undo(current) { return this.restore(this.undoStack, this.redoStack, current); }
+    redo(current) { return this.restore(this.redoStack, this.undoStack, current); }
+
+    enqueue(operation) {
+      const task = this.pending.then(operation);
+      this.pending = task.catch(() => {});
+      return task;
+    }
+
+    async writeSnapshot(text) {
+      if (!this.editable) throw new Error("Document is read-only");
+      const result = await this.write({ text, mtime: this.mtime });
+      this.savedContent = text;
+      this.mtime = result.mtime;
+      return result;
+    }
+
+    save(text = this.content) {
+      const revision = this.reloadRevision;
+      return this.enqueue(() => {
+        if (revision !== this.reloadRevision) throw new Error("File reloaded before saving. Review the current content and save again.");
+        return this.writeSnapshot(text);
+      });
+    }
+
+    async saveUntilClean() {
+      while (this.dirty) {
+        await this.enqueue(() => this.dirty ? this.writeSnapshot(this.content) : undefined);
+      }
+    }
+
+    refresh() {
+      return this.enqueue(async () => {
+        const data = await this.read();
+        if (data.text === this.savedContent) {
+          this.mtime = data.mtime;
+          return "unchanged";
+        }
+        if (data.text === this.content) {
+          this.savedContent = data.text;
+          this.mtime = data.mtime;
+          return "saved";
+        }
+        if (this.dirty) return "conflict";
+        this.reloadRevision += 1;
+        this.update(data.text);
+        this.savedContent = data.text;
+        this.mtime = data.mtime;
+        this.undoStack = [];
+        this.redoStack = [];
+        return "updated";
+      });
+    }
+  }
+
+
   const ui = window.ReaderUI;
   if (!ui) throw new Error("ReaderUI 未载入");
 
@@ -7,57 +162,12 @@
     config: null,
     volume: null,
     page: null,
-    source: "",
-    savedSource: "",
-    mtime: null,
-    editable: true,
-    dirty: false,
+    document: new DocumentModel({ editable: false }),
     mode: "source",
     matches: [],
     match: -1,
-    undo: [],
-    redo: [],
-    pendingVisualScroll: null,
-    navigationRevision: 0,
-    workingCopyRevision: 0,
-    savePromise: null
+    navigationRevision: 0
   };
-
-  const tags = [
-    { label: "B", hotkey: "b", open: "<b>", close: "</b>" },
-    { label: "I", hotkey: "i", open: "<i>", close: "</i>" },
-    { label: "Q", hotkey: "q", open: "<blockquote>", close: "</blockquote>" },
-    { label: "A", hotkey: "a", open: '<a href="" id="">', close: "</a>" },
-    { label: "ID", hotkey: "x", open: '<a id="">', close: "</a>" },
-    { label: "HREF", hotkey: "l", open: '<a href="">', close: "</a>" },
-    { label: "FN", hotkey: "f", open: '<sup><a href="" id="">', close: "</a></sup>" },
-    { label: "R", hotkey: "r", open: '<p align="right">', close: "</p>" },
-    { label: "C", hotkey: "c", open: '<p align="center">', close: "</p>" },
-    { label: "ltgt", title: "插入尖括号", open: "&lt;", close: "&gt;" },
-    { label: "H1", hotkey: "1", open: "<h1>", close: "</h1>" },
-    { label: "H2", hotkey: "2", open: "<h2>", close: "</h2>" },
-    { label: "H3", hotkey: "3", open: "<h3>", close: "</h3>" },
-    { label: "H4", hotkey: "4", open: "<h4>", close: "</h4>" },
-    { label: "H5", hotkey: "5", open: "<h5>", close: "</h5>" },
-    { label: "H6", hotkey: "6", open: "<h6>", close: "</h6>" },
-    { label: "P", hotkey: "p", open: "<p>", close: "</p>" },
-    { label: "BR", hotkey: "Enter", open: "<br>", close: "" },
-    { label: "DIV", hotkey: "d", open: "<div>", close: "</div>" },
-    { label: "SPAN", hotkey: "s", open: "<span>", close: "</span>" },
-    { label: "ASIDE", title: "插入 aside", open: "<aside>", close: "</aside>" },
-    { label: "SUP", title: "上标", open: "<sup>", close: "</sup>" },
-    { label: "SUB", title: "下标", open: "<sub>", close: "</sub>" }
-  ];
-  const tagMap = new Map(tags.filter((tag) => tag.hotkey).map((tag) => [tag.hotkey.toLowerCase(), tag]));
-  const attrs = [
-    { label: "ID=", text: ' id=""', offset: 5 },
-    { label: "CLASS=", text: ' class=""', offset: 8 },
-    { label: "STYLE=", text: ' style=""', offset: 8 },
-    { label: "hr", text: "<hr>", offset: 3 },
-    { label: "hrs", text: '<hr style="width: 20%;">', offset: 22 },
-    { label: "no-indent", text: ' style="text-indent: 0;"', offset: 23 }
-  ];
-  const blockTagNames = new Set(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6"]);
 
   function escapeHtml(value) {
     return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -87,22 +197,24 @@
     const volume = currentVolume();
     if (!volume || state.page == null) return "";
     const index = volume.pages.indexOf(state.page);
-    return `第 ${state.page} 页 · ${index + 1} / ${volume.pages.length}${state.dirty ? " *" : ""}`;
+    return `第 ${state.page} 页 · ${index + 1} / ${volume.pages.length}${state.document.dirty ? " *" : ""}`;
   }
 
-  function markDirty(dirty = true) {
-    state.dirty = dirty;
-    ui.setDirty(dirty, pagePositionText());
+  function markDirty() {
+    ui.setDirty(state.document.dirty, pagePositionText());
   }
 
   function updateHistoryButtons() {
-    ui.setHistoryButtons(Boolean(state.undo.length), Boolean(state.redo.length));
+    ui.setHistoryButtons(Boolean(state.document.undoStack.length), Boolean(state.document.redoStack.length));
   }
 
   function sourceFromVisual() {
     const live = ui.getVisualDocument();
-    if (!live?.body) return state.source;
-    const parsed = new DOMParser().parseFromString(state.source, "text/html");
+    if (!live?.body) return state.document.content;
+    const parsed = new DOMParser().parseFromString(state.document.content, "text/html");
+    // Parsing changes source formatting even without an edit. Compare bodies
+    // in the same DOM representation before serializing a visual change.
+    if (parsed.body.innerHTML === live.body.innerHTML) return state.document.content;
     parsed.body.innerHTML = live.body.innerHTML;
     parsed.head.querySelectorAll("[data-reader-editor]").forEach((node) => node.remove());
     const doctype = parsed.doctype ? `<!DOCTYPE ${parsed.doctype.name}>` : "<!doctype html>";
@@ -110,16 +222,14 @@
   }
 
   function currentSource() {
-    return state.mode === "visual" ? sourceFromVisual() : ui.getSource();
+    return state.mode === "visual" ? sourceFromVisual() : state.document.textFromEditor(ui.getSource());
   }
 
   function updateWorkingCopy(source = currentSource()) {
-    if (source !== state.source) state.workingCopyRevision += 1;
-    state.source = source;
-    // Keep the hidden source editor current while the visual editor is active.
-    // This makes state.source the single live working copy in both modes.
+    if (state.mode === "source") source = state.document.textFromEditor(source);
+    state.document.update(source);
     if (state.mode === "visual") ui.setSource(source);
-    markDirty(source !== state.savedSource);
+    markDirty();
     return source;
   }
 
@@ -134,13 +244,7 @@
 
   function remember() {
     if (state.page == null) return;
-    const snapshot = currentSnapshot();
-    const last = state.undo.at(-1);
-    if (!last || last.text !== snapshot.text || last.start !== snapshot.start || last.end !== snapshot.end) {
-      state.undo.push(snapshot);
-      if (state.undo.length > 100) state.undo.shift();
-    }
-    state.redo = [];
+    state.document.remember(currentSnapshot());
     updateHistoryButtons();
   }
 
@@ -153,28 +257,21 @@
       ui.focusSource();
       refreshHighlight();
     } else {
-      state.pendingVisualScroll = snapshot.scroll;
-      renderVisual();
+      renderVisual(snapshot.scroll);
     }
-    invalidateFind();
+    findAll();
     updateHistoryButtons();
   }
 
-  function undo() {
-    const snapshot = state.undo.pop();
-    if (!snapshot) return ui.notify("没有可撤销的操作");
-    state.redo.push(currentSnapshot());
+  function restoreHistory(method, action) {
+    const snapshot = state.document[method](currentSnapshot());
+    if (!snapshot) return ui.notify(`没有可${action}的操作`);
     applySnapshot(snapshot);
-    ui.notify("已撤销");
+    ui.notify(`已${action}`);
   }
 
-  function redo() {
-    const snapshot = state.redo.pop();
-    if (!snapshot) return ui.notify("没有可重做的操作");
-    state.undo.push(currentSnapshot());
-    applySnapshot(snapshot);
-    ui.notify("已重做");
-  }
+  const undo = () => restoreHistory("undo", "撤销");
+  const redo = () => restoreHistory("redo", "重做");
 
   function injectEditorDocument(source) {
     const base = `<base href="/api/reader/resource/${encodeURIComponent(state.volume)}/">`;
@@ -184,10 +281,8 @@
     return `<!doctype html><html><head>${base}${style}</head><body>${source}</body></html>`;
   }
 
-  function renderVisual() {
-    const scroll = state.pendingVisualScroll;
-    state.pendingVisualScroll = null;
-    ui.showVisual(injectEditorDocument(state.source), { editable: state.editable, scroll });
+  function renderVisual(scroll = null) {
+    ui.showVisual(injectEditorDocument(state.document.content), { editable: state.document.editable, scroll });
   }
 
   function setMode(mode = state.mode === "visual" ? "source" : "visual", { resetSourceScroll = false } = {}) {
@@ -197,7 +292,7 @@
     state.mode = next;
     ui.setMode(next);
     if (next === "source") {
-      ui.setSource(state.source);
+      ui.setSource(state.document.content);
       if (resetSourceScroll) ui.setSourceScroll({ top: 0, left: 0 });
       refreshHighlight();
     } else {
@@ -211,17 +306,32 @@
     history.replaceState(null, "", `?volume=${encodeURIComponent(state.volume)}&page=${state.page}&mode=${state.mode}`);
   }
 
-  function nearestPage(pages, requested) {
-    if (!pages.length) return null;
-    if (pages.includes(requested)) return requested;
-    return pages.reduce((best, page) => Math.abs(page - requested) < Math.abs(best - requested) ? page : best);
+  function pageNumberFromPdfLabel(pdfLabel) {
+    const numericPrefix = String(pdfLabel ?? "").match(/^(\d+)/)?.[1];
+    return numericPrefix ? Number(numericPrefix) : null;
   }
 
-  function htmlPageForPdfLabel(volume, pdfLabel) {
-    const numericPrefix = String(pdfLabel).match(/^(\d+)/)?.[1];
-    if (!numericPrefix) return null;
-    const labeledPage = Number(numericPrefix);
-    return volume.pages.findLast((page) => page <= labeledPage) ?? null;
+  async function loadPageOrPrevious(volume, requestedPage) {
+    const candidates = volume.pages
+      .filter((page) => page <= requestedPage)
+      .sort((a, b) => b - a);
+
+    for (const page of candidates) {
+      try {
+        const url = `/api/reader/page/${encodeURIComponent(volume.id)}/${page}`;
+        const document = await DocumentModel.load({
+          read: () => api(url),
+          write: snapshot => api(url, {
+            method: "PUT", headers: { "content-type": "application/json" },
+            body: JSON.stringify(snapshot)
+          })
+        });
+        return { page, document, fellBack: page !== requestedPage };
+      } catch (error) {
+        if (!isMissingPageError(error)) throw error;
+      }
+    }
+    return null;
   }
 
   function renderNavigation() {
@@ -237,51 +347,56 @@
       volume: state.volume,
       hasPrevious: index > 0,
       hasNext: index < volume.pages.length - 1,
-      editable: state.editable
+      editable: state.document.editable
     });
   }
 
-  async function navigate(targetVolume, targetPage, force = false, pdfLabel = null) {
-    if (!force && state.dirty && !(await save())) return false;
+  function isMissingPageError(error) {
+    // 页面文件不存在（本地 ENOENT 或远程读取失败）时不应中断翻页：
+    // 这类错误会被当作“占位页”处理，而不是让导航停在当前页反复回退。
+    return /(ENOENT|no such file|远程页面读取失败)/i.test(error?.message || "");
+  }
+
+  async function navigate(targetVolume, targetPage, force = false, pdfOrigin = null) {
+    if (!force && state.document.dirty && !(await save())) return false;
     const volume = state.config.volumes.find((item) => item.id === String(targetVolume));
     if (!volume) return false;
-    const page = nearestPage(volume.pages, Number(targetPage));
-    if (page == null) return false;
+    const requestedPage = Number(targetPage);
+    if (!Number.isFinite(requestedPage)) return false;
     const revision = ++state.navigationRevision;
-    const workingCopyRevision = state.workingCopyRevision;
+    const previousDocument = state.document;
+    const workingCopyRevision = previousDocument.revision;
     try {
-      const data = await api(`/api/reader/page/${encodeURIComponent(volume.id)}/${page}`);
+      const loaded = await loadPageOrPrevious(volume, requestedPage);
+      if (!loaded) throw new Error(`第 ${requestedPage} 页及之前没有可用的网页文件`);
       if (revision !== state.navigationRevision) return true;
-      // Typing is still possible while the requested page is loading. Never let
-      // that older response replace the newer local working copy: save it, then
-      // fetch the target again so same-page reloads cannot apply stale content.
-      if (workingCopyRevision !== state.workingCopyRevision || state.dirty) {
+      if (previousDocument !== state.document || workingCopyRevision !== state.document.revision || state.document.dirty) {
         if (!(await save())) return false;
         if (revision !== state.navigationRevision) return true;
-        return navigate(volume.id, page, true, pdfLabel);
+        return navigate(volume.id, requestedPage, true, pdfOrigin);
       }
+
+      const { page, document, fellBack } = loaded;
       const volumeChanged = state.volume !== volume.id;
       state.volume = volume.id;
       state.page = page;
-      state.source = data.text;
-      state.savedSource = data.text;
-      state.workingCopyRevision += 1;
-      state.mtime = data.mtime;
-      state.editable = data.editable;
-      state.undo = [];
-      state.redo = [];
+      state.document = document;
       state.matches = [];
       state.match = -1;
       updateHistoryButtons();
-      markDirty(false);
+      markDirty();
       if (volumeChanged) ui.renderToc(volume.shortTitle, volume.toc);
-      // A textarea retains its scroll position when its value changes. A newly
-      // opened file must begin at the top when shown as source.
       setMode(state.mode, { resetSourceScroll: true });
       renderNavigation();
-      ui.setPdf({ url: volume.pdfUrl, pageLabel: String(pdfLabel ?? page) })
-        .catch((error) => ui.notify(`PDF 载入失败：${error.message}`, true));
-      if (!state.editable) ui.notify("远程页面：只读");
+
+      // PDF 发起的翻页已经处于正确的物理页，不反向驱动 PDF。
+      // 左侧网页发起导航时才定位 PDF；UI 会在重复标签中选择离当前物理页最近的一项。
+      if (!pdfOrigin) {
+        ui.setPdf({ url: volume.pdfUrl, pageLabel: String(page) })
+          .catch((error) => ui.notify(`PDF 载入失败：${error.message}`, true));
+      }
+      if (fellBack) ui.notify(`第 ${requestedPage} 页暂无网页文件，已显示上一可用页 ${page}`, false);
+      else if (!state.document.editable) ui.notify("远程页面：只读");
       return true;
     } catch (error) {
       if (revision === state.navigationRevision) ui.notify(error.message, true);
@@ -289,26 +404,13 @@
     }
   }
 
-  async function performSave() {
-    if (!state.editable || state.page == null) return true;
+  async function save() {
+    if (state.page == null) return true;
     updateWorkingCopy();
-    const context = {
-      volume: state.volume,
-      page: state.page,
-      text: state.source,
-      mtime: state.mtime
-    };
+    const document = state.document;
     try {
-      const result = await api(`/api/reader/page/${encodeURIComponent(context.volume)}/${context.page}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: context.text, mtime: context.mtime })
-      });
-      if (context.volume === state.volume && context.page === state.page) {
-        state.mtime = result.mtime;
-        state.savedSource = context.text;
-        updateWorkingCopy();
-      }
+      await document.saveUntilClean();
+      if (document === state.document) markDirty();
       ui.notify("已保存");
       return true;
     } catch (error) {
@@ -317,15 +419,23 @@
     }
   }
 
-  async function save() {
-    while (state.dirty) {
-      if (!state.savePromise) state.savePromise = performSave();
-      const task = state.savePromise;
-      const succeeded = await task;
-      if (state.savePromise === task) state.savePromise = null;
-      if (!succeeded) return false;
-    }
-    return true;
+  let refreshing = false;
+  async function refreshLocalFile() {
+    if (refreshing || document.hidden || state.page == null || !state.document.editable) return;
+    refreshing = true;
+    const current = state.document;
+    try {
+      const result = await current.refresh();
+      if (current !== state.document) return;
+      if (result === "conflict") ui.notify("文件已在外部修改；本地未保存内容已保留，请保存副本后重新载入", true);
+      else if (result === "updated") {
+        const snapshot = currentSnapshot();
+        applySnapshot({ ...snapshot, text: current.content });
+        ui.notify("已从本地文件刷新");
+      } else if (result === "saved") markDirty();
+    } catch (error) {
+      ui.notify(`本地文件刷新失败：${error.message}`, true);
+    } finally { refreshing = false; }
   }
 
   function attrToken(raw, value) {
@@ -337,12 +447,11 @@
   function colorTag(raw) {
     if (raw.startsWith("<!--")) return `<span class="tok-comment">${escapeHtml(raw)}</span>`;
     let result = "", last = 0;
-    const pattern = /(<\/?)([A-Za-z][\w:-]*)|([\w:-]+)(\s*=\s*)("[^"]*"|'[^']*')|([<>\/=])/g;
+    const pattern = /(<\/?)([A-Za-z][\w:-]*)|([\w:-]+)(\s*=\s*)("[^"]*"|'[^']*')/g;
     for (let match; (match = pattern.exec(raw));) {
       result += escapeHtml(raw.slice(last, match.index));
       if (match[1]) result += `${escapeHtml(match[1])}<span class="tok-tag">${escapeHtml(match[2])}</span>`;
-      else if (match[3]) result += `<span class="tok-attr">${escapeHtml(match[3])}</span>${escapeHtml(match[4])}${attrToken(match[0], match[5])}`;
-      else result += escapeHtml(match[6]);
+      else result += `<span class="tok-attr">${escapeHtml(match[3])}</span>${escapeHtml(match[4])}${attrToken(match[0], match[5])}`;
       last = match.index + match[0].length;
     }
     return result + escapeHtml(raw.slice(last));
@@ -362,6 +471,12 @@
     ui.updateHighlight(colorHtml(ui.getSource()));
   }
 
+  function refreshAfterEdit(source = currentSource()) {
+    updateWorkingCopy(source);
+    refreshHighlight();
+    findAll();
+  }
+
   function gotoAnchor(fragment) {
     const id = decodeURIComponent(fragment.slice(1));
     if (!id) return false;
@@ -376,21 +491,18 @@
     return true;
   }
 
-  function openSourceHref(href) {
+  function openHighlightedLink(event) {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    const link = event.target.closest(".tok-link[data-href]");
+    if (!link) return;
+    event.preventDefault();
+    const href = link.dataset.href;
     if (href.startsWith("#")) {
       if (!gotoAnchor(href)) ui.notify(`未找到锚点：${href}`);
       return;
     }
     const base = `/api/reader/resource/${encodeURIComponent(state.volume)}/`;
     window.open(new URL(href, location.origin + base).href, "_blank", "noopener");
-  }
-
-  function openHighlightedLink(event) {
-    if (!(event.ctrlKey || event.metaKey)) return;
-    const link = event.target.closest(".tok-link[data-href]");
-    if (!link) return;
-    event.preventDefault();
-    openSourceHref(link.dataset.href);
   }
 
   function openVisualLink(event, doc) {
@@ -470,40 +582,134 @@
     return { name, kind: name === "p" && align ? `p:${align}` : name };
   }
 
-  function findTagContainer(text, start, end, names) {
-    const pattern = /<\/?([A-Za-z][\w:-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*>/g;
-    const stack = [], candidates = [];
-    for (let match; (match = pattern.exec(text));) {
-      const name = match[1].toLowerCase();
-      if (!names.has(name)) continue;
-      const token = match[0];
-      if (!token.startsWith("</") && !token.endsWith("/>")) {
-        stack.push({ name, token, start: match.index, end: pattern.lastIndex });
-        continue;
+  function buildTagEdit(text, start, end, tag) {
+    const elements = tagPairs(text);
+    const selected = text.slice(start, end);
+    const name = /^<([A-Za-z][\w:-]*)\b/.exec(tag.open)?.[1].toLowerCase();
+    const simple = name && tag.close.toLowerCase() === `</${name}>`;
+    const complete = start < end && isCompleteSelection(text, elements, start, end);
+    const exact = complete && elements.find((element) => element.start === start && element.end === end);
+
+    // 完整选中时操作外层；否则只操作包住选区的最内层。
+    if (complete) {
+      // 错配闭合标签：以前面的开始标签为准。点击同类标签删除，
+      // 点击其他标签则直接替换整个外层，而不是再包一层。
+      if (exact && exact.closeName && exact.closeName !== exact.name) {
+        if (name === exact.name) return changeWrapper(text, exact, start, end);
+        return changeWrapper(text, exact, start, end, tag);
       }
-      if (!token.startsWith("</")) continue;
-      let index = stack.length - 1;
-      while (index >= 0 && stack[index].name !== name) index -= 1;
-      if (index < 0) continue;
-      const open = stack.splice(index, 1)[0];
-      const close = { token, start: match.index, end: pattern.lastIndex };
-      const selectedWhole = open.start === start && close.end === end;
-      if ((open.end <= start && end <= close.start) || selectedWhole) candidates.push({ open, close, selectedWhole });
+      if (exact && blockTagNames.has(exact.name) && blockTagIds.has(tag.id)) {
+        if (blockId(exact) === tag.id) return changeWrapper(text, exact, start, end);
+        if (tag.id !== "div") return changeWrapper(text, exact, start, end, tag);
+      }
+      if (exact && exact.name === name && simple) return changeWrapper(text, exact, start, end);
+      if (tag.close && selected.startsWith(tag.open) && selected.endsWith(tag.close)) {
+        const inner = selected.slice(tag.open.length, -tag.close.length);
+        return { start, end, text: inner, selectStart: 0, selectEnd: inner.length };
+      }
+      return wrapEdit(start, end, selected, tag, true);
     }
-    return candidates.sort((a, b) => (a.close.end - a.open.start) - (b.close.end - b.open.start))[0] || null;
+
+    const block = blockTagIds.has(tag.id) && innermost(elements.filter((element) => blockTagNames.has(element.name)), start, end);
+    if (block) return changeWrapper(text, block, start, end, blockId(block) === tag.id ? undefined : tag);
+
+    const same = simple && innermost(elements.filter((element) => element.name === name), start, end);
+    if (same) return changeWrapper(text, same, start, end);
+
+    const before = start - tag.open.length;
+    const after = end + tag.close.length;
+    if (tag.close && before >= 0 && text.slice(before, start) === tag.open && text.slice(end, after) === tag.close) {
+      return { start: before, end: after, text: selected, selectStart: 0, selectEnd: selected.length };
+    }
+    return wrapEdit(start, end, selected, tag, false);
   }
 
-  function setSourceWrapper(container, openTag = "", closeTag = "") {
-    const text = ui.getSource();
-    const selection = ui.getSourceSelection();
-    const inner = text.slice(container.open.end, container.close.start);
-    const relativeStart = container.selectedWhole ? 0 : selection.start - container.open.end;
-    const relativeEnd = container.selectedWhole ? inner.length : selection.end - container.open.end;
-    ui.replaceSourceRange(openTag + inner + closeTag, container.open.start, container.close.end, "select");
-    ui.setSourceSelection(
-      container.open.start + openTag.length + relativeStart,
-      container.open.start + openTag.length + relativeEnd
-    );
+  function changeWrapper(text, element, start, end, tag) {
+    const open = tag?.open || "", close = tag?.close || "";
+    const inner = text.slice(element.openEnd, element.closeStart);
+    const whole = start === element.start && end === element.end;
+    const inOpeningTag = start === end && element.start < start && start < element.openEnd;
+    const from = whole || inOpeningTag ? 0 : start - element.openEnd;
+    const to = whole ? inner.length : inOpeningTag ? 0 : end - element.openEnd;
+    return {
+      start: element.start,
+      end: element.end,
+      text: open + inner + close,
+      selectStart: open.length + from,
+      selectEnd: open.length + to
+    };
+  }
+
+  function wrapEdit(start, end, selected, tag, keepSelection) {
+    const text = tag.open + selected + tag.close;
+    const emptyAttribute = tag.open.indexOf('=""');
+    const cursor = emptyAttribute >= 0 ? emptyAttribute + 2 : selected ? text.length : tag.open.length;
+    return {
+      start, end, text,
+      selectStart: keepSelection ? tag.open.length : cursor,
+      selectEnd: keepSelection ? tag.open.length + selected.length : cursor
+    };
+  }
+
+  function innermost(elements, start, end) {
+    return elements
+      .filter((element) => (start === end && element.start < start && start < element.openEnd) ||
+        (element.openEnd <= start && end <= element.closeStart))
+      .reduce((inner, element) => !inner || element.end - element.start < inner.end - inner.start ? element : inner, undefined);
+  }
+
+  function isCompleteSelection(text, elements, start, end) {
+    let cursor = start, found = false;
+    while (cursor < end && /\s/.test(text[cursor])) cursor += 1;
+    while (cursor < end) {
+      const outer = elements
+        .filter((element) => element.start === cursor && element.end <= end)
+        .reduce((root, element) => !root || element.end > root.end ? element : root, undefined);
+      if (!outer) return false;
+      found = true;
+      cursor = outer.end;
+      while (cursor < end && /\s/.test(text[cursor])) cursor += 1;
+    }
+    return found;
+  }
+
+  function tagPairs(text) {
+    const stack = [], pairs = [];
+    let rawName;
+    tagPattern.lastIndex = 0;
+    for (let match; (match = tagPattern.exec(text));) {
+      const token = match[0];
+      if (token.startsWith("<!--")) continue;
+      const name = token.match(/^<\/?([A-Za-z][\w:-]*)/i)[1].toLowerCase();
+      const closing = /^<\//.test(token);
+
+      if (rawName && !(closing && name === rawName)) continue;
+      if (closing) {
+        const open = stack.at(-1);
+        const crossed = stack.findLastIndex((item) => item.name === name);
+        if (open && (open.name === name || crossed < 0)) {
+          // 正常闭合或没有同名开始标签的错配闭合，都与栈顶配对。
+          stack.pop();
+          pairs.push({ name: open.name, closeName: name, start: open.start, openEnd: open.end, closeStart: match.index, end: tagPattern.lastIndex, open: open.token });
+          if (name === rawName) rawName = undefined;
+        } else if (crossed >= 0) {
+          // 同名开始标签在栈内时，保留交叉标签恢复逻辑。
+          stack.length = crossed;
+        }
+      } else if (voidTagNames.has(name) || /\/\s*>$/.test(token)) {
+        pairs.push({ name, start: match.index, openEnd: tagPattern.lastIndex, closeStart: tagPattern.lastIndex, end: tagPattern.lastIndex, open: token });
+      } else {
+        stack.push({ name, start: match.index, end: tagPattern.lastIndex, token });
+        if (rawTagNames.has(name)) rawName = name;
+      }
+    }
+    return pairs;
+  }
+
+  function blockId(element) {
+    if (element.name !== "p") return element.name;
+    const align = element.open.match(/\balign\s*=\s*["']?(center|right)/i)?.[1]?.toLowerCase();
+    return align === "center" ? "c" : align === "right" ? "r" : "p";
   }
 
   function selectVisualContents(element, doc) {
@@ -520,6 +726,10 @@
     if (!parent) return;
     while (element.firstChild) parent.insertBefore(element.firstChild, element);
     element.remove();
+    selectVisualNodes(first, last, doc);
+  }
+
+  function selectVisualNodes(first, last, doc) {
     if (!first || !last) return;
     const range = doc.createRange();
     range.setStartBefore(first);
@@ -541,13 +751,13 @@
 
   function insertVisual(tag) {
     const doc = ui.getVisualDocument();
-    if (!doc?.body || !state.editable) return;
+    if (!doc?.body || !state.document.editable) return;
     remember();
     const info = tagInfo(tag.open);
     const selection = doc.getSelection();
     const anchor = selection?.anchorNode?.nodeType === doc.defaultView.Node.ELEMENT_NODE
       ? selection.anchorNode : selection?.anchorNode?.parentElement;
-    const container = info && anchor?.closest?.(info.block ? "p,div,h1,h2,h3,h4,h5,h6" : info.name);
+    const container = info && anchor?.closest?.(info.block ? blockSelector : info.name);
     let action = "已插入";
     if (container && doc.body.contains(container)) {
       if (elementTagInfo(container).kind === info.kind) {
@@ -568,52 +778,42 @@
       const inserted = [...fragment.childNodes];
       range.deleteContents();
       range.insertNode(fragment);
-      if (inserted.length) {
-        const nextRange = doc.createRange();
-        nextRange.setStartBefore(inserted[0]);
-        nextRange.setEndAfter(inserted.at(-1));
-        selection.removeAllRanges();
-        selection.addRange(nextRange);
-      }
+      selectVisualNodes(inserted[0], inserted.at(-1), doc);
     }
     updateWorkingCopy();
-    invalidateFind();
+    findAll();
     doc.body.focus();
     return action;
   }
 
-  function insertSource(text, close = "", offset = null) {
-    const info = tagInfo(text);
-    const selection = ui.getSourceSelection();
+  function insertSourceTag(tag) {
+    const { start, end } = ui.getSourceSelection();
+    const source = ui.getSource();
+    const operation = buildTagEdit(source, start, end, tag);
+    const removed = operation.text.length < operation.end - operation.start;
+    const wrapped = tag.open + source.slice(start, end) + tag.close;
+    const replaced = !removed && operation.text !== wrapped;
+    applySourceEdit(operation.text, operation.start, operation.end,
+      operation.start + operation.selectStart, operation.start + operation.selectEnd);
+    return removed ? "已移除" : replaced ? "已替换" : "已插入";
+  }
+
+  function insertSourceAttribute(attr) {
+    const { start, end } = ui.getSourceSelection();
+    const selected = ui.getSource().slice(start, end);
+    applySourceEdit(attr.text + selected, start, end, start + (attr.cursorOffset ?? attr.text.length + selected.length));
+  }
+
+  function applySourceEdit(text, start, end, selectStart, selectEnd = selectStart) {
     remember();
-    let action = "已插入";
-    if (info && close) {
-      const names = info.block ? blockTagNames : new Set([info.name]);
-      const container = findTagContainer(ui.getSource(), selection.start, selection.end, names);
-      if (container) {
-        const sameKind = tagInfo(container.open.token)?.kind === info.kind;
-        setSourceWrapper(container, sameKind || !info.block ? "" : text, sameKind || !info.block ? "" : close);
-        action = sameKind || !info.block ? "已移除" : "已替换";
-      } else {
-        const selected = ui.getSource().slice(selection.start, selection.end);
-        ui.replaceSourceRange(text + selected + close, selection.start, selection.end, "end");
-        if (!selected) ui.setSourceSelection(selection.start + text.length);
-      }
-    } else {
-      const selected = ui.getSource().slice(selection.start, selection.end);
-      ui.replaceSourceRange(text + selected + close, selection.start, selection.end, "end");
-      if (!selected && close) ui.setSourceSelection(selection.start + (offset ?? text.length));
-      else if (offset != null) ui.setSourceSelection(selection.start + offset);
-    }
-    updateWorkingCopy(ui.getSource());
-    invalidateFind();
-    refreshHighlight();
+    ui.replaceSourceRange(text, start, end, "select");
+    ui.setSourceSelection(selectStart, selectEnd);
+    refreshAfterEdit(ui.getSource());
     ui.focusSource();
-    return action;
   }
 
   function editTag(tag) {
-    const action = state.mode === "visual" ? insertVisual(tag) : insertSource(tag.open, tag.close);
+    const action = state.mode === "visual" ? insertVisual(tag) : insertSourceTag(tag);
     if (action) ui.notify(`${action} ${tag.label}`);
   }
 
@@ -633,18 +833,12 @@
         ui.setFindInfo("");
         return;
       }
-      for (let match; (match = compiled.pattern.exec(ui.getSource()));) {
-        state.matches.push([match.index, match.index + match[0].length]);
-        if (!match[0]) compiled.pattern.lastIndex += 1;
-      }
+      state.matches = Array.from(ui.getSource().matchAll(compiled.pattern),
+        (match) => [match.index, match.index + match[0].length]);
       ui.setFindInfo(`${state.matches.length} 处`);
     } catch (error) {
       ui.setFindInfo(error.message);
     }
-  }
-
-  function invalidateFind() {
-    findAll(true);
   }
 
   function nextMatch() {
@@ -664,9 +858,7 @@
     const [start, end] = state.matches[state.match];
     remember();
     ui.replaceSourceRange(ui.findOptions().replacement, start, end, "end");
-    updateWorkingCopy(ui.getSource());
-    refreshHighlight();
-    findAll(true);
+    refreshAfterEdit(ui.getSource());
   }
 
   function replaceAll() {
@@ -679,9 +871,7 @@
         ? ui.getSource().replace(compiled.pattern, replacement)
         : ui.getSource().replace(compiled.pattern, () => replacement);
       ui.setSource(replaced);
-      updateWorkingCopy(replaced);
-      refreshHighlight();
-      findAll(true);
+      refreshAfterEdit(replaced);
     } catch (error) {
       ui.setFindInfo(error.message);
     }
@@ -716,8 +906,7 @@
         adjacent(event.key === "ArrowLeft" ? -1 : 1);
         return;
       }
-      const hotkey = event.key === "Enter" ? "enter" : key;
-      const tag = tagMap.get(hotkey);
+      const tag = tagMap.get(key);
       if (tag) {
         event.preventDefault();
         editTag(tag);
@@ -740,31 +929,29 @@
       tag: (index) => editTag(tags[index]),
       attr: (index) => {
         if (state.mode === "visual") return ui.notify("属性按钮请在源代码模式使用");
-        const attr = attrs[index];
-        insertSource(attr.text, "", attr.offset);
+        insertSourceAttribute(attrs[index]);
       },
       beforeEdit: remember,
-      sourceInput: () => { updateWorkingCopy(ui.getSource()); refreshHighlight(); invalidateFind(); },
-      visualInput: () => { updateWorkingCopy(); refreshHighlight(); invalidateFind(); },
-      sourceScroll: refreshHighlight,
+      sourceInput: () => refreshAfterEdit(ui.getSource()),
+      visualInput: () => refreshAfterEdit(),
       sourceDoubleClick: trimSourceWordSelection,
       visualDoubleClick: trimVisualWordSelection,
       visualClick: openVisualLink,
       highlightClick: openHighlightedLink,
-      pdfPageLabel: (pdfLabel) => {
+      pdfPageChange: ({ pageNumber, pageLabel }) => {
         const volume = currentVolume();
         if (!volume) return;
-        const page = htmlPageForPdfLabel(volume, pdfLabel);
-        if (page != null && page !== state.page) navigate(volume.id, page, false, pdfLabel);
+        const page = pageNumberFromPdfLabel(pageLabel);
+        if (page != null) navigate(volume.id, page, false, { pageNumber, pageLabel });
       },
       find: nextMatch,
       nextMatch,
       replace: replaceOne,
       replaceAll,
-      findChanged: invalidateFind,
+      findChanged: () => findAll(),
       keyDown: handleKeyDown,
       beforeUnload: (event) => {
-        if (!state.dirty) return;
+        if (!state.document.dirty) return;
         event.preventDefault();
         event.returnValue = "";
       }
@@ -789,5 +976,8 @@
     }
   }
 
+  window.addEventListener("focus", refreshLocalFile);
+  document.addEventListener("visibilitychange", refreshLocalFile);
+  setInterval(refreshLocalFile, 2000);
   init();
 })();

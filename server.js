@@ -1,5 +1,5 @@
 import http from "node:http";
-import { promises as fs } from "node:fs";
+import { promises as fs, watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +10,8 @@ const MEWDE = path.join(ROOT, "mewde.css");
 const PORT = getPort();
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const DEFAULT_CSS = `body { background: #fff; color: #1d2430; font-family: "Times New Roman", serif; line-height: 1.5; }\na { color: #1167b1; }\n`;
+const changeClients = new Set();
+const changeTimers = new Map();
 
 function argValue(names) {
   const args = process.argv.slice(2);
@@ -74,9 +76,40 @@ async function listDir(rel) {
     .map(e => ({ name: e.name, path: path.posix.join(rel || "", e.name), type: e.isDirectory() ? "dir" : "file" }));
 }
 
+function publishChange(event, filename) {
+  const rel = filename ? String(filename).replaceAll(path.sep, "/") : "";
+  const key = rel || "*";
+  const pending = changeTimers.get(key);
+  clearTimeout(pending?.timer);
+  // 同一路径的 rename 不能被随后到来的内容 change 覆盖。
+  if (pending?.event === "rename") event = "rename";
+  const timer = setTimeout(() => {
+    changeTimers.delete(key);
+    const message = `data: ${JSON.stringify({ event, path: rel })}\n\n`;
+    for (const client of changeClients) client.write(message);
+  }, 60);
+  changeTimers.set(key, { timer, event });
+}
+
+function openChangeStream(req, res) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    "connection": "keep-alive"
+  });
+  res.write(`data: ${JSON.stringify({ event: "ready", path: "" })}\n\n`);
+  changeClients.add(res);
+  const heartbeat = setInterval(() => res.write(": keep-alive\n\n"), 25000);
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    changeClients.delete(res);
+  });
+}
+
 async function api(req, res, url) {
   try {
     if (url.pathname === "/api/tree") return send(res, 200, { root: ROOT, entries: await listDir(url.searchParams.get("path") || "") });
+    if (url.pathname === "/api/events" && req.method === "GET") return openChangeStream(req, res);
     if (url.pathname === "/api/file") {
       const { full, rel } = insideRoot(url.searchParams.get("path") || "");
       const st = await fs.stat(full);
@@ -119,8 +152,12 @@ async function staticFile(res, pathname) {
   }
 }
 
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/raw/")) return api(req, res, url);
   staticFile(res, url.pathname);
-}).listen(PORT, () => console.log(`MEW HTML editor: http://localhost:${PORT}`));
+});
+
+const rootWatcher = watch(ROOT, { recursive: true }, publishChange);
+rootWatcher.on("error", error => console.error(`File watcher error: ${error.message}`));
+server.listen(PORT, () => console.log(`MEW HTML editor: http://localhost:${PORT}`));
