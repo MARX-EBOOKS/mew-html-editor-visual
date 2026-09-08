@@ -231,6 +231,16 @@ async function openFile(rel) {
 }
 async function openSiblingFile(direction) {
   if (!state.path) return note("Open a file first");
+  const current = doc();
+  if (current?.dirty) {
+    try {
+      await current.saveUntilClean();
+      markDirty();
+    } catch (error) {
+      note(`自动保存失败：${error.message}`);
+      return;
+    }
+  }
   const parts = state.path.split("/");
   const currentName = parts.pop();
   const dir = parts.join("/");
@@ -430,9 +440,11 @@ function blockId(element) {
 function buildTagBar() {
   $("tagBar").innerHTML = [
     ...tags.map((tag, i) => `<button class="tag" data-i="${i}" title="${esc(tag.title)}">${esc(tag.label)}</button>`),
+    '<span class="spacer"></span>',
     ...attrs.map((attr, i) => `<button class="tag attrTag" data-attr="${i}" title="${esc(attr.title)}">${esc(attr.label)}</button>`),
-    '<button class="tag attrTag" data-nav="-1" title="Open previous file in folder">←</button>',
-    '<button class="tag attrTag" data-nav="1" title="Open next file in folder">→</button>'
+    '<span class="spacer"></span>',
+    '<button id="tagPrevFileBtn" class="tag attrTag tagFileNav" data-nav="-1" title="上一文件；切换前自动保存">←</button>',
+    '<button id="tagNextFileBtn" class="tag attrTag tagFileNav" data-nav="1" title="下一文件；切换前自动保存">→</button>'
   ].join("");
   $("tagBar").onclick = e => {
     const tag = e.target.closest("button[data-i]");
@@ -562,9 +574,74 @@ function closeMenus(except) {
 
 // Each opened file owns one Monaco model and view state. The workbench's tree,
 // tabs, preview and commands all address this same document registry.
+function languageForPath(path) {
+  const name = String(path).replaceAll("\\", "/").split("/").pop().toLowerCase();
+  const languages = monaco.languages.getLanguages();
+  const named = languages.find(language => language.filenames?.some(filename => filename.toLowerCase() === name));
+  if (named) return named.id;
+  let match = null;
+  for (const language of languages) {
+    for (const extension of language.extensions || []) {
+      const suffix = extension.toLowerCase();
+      if (name.endsWith(suffix) && (!match || suffix.length > match.suffix.length)) match = { id: language.id, suffix };
+    }
+  }
+  return match?.id || "plaintext";
+}
+function languageLabel(id) {
+  const language = monaco.languages.getLanguages().find(item => item.id === id);
+  return language?.aliases?.[0] || id;
+}
+function registerHtmlStyleColorProvider(api) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const cssRegions = text => {
+    const regions = [];
+    for (const match of text.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi)) {
+      regions.push({ start: match.index + match[0].indexOf(match[1]), text: match[1] });
+    }
+    for (const tag of text.matchAll(/<(?!style\b|\/|!)[^>]+>/gi)) {
+      for (const attr of tag[0].matchAll(/\bstyle\s*=\s*(["'])([\s\S]*?)\1/gi)) {
+        regions.push({ start: tag.index + attr.index + attr[0].indexOf(attr[2]), text: attr[2] });
+      }
+    }
+    return regions;
+  };
+  const parse = value => {
+    if (!context || !CSS.supports("color", value)) return null;
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = "rgba(0, 0, 0, 0)";
+    context.fillStyle = value;
+    context.fillRect(0, 0, 1, 1);
+    const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+    return { red: red / 255, green: green / 255, blue: blue / 255, alpha: alpha / 255 };
+  };
+  const colorPattern = /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})\b|(?:rgba?|hsla?)\([^)]*\)/gi;
+  api.languages.registerColorProvider("html", {
+    provideDocumentColors(model) {
+      const text = model.getValue(), colors = [];
+      for (const region of cssRegions(text)) {
+        for (const match of region.text.matchAll(colorPattern)) {
+          const color = parse(match[0]);
+          if (!color) continue;
+          const start = region.start + match.index;
+          colors.push({ color, range: api.Range.fromPositions(model.getPositionAt(start), model.getPositionAt(start + match[0].length)) });
+        }
+      }
+      return colors;
+    },
+    provideColorPresentations(_model, { color, range }) {
+      const bytes = [color.red, color.green, color.blue, color.alpha].map(value => Math.round(value * 255));
+      const hex = bytes.slice(0, bytes[3] === 255 ? 3 : 4).map(value => value.toString(16).padStart(2, "0")).join("");
+      const label = `#${hex}`;
+      return [{ label, textEdit: { range, text: label } }];
+    }
+  });
+}
 function modelFor(d) {
   if (!d.model) {
-    d.model = monaco.editor.createModel(d.content, 'html', monaco.Uri.from({ scheme: 'mew', path: '/' + d.path }));
+    d.model = monaco.editor.createModel(d.content, languageForPath(d.path), monaco.Uri.from({ scheme: 'mew', path: '/' + d.path }));
     d.listener = d.model.onDidChangeContent(() => {
       d.content = d.textFromEditor(d.model.getValue());
       if (d === doc()) { markDirty(true); scheduleEditorRefresh(); }
@@ -585,6 +662,11 @@ function saveEditorView() {
 function markDirty() {
   const d = doc();
   $('fileName').textContent = d ? d.path + (d.dirty ? ' *' : '') : 'No file open';
+  const tagTitle = $('tagPanelTitle');
+  tagTitle.textContent = d ? `标签 · ${fileLabel(d.path)}` : '标签';
+  tagTitle.title = d?.path || '';
+  $('tagPrevFileBtn').disabled = !d;
+  $('tagNextFileBtn').disabled = !d;
   renderTabs();
 }
 function renderTabs() {
@@ -604,7 +686,13 @@ function switchDoc(path) {
   if (!d) return;
   state.path = path;
   editor.setModel(modelFor(d));
-  editor.updateOptions({ readOnly: !d.editable });
+  const language = d.model.getLanguageId();
+  editor.updateOptions({
+    readOnly: !d.editable,
+    colorDecorators: ["html", "css", "scss", "less"].includes(language),
+    defaultColorDecorators: language === "html" ? "never" : "auto"
+  });
+  $('languageInfo').textContent = `${languageLabel(language)} · UTF-8`;
   if (d.viewState) editor.restoreViewState(d.viewState);
   setActiveTreePath(path); markDirty(); refreshPreview(); editor.focus();
 }
@@ -651,6 +739,16 @@ function insertAttr(attr) {
 }
 function undo() { editor.trigger('mew', 'undo'); editor.focus(); }
 function redo() { editor.trigger('mew', 'redo'); editor.focus(); }
+function toggleFindReplace() {
+  if (!editor) return;
+  const findWidget = editor.getDomNode()?.querySelector('.find-widget');
+  if (findWidget?.classList.contains('visible')) {
+    editor.trigger('mew', 'closeFindWidget');
+    return;
+  }
+  editor.focus();
+  editor.getAction('editor.action.startFindReplaceAction')?.run();
+}
 function askClose(d) {
   $('closeMessage').textContent = `${d.path} 有未保存的修改，是否保存？`;
   const dialog = $('closeDialog');
@@ -739,6 +837,7 @@ function setDark(on) {
 
 function initialize(api) {
   monaco = api;
+  registerHtmlStyleColorProvider(monaco);
   editor = monaco.editor.create($('monacoEditor'), {
     model: null, automaticLayout: true, fontFamily: 'Consolas, "Cascadia Mono", monospace',
     fontSize: 14, lineHeight: 21, tabSize: 2, wordWrap: 'on', minimap: { enabled: false },
@@ -749,11 +848,6 @@ function initialize(api) {
   editor.onDidChangeCursorPosition(event => {
     $('positionInfo').textContent = `Ln ${event.position.lineNumber}, Col ${event.position.column}`;
   });
-  // Monaco 0.55.1 schedules this tooltip on mouseover. Keep the close target
-  // unobstructed without disabling editor hovers or changing its click handler.
-  $('monacoEditor').addEventListener('mouseover', event => {
-    if (event.target.closest('.find-widget .codicon-widget-close')) event.stopPropagation();
-  }, true);
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, save);
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyS, saveAll);
   // Capture only tag shortcuts. Monaco handles typing, IME, undo and find itself.
@@ -775,7 +869,7 @@ function initialize(api) {
   buildTagBar(); setupTagPanel();
   $('saveBtn').onclick = save; $('saveAllBtn').onclick = saveAll;
   $('undoBtn').onclick = undo; $('redoBtn').onclick = redo;
-  $('findBtn').onclick = () => { editor.focus(); editor.getAction('editor.action.startFindReplaceAction').run(); };
+  $('findBtn').onclick = toggleFindReplace;
   $('prevFileBtn').onclick = () => openSiblingFile(-1); $('nextFileBtn').onclick = () => openSiblingFile(1);
   $('newWinBtn').onclick = openFileWindow; $('closeSavedBtn').onclick = () => closeAll(true); $('closeAllBtn').onclick = () => closeAll();
   $('darkBtn').onclick = () => setDark(!document.body.classList.contains('dark'));

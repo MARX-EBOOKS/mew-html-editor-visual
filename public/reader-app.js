@@ -133,23 +133,18 @@
     refresh() {
       return this.enqueue(async () => {
         const data = await this.read();
-        if (data.text === this.savedContent) {
-          this.mtime = data.mtime;
-          return "unchanged";
+        const result = data.text === this.savedContent ? "unchanged"
+          : data.text === this.content ? "saved" : "updated";
+        if (result === "updated") {
+          if (this.dirty) return "conflict";
+          this.reloadRevision += 1;
+          this.update(data.text);
+          this.undoStack = [];
+          this.redoStack = [];
         }
-        if (data.text === this.content) {
-          this.savedContent = data.text;
-          this.mtime = data.mtime;
-          return "saved";
-        }
-        if (this.dirty) return "conflict";
-        this.reloadRevision += 1;
-        this.update(data.text);
         this.savedContent = data.text;
         this.mtime = data.mtime;
-        this.undoStack = [];
-        this.redoStack = [];
-        return "updated";
+        return result;
       });
     }
   }
@@ -164,14 +159,8 @@
     page: null,
     document: new DocumentModel({ editable: false }),
     mode: "source",
-    matches: [],
-    match: -1,
     navigationRevision: 0
   };
-
-  function escapeHtml(value) {
-    return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
-  }
 
   async function api(url, options) {
     const response = await fetch(url, options);
@@ -193,19 +182,12 @@
     return active;
   }
 
-  function pagePositionText() {
-    const volume = currentVolume();
-    if (!volume || state.page == null) return "";
-    const index = volume.pages.indexOf(state.page);
-    return `第 ${state.page} 页 · ${index + 1} / ${volume.pages.length}${state.document.dirty ? " *" : ""}`;
-  }
-
   function markDirty() {
-    ui.setDirty(state.document.dirty, pagePositionText());
+    ui.setDirty(state.document.dirty);
   }
 
   function updateHistoryButtons() {
-    ui.setHistoryButtons(Boolean(state.document.undoStack.length), Boolean(state.document.redoStack.length));
+    ui.setHistoryButtons(ui.canUndo(), ui.canRedo());
   }
 
   function sourceFromVisual() {
@@ -226,47 +208,25 @@
   }
 
   function updateWorkingCopy(source = currentSource()) {
-    if (state.mode === "source") source = state.document.textFromEditor(source);
+    source = state.document.textFromEditor(source);
     state.document.update(source);
-    if (state.mode === "visual") ui.setSource(source);
+    if (state.mode === "visual") ui.setSource(source, true);
     markDirty();
+    updateHistoryButtons();
     return source;
   }
 
-  function currentSnapshot() {
-    const selection = ui.getSourceSelection();
+  function restoreHistory(method, action) {
     const visual = ui.getVisualDocument();
     const scroll = state.mode === "visual"
       ? { top: visual?.scrollingElement?.scrollTop || 0, left: visual?.scrollingElement?.scrollLeft || 0 }
-      : ui.sourceScroll();
-    return { text: currentSource(), ...selection, scroll };
-  }
-
-  function remember() {
-    if (state.page == null) return;
-    state.document.remember(currentSnapshot());
+      : null;
+    ui[`${method}Source`]();
+    state.document.update(state.document.textFromEditor(ui.getSource()));
+    markDirty();
     updateHistoryButtons();
-  }
-
-  function applySnapshot(snapshot) {
-    updateWorkingCopy(snapshot.text);
-    if (state.mode === "source") {
-      ui.setSource(snapshot.text);
-      ui.setSourceSelection(Math.min(snapshot.start, snapshot.text.length), Math.min(snapshot.end, snapshot.text.length));
-      ui.setSourceScroll(snapshot.scroll);
-      ui.focusSource();
-      refreshHighlight();
-    } else {
-      renderVisual(snapshot.scroll);
-    }
-    findAll();
-    updateHistoryButtons();
-  }
-
-  function restoreHistory(method, action) {
-    const snapshot = state.document[method](currentSnapshot());
-    if (!snapshot) return ui.notify(`没有可${action}的操作`);
-    applySnapshot(snapshot);
+    if (state.mode === "visual") renderVisual(scroll);
+    else ui.focusSource();
     ui.notify(`已${action}`);
   }
 
@@ -294,10 +254,11 @@
     if (next === "source") {
       ui.setSource(state.document.content);
       if (resetSourceScroll) ui.setSourceScroll({ top: 0, left: 0 });
-      refreshHighlight();
+      ui.focusSource();
     } else {
       renderVisual();
     }
+    updateHistoryButtons();
     syncUrl();
   }
 
@@ -342,7 +303,8 @@
       chapterTitle: chapter?.title || volume.title,
       chapterPage: chapter?.page,
       pageContext: `${volume.shortTitle} · 第 ${state.page} 页`,
-      pagePosition: pagePositionText(),
+      pageTotal: volume.pages.length,
+      pageIndex: index + 1,
       page: state.page,
       volume: state.volume,
       hasPrevious: index > 0,
@@ -381,9 +343,8 @@
       state.volume = volume.id;
       state.page = page;
       state.document = document;
-      state.matches = [];
-      state.match = -1;
-      updateHistoryButtons();
+      ui.setSourceEditable(document.editable);
+      ui.setSource(document.content);
       markDirty();
       if (volumeChanged) ui.renderToc(volume.shortTitle, volume.toc);
       setMode(state.mode, { resetSourceScroll: true });
@@ -429,8 +390,10 @@
       if (current !== state.document) return;
       if (result === "conflict") ui.notify("文件已在外部修改；本地未保存内容已保留，请保存副本后重新载入", true);
       else if (result === "updated") {
-        const snapshot = currentSnapshot();
-        applySnapshot({ ...snapshot, text: current.content });
+        ui.setSource(current.content);
+        if (state.mode === "visual") renderVisual();
+        markDirty();
+        updateHistoryButtons();
         ui.notify("已从本地文件刷新");
       } else if (result === "saved") markDirty();
     } catch (error) {
@@ -438,71 +401,8 @@
     } finally { refreshing = false; }
   }
 
-  function attrToken(raw, value) {
-    const link = raw.match(/^\s*href\s*=\s*(["'])([\s\S]*?)\1$/i);
-    if (link) return `<span class="tok-string">${escapeHtml(link[1])}</span><span class="tok-link" data-href="${escapeHtml(link[2])}" title="Ctrl+click to open">${escapeHtml(link[2])}</span><span class="tok-string">${escapeHtml(link[1])}</span>`;
-    return `<span class="tok-string">${escapeHtml(value)}</span>`;
-  }
-
-  function colorTag(raw) {
-    if (raw.startsWith("<!--")) return `<span class="tok-comment">${escapeHtml(raw)}</span>`;
-    let result = "", last = 0;
-    const pattern = /(<\/?)([A-Za-z][\w:-]*)|([\w:-]+)(\s*=\s*)("[^"]*"|'[^']*')/g;
-    for (let match; (match = pattern.exec(raw));) {
-      result += escapeHtml(raw.slice(last, match.index));
-      if (match[1]) result += `${escapeHtml(match[1])}<span class="tok-tag">${escapeHtml(match[2])}</span>`;
-      else result += `<span class="tok-attr">${escapeHtml(match[3])}</span>${escapeHtml(match[4])}${attrToken(match[0], match[5])}`;
-      last = match.index + match[0].length;
-    }
-    return result + escapeHtml(raw.slice(last));
-  }
-
-  function colorHtml(text) {
-    let result = "", last = 0;
-    const pattern = /<!--[\s\S]*?-->|<\/?[A-Za-z][^>]*?>/g;
-    for (let match; (match = pattern.exec(text));) {
-      result += escapeHtml(text.slice(last, match.index)) + colorTag(match[0]);
-      last = match.index + match[0].length;
-    }
-    return result + escapeHtml(text.slice(last)) + (text.endsWith("\n") ? " " : "");
-  }
-
-  function refreshHighlight() {
-    ui.updateHighlight(colorHtml(ui.getSource()));
-  }
-
   function refreshAfterEdit(source = currentSource()) {
     updateWorkingCopy(source);
-    refreshHighlight();
-    findAll();
-  }
-
-  function gotoAnchor(fragment) {
-    const id = decodeURIComponent(fragment.slice(1));
-    if (!id) return false;
-    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = new RegExp(`\\bid\\s*=\\s*(["'])${escaped}\\1`, "i").exec(ui.getSource());
-    if (!match) return false;
-    const start = match.index + match[0].lastIndexOf(id);
-    ui.focusSource();
-    ui.setSourceSelection(start, start + id.length);
-    ui.scrollSourceSelectionIntoView(start);
-    ui.notify(`已跳转到 ${fragment}`);
-    return true;
-  }
-
-  function openHighlightedLink(event) {
-    if (!(event.ctrlKey || event.metaKey)) return;
-    const link = event.target.closest(".tok-link[data-href]");
-    if (!link) return;
-    event.preventDefault();
-    const href = link.dataset.href;
-    if (href.startsWith("#")) {
-      if (!gotoAnchor(href)) ui.notify(`未找到锚点：${href}`);
-      return;
-    }
-    const base = `/api/reader/resource/${encodeURIComponent(state.volume)}/`;
-    window.open(new URL(href, location.origin + base).href, "_blank", "noopener");
   }
 
   function openVisualLink(event, doc) {
@@ -559,27 +459,11 @@
     selection.addRange(range);
   }
 
-  function trimSourceWordSelection() {
-    const text = ui.getSource();
-    let { start, end } = ui.getSourceSelection();
-    if (start === end) return;
-    while (start < end && /\s/.test(text[start])) start += 1;
-    while (end > start && /\s/.test(text[end - 1])) end -= 1;
-    ui.setSourceSelection(start, end);
-  }
-
-  function tagInfo(open) {
-    const match = String(open).match(/^<([a-z][\w:-]*)([^>]*)>/i);
-    if (!match) return null;
-    const name = match[1].toLowerCase();
-    const align = match[2].match(/\balign\s*=\s*["']?([^"'\s>]+)/i)?.[1]?.toLowerCase() || "";
-    return { name, kind: name === "p" && align ? `p:${align}` : name, block: blockTagNames.has(name) };
-  }
-
   function elementTagInfo(element) {
+    if (!element) return null;
     const name = element.tagName.toLowerCase();
     const align = (element.getAttribute("align") || "").toLowerCase();
-    return { name, kind: name === "p" && align ? `p:${align}` : name };
+    return { name, kind: name === "p" && align ? `p:${align}` : name, block: blockTagNames.has(name) };
   }
 
   function buildTagEdit(text, start, end, tag) {
@@ -659,16 +543,15 @@
   }
 
   function isCompleteSelection(text, elements, start, end) {
+    // Each opening token has one pair: index it once instead of rescanning per sibling.
+    const byStart = new Map(elements.map(element => [element.start, element]));
     let cursor = start, found = false;
-    while (cursor < end && /\s/.test(text[cursor])) cursor += 1;
     while (cursor < end) {
-      const outer = elements
-        .filter((element) => element.start === cursor && element.end <= end)
-        .reduce((root, element) => !root || element.end > root.end ? element : root, undefined);
-      if (!outer) return false;
+      if (/\s/.test(text[cursor])) { cursor += 1; continue; }
+      const outer = byStart.get(cursor);
+      if (!outer || outer.end > end) return false;
       found = true;
       cursor = outer.end;
-      while (cursor < end && /\s/.test(text[cursor])) cursor += 1;
     }
     return found;
   }
@@ -720,14 +603,7 @@
     selection.addRange(range);
   }
 
-  function unwrapVisual(element, doc) {
-    const parent = element.parentNode;
-    const first = element.firstChild, last = element.lastChild;
-    if (!parent) return;
-    while (element.firstChild) parent.insertBefore(element.firstChild, element);
-    element.remove();
-    selectVisualNodes(first, last, doc);
-  }
+
 
   function selectVisualNodes(first, last, doc) {
     if (!first || !last) return;
@@ -739,38 +615,32 @@
     selection.addRange(range);
   }
 
-  function replaceVisual(element, open, doc) {
-    const template = doc.createElement("template");
-    template.innerHTML = open;
-    const replacement = template.content.firstElementChild;
-    if (!replacement) return;
-    while (element.firstChild) replacement.append(element.firstChild);
-    element.replaceWith(replacement);
-    selectVisualContents(replacement, doc);
-  }
+
 
   function insertVisual(tag) {
     const doc = ui.getVisualDocument();
     if (!doc?.body || !state.document.editable) return;
-    remember();
-    const info = tagInfo(tag.open);
+    const template = doc.createElement("template");
+    template.innerHTML = tag.open;
+    const info = elementTagInfo(template.content.firstElementChild);
     const selection = doc.getSelection();
     const anchor = selection?.anchorNode?.nodeType === doc.defaultView.Node.ELEMENT_NODE
       ? selection.anchorNode : selection?.anchorNode?.parentElement;
     const container = info && anchor?.closest?.(info.block ? blockSelector : info.name);
     let action = "已插入";
     if (container && doc.body.contains(container)) {
-      if (elementTagInfo(container).kind === info.kind) {
-        unwrapVisual(container, doc);
-        action = "已移除";
-      } else {
-        replaceVisual(container, tag.open, doc);
-        action = "已替换";
-      }
+      const remove = elementTagInfo(container).kind === info.kind;
+      const replacement = remove ? doc.createDocumentFragment() : template.content.firstElementChild;
+      if (!replacement) return;
+      const first = container.firstChild, last = container.lastChild;
+      replacement.append(...container.childNodes);
+      container.replaceWith(replacement);
+      if (remove) selectVisualNodes(first, last, doc);
+      else selectVisualContents(replacement, doc);
+      action = remove ? "已移除" : "已替换";
     } else {
       const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
       if (!range) return;
-      const template = doc.createElement("template");
       const holder = doc.createElement("div");
       holder.append(range.cloneContents());
       template.innerHTML = tag.open + holder.innerHTML + tag.close;
@@ -781,7 +651,6 @@
       selectVisualNodes(inserted[0], inserted.at(-1), doc);
     }
     updateWorkingCopy();
-    findAll();
     doc.body.focus();
     return action;
   }
@@ -805,7 +674,6 @@
   }
 
   function applySourceEdit(text, start, end, selectStart, selectEnd = selectStart) {
-    remember();
     ui.replaceSourceRange(text, start, end, "select");
     ui.setSourceSelection(selectStart, selectEnd);
     refreshAfterEdit(ui.getSource());
@@ -817,64 +685,10 @@
     if (action) ui.notify(`${action} ${tag.label}`);
   }
 
-  function compileFindPattern() {
-    const options = ui.findOptions();
-    if (!options.query) return null;
-    const source = options.regex ? options.query : options.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return { pattern: new RegExp(source, `g${options.caseSensitive ? "" : "i"}`), options };
-  }
-
-  function findAll(reset = true) {
-    if (reset) state.match = -1;
-    state.matches = [];
-    try {
-      const compiled = compileFindPattern();
-      if (!compiled) {
-        ui.setFindInfo("");
-        return;
-      }
-      state.matches = Array.from(ui.getSource().matchAll(compiled.pattern),
-        (match) => [match.index, match.index + match[0].length]);
-      ui.setFindInfo(`${state.matches.length} 处`);
-    } catch (error) {
-      ui.setFindInfo(error.message);
-    }
-  }
-
-  function nextMatch() {
-    if (!state.matches.length) findAll(false);
-    if (!state.matches.length) return;
-    state.match = (state.match + 1) % state.matches.length;
-    const [start, end] = state.matches[state.match];
+  function toggleFind() {
+    if (state.mode !== "source") setMode("source");
     ui.focusSource();
-    ui.setSourceSelection(start, end);
-    ui.scrollSourceSelectionIntoView(start);
-    ui.setFindInfo(`${state.match + 1}/${state.matches.length}`);
-  }
-
-  function replaceOne() {
-    if (state.match < 0 || !state.matches[state.match]) nextMatch();
-    if (state.match < 0 || !state.matches[state.match]) return;
-    const [start, end] = state.matches[state.match];
-    remember();
-    ui.replaceSourceRange(ui.findOptions().replacement, start, end, "end");
-    refreshAfterEdit(ui.getSource());
-  }
-
-  function replaceAll() {
-    try {
-      const compiled = compileFindPattern();
-      if (!compiled) return;
-      remember();
-      const replacement = compiled.options.replacement;
-      const replaced = compiled.options.regex
-        ? ui.getSource().replace(compiled.pattern, replacement)
-        : ui.getSource().replace(compiled.pattern, () => replacement);
-      ui.setSource(replaced);
-      refreshAfterEdit(replaced);
-    } catch (error) {
-      ui.setFindInfo(error.message);
-    }
+    ui.toggleFind(true);
   }
 
   function adjacent(direction) {
@@ -886,14 +700,18 @@
   function handleKeyDown(event) {
     const key = event.key.toLowerCase();
     const command = event.ctrlKey || event.metaKey;
-    const formField = event.target.matches?.("input, textarea:not(#editor), select");
-    ui.setSourceLinkMode(command);
+    const formField = event.target.matches?.("input, textarea, select");
     if (command && key === "s") {
       event.preventDefault();
       save();
       return;
     }
-    if (command && !formField && (key === "z" || key === "y")) {
+    if (command && (key === "f" || key === "h") && state.mode !== "source") {
+      event.preventDefault();
+      toggleFind();
+      return;
+    }
+    if (command && !formField && !ui.hasSourceTextFocus() && (key === "z" || key === "y")) {
       event.preventDefault();
       key === "y" || event.shiftKey ? redo() : undo();
       return;
@@ -913,7 +731,7 @@
       }
       return;
     }
-    const editableTarget = event.target.matches?.("textarea,[contenteditable]") || event.target.isContentEditable;
+    const editableTarget = event.target.matches?.("textarea,[contenteditable]") || event.target.isContentEditable || event.target.closest?.(".monaco-editor");
     if (!editableTarget && (event.key === "ArrowLeft" || event.key === "ArrowRight")) adjacent(event.key === "ArrowLeft" ? -1 : 1);
   }
 
@@ -931,24 +749,23 @@
         if (state.mode === "visual") return ui.notify("属性按钮请在源代码模式使用");
         insertSourceAttribute(attrs[index]);
       },
-      beforeEdit: remember,
       sourceInput: () => refreshAfterEdit(ui.getSource()),
       visualInput: () => refreshAfterEdit(),
-      sourceDoubleClick: trimSourceWordSelection,
       visualDoubleClick: trimVisualWordSelection,
       visualClick: openVisualLink,
-      highlightClick: openHighlightedLink,
       pdfPageChange: ({ pageNumber, pageLabel }) => {
+        updateWorkingCopy();
+        if (state.document.dirty) {
+          ui.notify("网页有未保存修改；PDF 滚动不会自动切换网页");
+          return;
+        }
         const volume = currentVolume();
         if (!volume) return;
         const page = pageNumberFromPdfLabel(pageLabel);
         if (page != null) navigate(volume.id, page, false, { pageNumber, pageLabel });
       },
-      find: nextMatch,
-      nextMatch,
-      replace: replaceOne,
-      replaceAll,
-      findChanged: () => findAll(),
+      find: toggleFind,
+      historyChanged: updateHistoryButtons,
       keyDown: handleKeyDown,
       beforeUnload: (event) => {
         if (!state.document.dirty) return;
@@ -956,9 +773,15 @@
         event.returnValue = "";
       }
     });
-    ui.renderTools(tags, attrs);
-    updateHistoryButtons();
     try {
+      if (typeof require !== "function") throw new Error("Monaco 加载器未载入");
+      const monaco = await new Promise((resolve, reject) => {
+        require.config({ paths: { vs: "/monaco/min/vs" } });
+        require(["vs/editor/editor.main"], resolve, reject);
+      });
+      ui.initMonaco(monaco);
+      ui.renderTools(tags, attrs);
+      updateHistoryButtons();
       state.config = await api("/api/reader/config");
       const params = new URLSearchParams(location.search);
       const requestedMode = params.get("mode");
@@ -969,7 +792,7 @@
       await navigate(firstVolume.id, Number(params.get("page")) || firstVolume.pages[0], true);
     } catch (error) {
       ui.renderNavigation({
-        chapterTitle: "载入失败", chapterPage: null, pageContext: "", pagePosition: "",
+        chapterTitle: "载入失败", chapterPage: null, pageContext: "", pageTotal: "", pageIndex: "",
         page: "", volume: "", hasPrevious: false, hasNext: false, editable: false
       });
       ui.notify(error.message, true);

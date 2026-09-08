@@ -21,6 +21,8 @@
       <button id="gitConfigBtn" hidden title="Change Git provider or repository">切换仓库</button>
         <button id="undoBtn" title="Undo last edit">Undo</button>
         <button id="redoBtn" title="Redo last undone edit">Redo</button>
+        <button id="treePaneToggle" type="button" aria-pressed="true">隐藏文件树</button>
+        <button id="previewPaneToggle" type="button" aria-pressed="true">隐藏预览</button>
       </div>
     </details>
     <button id="findBtn" title="查找 / 替换（Ctrl+F / Ctrl+H）">查找 / 替换</button>
@@ -52,7 +54,7 @@
       <div id="tabs" class="tabs" aria-label="Open files"></div>
       <div id="tagPanel" class="tagPanel dock-top">
         <div id="tagPanelGrip" class="tagPanelGrip" title="拖动标签栏悬浮">
-          <strong>标签</strong>
+          <strong id="tagPanelTitle">标签</strong>
           <span class="tagPanelActions">
             <button type="button" id="toolbarSmaller" title="缩小标签按钮" aria-label="缩小标签按钮">−</button>
             <button type="button" id="toolbarReset" title="恢复默认按钮尺寸">100%</button>
@@ -76,7 +78,7 @@
       <iframe id="preview" sandbox="allow-scripts" hidden></iframe>
     </section>
   </main>
-  <footer class="statusbar"><span id="status" role="status"></span><span id="positionInfo"></span><span>HTML · UTF-8</span><button id="layoutReset" type="button" title="恢复面板宽度和按钮尺寸">重置布局</button></footer>
+  <footer class="statusbar"><span id="status" role="status"></span><span id="positionInfo"></span><span id="languageInfo">纯文本 · UTF-8</span><button id="layoutReset" type="button" title="恢复面板宽度和按钮尺寸">重置布局</button></footer>
   <dialog id="closeDialog" aria-labelledby="closeMessage">
     <form method="dialog">
       <p id="closeMessage"></p>

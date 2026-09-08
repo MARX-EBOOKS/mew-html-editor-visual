@@ -5,11 +5,13 @@
   const body = document.body;
   const grid = document.querySelector(".reader-grid");
   const scanPane = document.querySelector(".scan-pane");
-  const sourceEditor = byId("editor");
+  const monacoHost = byId("monacoEditor");
   const visualFrame = byId("visualEditor");
   const pdfFrame = byId("pdfFrame");
   const listeners = {};
   let initialized = false;
+  let monacoApi = null, sourceEditor = null, sourceModel = null;
+  let editorScale = 1;
   let statusTimer = null;
   let pendingPdfOptions = null;
   let pdfRuntimePromise = null, pdfViewer = null, pdfLinkService = null, pdfLoadingTask = null;
@@ -17,7 +19,7 @@
   const PDF_SETTINGS_KEY = "readerPdfSettings.v1";
   const PDF_DEFAULTS = { brightness: 100, paper: "#ffffff", ink: "#000000", invert: false, horizontal: false, scale: "page-width" };
   let pdfSettings = { ...PDF_DEFAULTS };
-  const PDF_DIRECT_HTML = `<svg aria-hidden="true" width="0" height="0"><filter id="scanColorFilter" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR id="filterR" type="table" tableValues="0 1"/><feFuncG id="filterG" type="table" tableValues="0 1"/><feFuncB id="filterB" type="table" tableValues="0 1"/></feComponentTransfer></filter></svg><div class="pdf-tools"><div class="pdf-group"><button id="direction" type="button">左右翻页</button><button id="settings" type="button">显示设置</button></div><div class="pdf-group pdf-zoom"><button id="zoomOut" type="button">−</button><button id="zoomFit" type="button">适合页宽</button><button id="zoomIn" type="button">＋</button></div><button id="full" type="button">全屏</button></div><div id="stage"><div id="viewer" class="pdfViewer"></div><p id="missing">正在载入 PDF…</p></div><dialog id="settingsDialog"><form method="dialog"><header><strong>扫描件显示设置</strong><button value="close">×</button></header><label>亮度 <output id="brightnessValue"></output><input id="brightness" type="range" min="50" max="160"></label><label>背景色 <input id="paper" type="color"></label><label>文字色 <input id="ink" type="color"></label><label class="toggle"><input id="invert" type="checkbox">反色</label><footer><button id="reset" type="button">恢复默认</button><button value="close">完成</button></footer></form></dialog>`;
+  const PDF_DIRECT_HTML = `<svg aria-hidden="true" width="0" height="0"><filter id="scanColorFilter" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR id="filterR" type="table" tableValues="0 1"/><feFuncG id="filterG" type="table" tableValues="0 1"/><feFuncB id="filterB" type="table" tableValues="0 1"/></feComponentTransfer></filter></svg><div class="pdf-tools"><div class="pdf-group"><button id="direction" type="button">左右翻页</button><button id="settings" type="button">显示设置</button></div><div class="pdf-group pdf-zoom"><button id="zoomOut" type="button" aria-label="缩小 PDF">−</button><input id="zoomValue" type="text" inputmode="decimal" maxlength="8" value="页宽" aria-label="PDF 缩放比例" title="输入 25%–1000% 并按回车；输入“页宽”恢复适合页宽"><button id="zoomIn" type="button" aria-label="放大 PDF">＋</button></div><button id="full" type="button">全屏</button></div><div id="stage"><div id="viewer" class="pdfViewer"></div><p id="missing">正在载入 PDF…</p></div><dialog id="settingsDialog"><form method="dialog"><header><strong>扫描件显示设置</strong><button value="close">×</button></header><label>亮度 <output id="brightnessValue"></output><input id="brightness" type="range" min="50" max="160"></label><label>背景色 <input id="paper" type="color"></label><label>文字色 <input id="ink" type="color"></label><label class="toggle"><input id="invert" type="checkbox">反色</label><footer><button id="reset" type="button">恢复默认</button><button value="close">完成</button></footer></form></dialog>`;
 
   function emit(name, ...args) {
     return listeners[name]?.(...args);
@@ -37,7 +39,99 @@
     localStorage.setItem("readerDark", dark ? "1" : "0");
     const button = byId("darkBtn");
     if (button) button.textContent = dark ? "浅色" : "深色";
+    if (monacoApi) monacoApi.editor.setTheme(dark ? "reader-dark" : "reader-light");
     applyVisualTheme();
+  }
+
+  function registerHtmlStyleColorProvider(api) {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const cssRegions = text => {
+      const regions = [];
+      for (const match of text.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi)) {
+        regions.push({ start: match.index + match[0].indexOf(match[1]), text: match[1] });
+      }
+      for (const tag of text.matchAll(/<(?!style\b|\/|!)[^>]+>/gi)) {
+        for (const attr of tag[0].matchAll(/\bstyle\s*=\s*(["'])([\s\S]*?)\1/gi)) {
+          regions.push({ start: tag.index + attr.index + attr[0].indexOf(attr[2]), text: attr[2] });
+        }
+      }
+      return regions;
+    };
+    const parse = value => {
+      if (!context || !CSS.supports("color", value)) return null;
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = "rgba(0, 0, 0, 0)";
+      context.fillStyle = value;
+      context.fillRect(0, 0, 1, 1);
+      const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+      return { red: red / 255, green: green / 255, blue: blue / 255, alpha: alpha / 255 };
+    };
+    const colorPattern = /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})\b|(?:rgba?|hsla?)\([^)]*\)/gi;
+    api.languages.registerColorProvider("html", {
+      provideDocumentColors(model) {
+        const text = model.getValue(), colors = [];
+        for (const region of cssRegions(text)) {
+          for (const match of region.text.matchAll(colorPattern)) {
+            const color = parse(match[0]);
+            if (!color) continue;
+            const start = region.start + match.index;
+            colors.push({ color, range: api.Range.fromPositions(model.getPositionAt(start), model.getPositionAt(start + match[0].length)) });
+          }
+        }
+        return colors;
+      },
+      provideColorPresentations(_model, { color, range }) {
+        const bytes = [color.red, color.green, color.blue, color.alpha].map(value => Math.round(value * 255));
+        const hex = bytes.slice(0, bytes[3] === 255 ? 3 : 4).map(value => value.toString(16).padStart(2, "0")).join("");
+        const label = `#${hex}`;
+        return [{ label, textEdit: { range, text: label } }];
+      }
+    });
+  }
+
+  function initMonaco(api) {
+    if (sourceEditor) return sourceEditor;
+    monacoApi = api;
+    registerHtmlStyleColorProvider(monacoApi);
+    const themes = [
+      ["reader-light", "vs", { bg: "#fbfcfe", ink: "#27231f", selection: "#add6ff80", muted: "#716b64", panel: "#ffffff", line: "#d9d2c8" }],
+      ["reader-dark", "vs-dark", { bg: "#1e1e1e", ink: "#eeeeee", selection: "#264f78", muted: "#aaaaaa", panel: "#242424", line: "#444444" }]
+    ];
+    for (const [name, base, color] of themes) {
+      monacoApi.editor.defineTheme(name, {
+        base, inherit: true, rules: [],
+        colors: {
+          "editor.background": color.bg, "editor.foreground": color.ink,
+          "editor.selectionBackground": color.selection, "editorLineNumber.foreground": color.muted,
+          "editorWidget.background": color.panel, "editorWidget.border": color.line,
+          "input.background": color.panel, "input.foreground": color.ink,
+          "editorCursor.foreground": color.ink
+        }
+      });
+    }
+    sourceModel = monacoApi.editor.createModel("", "html", monacoApi.Uri.parse("mew-reader:///page.html"));
+    sourceEditor = monacoApi.editor.create(monacoHost, {
+      model: sourceModel, automaticLayout: true, fontFamily: 'Consolas, "Cascadia Mono", monospace',
+      fontSize: 14 * editorScale, lineHeight: Math.round(22 * editorScale), tabSize: 2, wordWrap: "on", minimap: { enabled: false },
+      find: { addExtraSpaceOnTop: false }, occurrencesHighlight: "off", scrollBeyondLastLine: false,
+      padding: { top: 14, bottom: 14 }, readOnly: true,
+      colorDecorators: true, defaultColorDecorators: "never"
+    });
+    sourceModel.onDidChangeContent(() => { emit("sourceInput"); emit("historyChanged"); });
+    sourceEditor.onDidChangeCursorSelection(() => emit("historyChanged"));
+    setTheme(body.classList.contains("dark"));
+    window.readerMonaco = { editor: sourceEditor, model: sourceModel };
+    return sourceEditor;
+  }
+
+  function setEditorScale(value) {
+    editorScale = Math.min(1.6, Math.max(.8, Number(value) || 1));
+    sourceEditor?.updateOptions({ fontSize: 14 * editorScale, lineHeight: Math.round(22 * editorScale) });
+    const doc = visualFrame?.contentDocument;
+    if (doc?.documentElement) doc.documentElement.style.zoom = editorScale;
+    return editorScale;
   }
 
   function applyVisualTheme() {
@@ -48,6 +142,7 @@
     doc.documentElement.style.setProperty("--reader-bg", dark ? "#1e1e1e" : "#ffffff");
     doc.documentElement.style.setProperty("--reader-ink", dark ? "#d4d4d4" : "#251f1b");
     doc.documentElement.style.setProperty("--reader-link", dark ? "#4fc1ff" : "#8f2923");
+    doc.documentElement.style.zoom = editorScale;
   }
 
   function setMode(mode) {
@@ -67,12 +162,15 @@
     if (message && !persistent) statusTimer = setTimeout(() => { byId("status").textContent = ""; }, 2600);
   }
 
-  function setDirty(dirty, positionText) {
+  function setDirty(dirty) {
     byId("saveBtn").classList.toggle("dirty", dirty);
     byId("saveBtn").textContent = dirty ? "保存*" : "保存";
     byId("prevBtn").title = dirty ? "Alt+← & 保存" : "Alt+←";
     byId("nextPageBtn").title = dirty ? "Alt+→ & 保存" : "Alt+→";
-    if (positionText != null) byId("pagePosition").textContent = positionText;
+    for (const id of ["tagPrevBtn", "tagNextPageBtn"]) {
+      const button = byId(id);
+      if (button) button.title = dirty ? `${id === "tagPrevBtn" ? "Prev" : "Next"} · Auto Save` : id === "tagPrevBtn" ? "Prev" : "Next";
+    }
   }
 
   function setHistoryButtons(canUndo, canRedo) {
@@ -112,11 +210,21 @@
   function renderNavigation(view) {
     byId("chapterTitle").textContent = view.chapterTitle;
     byId("pageContext").textContent = view.pageContext;
-    byId("pagePosition").textContent = view.pagePosition;
-    byId("pageInput").value = view.page;
+    byId("pagePosition").textContent = view.pageTotal;
+    if (document.activeElement !== byId("pageInput")) byId("pageInput").value = view.page;
     byId("volumeSelect").value = view.volume;
     byId("prevBtn").disabled = !view.hasPrevious;
     byId("nextPageBtn").disabled = !view.hasNext;
+    for (const [id, enabled] of [["tagPrevBtn", view.hasPrevious], ["tagNextPageBtn", view.hasNext]]) {
+      const button = byId(id);
+      if (button) button.disabled = !enabled;
+    }
+    const panel = document.querySelector('.float-panel[data-panel="tagBar"]');
+    const pageTitle = view.page ? `编辑按钮 · 第 ${view.page} 页 · ${view.pageIndex} / ${view.pageTotal}` : "编辑按钮";
+    const panelTitle = panel?.querySelector(".fp-title");
+    const panelHeader = panel?.querySelector(".fp-header");
+    if (panelTitle) panelTitle.textContent = pageTitle;
+    if (panelHeader) panelHeader.title = `${pageTitle}：按住标题栏拖动可自由浮动，拖到窗口上/下边缘可停靠，双击恢复默认`;
     byId("saveBtn").disabled = !view.editable;
     document.querySelectorAll("#tocList a").forEach((link) =>
       link.classList.toggle("active", Number(link.dataset.page) === view.chapterPage));
@@ -124,6 +232,18 @@
 
   function renderTools(tags, attrs) {
     const bar = byId("tagBar");
+    const spacer = document.createElement("span");
+    spacer.className="spacer";
+    const pageButton = (id, direction, label) => {
+      const button = document.createElement("button");
+      button.id = id;
+      button.type = "button";
+      button.className = "tag-page-button";
+      button.dataset.pageAdjacent = direction;
+      button.textContent = label;
+      button.title = direction < 0 ? "Prev" : "Next";
+      return button;
+    };
     bar.replaceChildren(
       ...tags.map((tag, index) => {
         const button = document.createElement("button");
@@ -133,50 +253,18 @@
         button.title = tag.hotkey ? `Alt+${tag.hotkey === "Enter" ? "Enter" : tag.hotkey.toUpperCase()}` : tag.title || tag.label;
         return button;
       }),
+      spacer,
       ...attrs.map((attr, index) => {
         const button = document.createElement("button");
         button.type = "button";
         button.dataset.attr = index;
         button.textContent = attr.label;
         return button;
-      })
+      }),
+      spacer.cloneNode(true),
+      pageButton("tagPrevBtn", -1, "← "),
+      pageButton("tagNextPageBtn", 1, " →")
     );
-  }
-
-  function findOptions() {
-    return {
-      query: byId("findText").value,
-      replacement: byId("replaceText").value,
-      regex: byId("regexBox").checked,
-      caseSensitive: byId("caseBox").checked
-    };
-  }
-
-  function updateHighlight(html) {
-    byId("highlight").innerHTML = html;
-    syncHighlightScroll();
-  }
-
-  function syncHighlightScroll() {
-    const highlight = byId("highlight");
-    highlight.scrollTop = sourceEditor.scrollTop;
-    highlight.scrollLeft = sourceEditor.scrollLeft;
-  }
-
-  function scrollSourceSelectionIntoView(position) {
-    const wrap = sourceEditor.parentElement;
-    const style = getComputedStyle(sourceEditor);
-    const mirror = document.createElement("div");
-    const marker = document.createElement("span");
-    mirror.style.cssText = `position:absolute;visibility:hidden;inset:0 auto auto 0;width:${sourceEditor.clientWidth}px;min-height:${sourceEditor.clientHeight}px;padding:${style.padding};border:0;margin:0;box-sizing:border-box;overflow-wrap:break-word;white-space:pre-wrap;font:${style.font};line-height:${style.lineHeight};letter-spacing:${style.letterSpacing};tab-size:${style.tabSize}`;
-    mirror.textContent = sourceEditor.value.slice(0, position);
-    marker.textContent = "\u200b";
-    mirror.append(marker);
-    wrap.append(mirror);
-    sourceEditor.scrollTop = Math.max(0, marker.offsetTop - sourceEditor.clientHeight / 2);
-    sourceEditor.scrollLeft = Math.max(0, marker.offsetLeft - sourceEditor.clientWidth / 2);
-    mirror.remove();
-    syncHighlightScroll();
   }
 
   function showVisual(source, options) {
@@ -185,17 +273,15 @@
       if (!doc?.body) return;
       doc.body.contentEditable = options.editable ? "true" : "false";
       doc.body.spellcheck = false;
-      doc.body.addEventListener("beforeinput", () => emit("beforeEdit"));
       doc.body.addEventListener("input", () => emit("visualInput"));
-      doc.addEventListener("dblclick", () => emit("visualDoubleClick", doc));
-      doc.addEventListener("keydown", (event) => emit("keyDown", event));
-      doc.addEventListener("click", (event) => emit("visualClick", event, doc));
+      for (const [eventName, handlerName] of [["dblclick", "visualDoubleClick"], ["keydown", "keyDown"], ["click", "visualClick"]]) {
+        doc.addEventListener(eventName, (event) => emit(handlerName, ...(eventName === "dblclick" ? [doc] : eventName === "click" ? [event, doc] : [event])));
+      }
       const updateLinkMode = (event) => doc.documentElement.classList.toggle("reader-ctrl-link", event.ctrlKey || event.metaKey);
-      doc.addEventListener("keydown", updateLinkMode);
-      doc.addEventListener("keyup", updateLinkMode);
-      doc.addEventListener("mousemove", updateLinkMode);
+      for (const eventName of ["keydown", "keyup", "mousemove"]) doc.addEventListener(eventName, updateLinkMode);
       visualFrame.contentWindow.addEventListener("blur", () => doc.documentElement.classList.remove("reader-ctrl-link"));
       applyVisualTheme();
+      window.dispatchEvent(new CustomEvent("reader-visual-ready", { detail: { document: doc } }));
       if (options.scroll) requestAnimationFrame(() => {
         doc.scrollingElement.scrollTop = options.scroll.top;
         doc.scrollingElement.scrollLeft = options.scroll.left;
@@ -233,6 +319,28 @@
   }
   function changePdfSettings(patch) { pdfSettings = normalizedPdfSettings({ ...pdfSettings, ...patch }); applyPdfSettings(); savePdfSettings(); }
   function setPdfStatus(message = "") { const node = frameId("missing"); if (!node) return; node.hidden = !message; if (message) node.textContent = message; }
+  function showPdfScaleValue() {
+    const input = frameId("zoomValue");
+    if (!input) return;
+    input.value = pdfViewer?.currentScale ? `${Math.round(pdfViewer.currentScale * 100)}%` : "页宽";
+  }
+  function applyPdfScaleInput() {
+    const input = frameId("zoomValue");
+    if (!input || !pdfViewer) return showPdfScaleValue();
+    const value = input.value.trim().toLowerCase();
+    if (["页宽", "适合页宽", "page-width", "auto"].includes(value)) {
+      pdfViewer.currentScaleValue = "page-width";
+      return;
+    }
+    const match = value.match(/^(\d+(?:\.\d+)?)\s*%?$/);
+    const percent = match ? Number(match[1]) : NaN;
+    if (!Number.isFinite(percent) || percent < 25 || percent > 1000) {
+      showPdfScaleValue();
+      notify("PDF 缩放比例请输入 25%–1000%", true);
+      return;
+    }
+    pdfViewer.currentScaleValue = String(percent / 100);
+  }
   function pdfPageNumberForLabel(label) {
     const matches = pdfPageLabels?.map((value, index) => String(value) === String(label) ? index + 1 : 0).filter(Boolean);
     const current = pdfViewer?.currentPageNumber || matches?.[0];
@@ -249,7 +357,7 @@
       pdfLinkService.setViewer(pdfViewer); scrollMode = viewerModule.ScrollMode;
       eventBus.on("pagesinit", () => { pdfViewer.setPageLabels(pdfPageLabels); pdfViewer.currentScaleValue = pdfSettings.scale; applyPdfSettings(); showPendingPdfPage(); setPdfStatus(); });
       eventBus.on("pagechanging", ({ pageNumber, pageLabel }) => { if (pageNumber != null) emit("pdfPageChange", { pageNumber, pageLabel }); });
-      eventBus.on("scalechanging", ({ scale, presetValue }) => { pdfSettings.scale = presetValue || String(scale); frameId("zoomFit").textContent = `${Math.round(scale * 100)}%`; savePdfSettings(); });
+      eventBus.on("scalechanging", ({ scale, presetValue }) => { pdfSettings.scale = presetValue || String(scale); frameId("zoomValue").value = `${Math.round(scale * 100)}%`; savePdfSettings(); });
       return pdfjs;
     })().catch((error) => { pdfRuntimePromise = null; throw error; });
     return pdfRuntimePromise;
@@ -292,7 +400,13 @@
       saved = { ...legacy, ...saved };
       try { pdfSettings = normalizedPdfSettings({ ...(await fetch("/api/reader/settings").then((r) => r.ok ? r.json() : {})), ...saved }); } catch { pdfSettings = normalizedPdfSettings(saved); }
       applyPdfSettings();
-      frameId("zoomIn").onclick = () => pdfViewer?.increaseScale(); frameId("zoomOut").onclick = () => pdfViewer?.decreaseScale(); frameId("zoomFit").onclick = () => { if (pdfViewer) pdfViewer.currentScaleValue = "page-width"; };
+      frameId("zoomIn").onclick = () => pdfViewer?.increaseScale(); frameId("zoomOut").onclick = () => pdfViewer?.decreaseScale();
+      frameId("zoomValue").onchange = applyPdfScaleInput;
+      frameId("zoomValue").onkeydown = (event) => {
+        if (event.key === "Enter") { event.preventDefault(); applyPdfScaleInput(); event.currentTarget.select(); }
+        if (event.key === "Escape") { event.preventDefault(); showPdfScaleValue(); event.currentTarget.blur(); }
+      };
+      frameId("zoomValue").ondblclick = () => { if (pdfViewer) pdfViewer.currentScaleValue = "page-width"; };
       frameId("direction").onclick = () => changePdfSettings({ horizontal: !pdfSettings.horizontal }); frameId("settings").onclick = () => frameId("settingsDialog").showModal(); frameId("brightness").oninput = (event) => changePdfSettings({ brightness: event.target.value }); frameId("paper").oninput = (event) => changePdfSettings({ paper: event.target.value }); frameId("ink").oninput = (event) => changePdfSettings({ ink: event.target.value }); frameId("invert").onchange = (event) => changePdfSettings({ invert: event.target.checked }); frameId("reset").onclick = () => changePdfSettings(PDF_DEFAULTS); frameId("full").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : pdfFrame.requestFullscreen()).catch((error) => notify(error.message, true));
       document.addEventListener("fullscreenchange", () => { frameId("full").textContent = document.fullscreenElement ? "退出全屏" : "全屏"; requestAnimationFrame(() => pdfViewer?.update()); });
       if (pendingPdfOptions) setPdf(pendingPdfOptions);
@@ -304,17 +418,18 @@
     if (initialized) return;
     initialized = true;
     initPdfFrame();
-    bind("modeBtn", "click", () => emit("mode"));
-    bind("saveBtn", "click", () => emit("save"));
-    bind("undoBtn", "click", () => emit("undo"));
-    bind("redoBtn", "click", () => emit("redo"));
+    for (const [id, action] of [["modeBtn", "mode"], ["saveBtn", "save"], ["undoBtn", "undo"], ["redoBtn", "redo"]]) bind(id, "click", () => emit(action));
     bind("volumeSelect", "change", (event) => emit("volume", event.target.value));
-    bind("pageForm", "submit", (event) => { event.preventDefault(); emit("page", Number(byId("pageInput").value)); });
-    bind("prevBtn", "click", () => emit("adjacent", -1));
-    bind("nextPageBtn", "click", () => emit("adjacent", 1));
+    bind("pageForm", "submit", (event) => {
+      event.preventDefault();
+      const input = byId("pageInput");
+      const page = Number(input.value);
+      input.blur();
+      emit("page", page);
+    });
+    for (const [id, direction] of [["prevBtn", -1], ["nextPageBtn", 1]]) bind(id, "click", () => emit("adjacent", direction));
     bind("tocBtn", "click", () => setToc(!root.classList.contains("toc-open")));
-    bind("tocClose", "click", () => setToc(false));
-    bind("tocBackdrop", "click", () => setToc(false));
+    for (const id of ["tocClose", "tocBackdrop"]) bind(id, "click", () => setToc(false));
     bind("tocList", "click", (event) => {
       const link = event.target.closest("[data-page]");
       if (!link) return;
@@ -324,23 +439,15 @@
     });
     bind("darkBtn", "click", () => setTheme(!body.classList.contains("dark")));
     bind("tagBar", "click", (event) => {
+      const adjacent = event.target.closest("[data-page-adjacent]");
       const tag = event.target.closest("[data-tag]");
       const attr = event.target.closest("[data-attr]");
+      if (adjacent) emit("adjacent", Number(adjacent.dataset.pageAdjacent));
       if (tag) emit("tag", Number(tag.dataset.tag));
       if (attr) emit("attr", Number(attr.dataset.attr));
     });
-    sourceEditor.addEventListener("beforeinput", () => emit("beforeEdit"));
-    sourceEditor.addEventListener("input", () => emit("sourceInput"));
-    sourceEditor.addEventListener("scroll", syncHighlightScroll);
-    sourceEditor.addEventListener("dblclick", () => emit("sourceDoubleClick"));
-    byId("highlight").addEventListener("click", (event) => emit("highlightClick", event));
     bind("findBtn", "click", () => emit("find"));
-    bind("nextBtn", "click", () => emit("nextMatch"));
-    bind("replaceBtn", "click", () => emit("replace"));
-    bind("allBtn", "click", () => emit("replaceAll"));
-    ["findText", "regexBox", "caseBox"].forEach((id) => bind(id, id === "findText" ? "input" : "change", () => emit("findChanged")));
     document.addEventListener("keydown", (event) => emit("keyDown", event));
-    window.addEventListener("blur", () => document.querySelector(".editor-wrap")?.classList.remove("ctrl-link"));
     window.addEventListener("beforeunload", (event) => emit("beforeUnload", event));
     setTheme(localStorage.getItem("readerDark") === "1");
   }
@@ -419,461 +526,418 @@
 
   const syncChromeMetrics = () => {
     const headerHeight = document.querySelector(".site-header")?.getBoundingClientRect().height || 64;
-    const footerHeight = document.querySelector(".page-footer")?.getBoundingClientRect().height || 48;
+    const footerHeight = document.querySelector(".page-footer")?.getBoundingClientRect().height || 0;
     root.style.setProperty("--app-header-height", `${Math.round(headerHeight)}px`);
     root.style.setProperty("--app-footer-height", `${Math.round(footerHeight)}px`);
     window.dispatchEvent(new Event("reader-chrome-resize"));
   };
   const chromeResizeObserver = new ResizeObserver(syncChromeMetrics);
   chromeResizeObserver.observe(document.querySelector(".site-header"));
-  chromeResizeObserver.observe(document.querySelector(".page-footer"));
+  const pageFooter = document.querySelector(".page-footer");
+  if (pageFooter) chromeResizeObserver.observe(pageFooter);
   syncChromeMetrics();
 
   window.ReaderUI = {
     init, notify, setDirty, setHistoryButtons, renderVolumes, renderToc, renderNavigation, renderTools,
-    setMode, setToc, setPdf, applyVisualTheme, showVisual, findOptions,
-    setFindInfo: (text) => { byId("findInfo").textContent = text; },
-    getSource: () => sourceEditor.value,
-    setSource: (text) => { sourceEditor.value = text; },
-    getSourceSelection: () => ({ start: sourceEditor.selectionStart || 0, end: sourceEditor.selectionEnd || 0 }),
-    setSourceSelection: (start, end = start) => sourceEditor.setSelectionRange(start, end),
-    replaceSourceRange: (text, start, end, selectionMode = "end") => sourceEditor.setRangeText(text, start, end, selectionMode),
-    focusSource: () => sourceEditor.focus(),
-    sourceScroll: () => ({ top: sourceEditor.scrollTop, left: sourceEditor.scrollLeft }),
-    setSourceScroll: ({ top = 0, left = 0 }) => { sourceEditor.scrollTop = top; sourceEditor.scrollLeft = left; },
-    scrollSourceSelectionIntoView,
-    updateHighlight,
+    setMode, setToc, setPdf, applyVisualTheme, showVisual, initMonaco, setEditorScale,
+    getSource: () => sourceModel?.getValue() || "",
+    setSource: (text, preserveUndo = false) => {
+      text = String(text ?? "");
+      if (!sourceModel || sourceModel.getValue() === text) return;
+      if (!preserveUndo) return sourceModel.setValue(text);
+      sourceEditor.pushUndoStop();
+      sourceEditor.executeEdits("reader.visual", [{ range: sourceModel.getFullModelRange(), text, forceMoveMarkers: true }]);
+      sourceEditor.pushUndoStop();
+    },
+    getSourceSelection: () => {
+      const selection = sourceEditor?.getSelection();
+      return selection ? { start: sourceModel.getOffsetAt(selection.getStartPosition()), end: sourceModel.getOffsetAt(selection.getEndPosition()) } : { start: 0, end: 0 };
+    },
+    setSourceSelection: (start, end = start) => sourceEditor.setSelection(monacoApi.Selection.fromPositions(sourceModel.getPositionAt(start), sourceModel.getPositionAt(end))),
+    replaceSourceRange: (text, start, end) => {
+      sourceEditor.pushUndoStop();
+      sourceEditor.executeEdits("reader.edit", [{ range: monacoApi.Range.fromPositions(sourceModel.getPositionAt(start), sourceModel.getPositionAt(end)), text, forceMoveMarkers: true }]);
+      sourceEditor.pushUndoStop();
+    },
+    focusSource: () => sourceEditor?.focus(),
+    sourceScroll: () => ({ top: sourceEditor?.getScrollTop() || 0, left: sourceEditor?.getScrollLeft() || 0 }),
+    setSourceScroll: ({ top = 0, left = 0 }) => sourceEditor?.setScrollPosition({ scrollTop: top, scrollLeft: left }),
+    setSourceEditable: (editable) => sourceEditor?.updateOptions({ readOnly: !editable }),
+    canUndo: () => Boolean(sourceModel?.canUndo()),
+    canRedo: () => Boolean(sourceModel?.canRedo()),
+    undoSource: () => sourceEditor?.trigger("reader", "undo"),
+    redoSource: () => sourceEditor?.trigger("reader", "redo"),
+    toggleFind: (replace = true) => {
+      if (!sourceEditor) return;
+      const findWidget = sourceEditor.getDomNode()?.querySelector(".find-widget");
+      if (findWidget?.classList.contains("visible")) {
+        sourceEditor.trigger("reader", "closeFindWidget");
+        return;
+      }
+      sourceEditor.focus();
+      sourceEditor.getAction(replace ? "editor.action.startFindReplaceAction" : "actions.find")?.run();
+    },
+    hasSourceTextFocus: () => Boolean(sourceEditor?.hasTextFocus()),
     getVisualDocument: () => visualFrame.contentDocument,
-    setSourceLinkMode: (active) => document.querySelector(".editor-wrap")?.classList.toggle("ctrl-link", active),
     selectedVolume: () => byId("volumeSelect").value
   };
 })();
 
-/* =====================================================================
- * 编辑工具面板：可停靠 / 可浮动 / 可拉伸
- * 适用面板：
- *   - 编辑按钮框（#tagBar）：可停靠编辑框上/下方（与编辑框等宽）、
- *     窗口顶部/底部（与窗口等宽），或自由浮动。
- *   - 查找替换框（#findBar）：同上。
- * 交互：
- *   - 按住标题栏拖动 → 自由浮动；拖到窗口上/下边缘 → 自动停靠（全宽）。
- *   - 浮动状态四边/四角可拉伸；停靠状态下沿可用边沿拉伸高度。
- *   - 标题栏上的按钮可精确停靠；双击标题栏恢复默认（停靠编辑框上方）。
- *   布局与位置均记忆在 localStorage("readerDockPanels.v1")。
- * ===================================================================== */
+/* 编辑工具面板：单一状态源管理停靠、浮动、拉伸和缩放。 */
 (() => {
   "use strict";
   const LS_KEY = "readerDockPanels.v1";
-  const SNAP = 56;       // 拖拽靠近上/下边缘的吸附距离
-  const MIN_CONTROL_HEIGHT = 16;
-  const BASE_CONTROL_HEIGHT = 28;
-  const MAX_CONTROL_HEIGHT = 35;
-  const TAG_BAR_MIN_HEIGHT = BASE_CONTROL_HEIGHT;
-  const FIND_BAR_MIN_HEIGHT = 54;
-
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (_) { saved = {}; }
-
+  const SNAP = 56, MIN_SCALE = .8, MAX_SCALE = 1.6, CONTROL_HEIGHT = 28;
   const DOCK_DEFS = [
-    ["editor-top",    "栏上", "停靠编辑框上方（与编辑框等宽）"],
+    ["editor-top", "栏上", "停靠编辑框上方（与编辑框等宽）"],
     ["editor-bottom", "栏下", "停靠编辑框下方（与编辑框等宽）"],
-    ["window-top",    "窗上", "停靠窗口顶部（与窗口等宽）"],
+    ["window-top", "窗上", "停靠窗口顶部（与窗口等宽）"],
     ["window-bottom", "窗下", "停靠窗口底部（与窗口等宽）"],
-    ["floating",      "浮动", "自由浮动（可拖动、可拉伸）"]
+    ["floating", "浮动", "自由浮动（可拖动、可拉伸）"]
   ];
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch { /* use defaults */ }
+  const clampScale = value => Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number(value) || 1));
+  let editorScale = clampScale(saved._editorScale);
+  let lastScaleTarget = "editor";
 
-  const snapTop = document.createElement("div");
-  snapTop.className = "fp-snap fp-snap-top";
-  const snapBottom = document.createElement("div");
-  snapBottom.className = "fp-snap fp-snap-bottom";
+  const element = (tag, className, text = "") => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text) node.textContent = text;
+    return node;
+  };
+  const snapTop = element("div", "fp-snap fp-snap-top");
+  const snapBottom = element("div", "fp-snap fp-snap-bottom");
   document.body.append(snapTop, snapBottom);
+  const content = document.querySelector("#tagBar");
+  if (!content) return;
+  const panel = element("div", "float-panel");
+  panel.dataset.panel = "tagBar";
+  const header = element("div", "fp-header");
+  const title = element("span", "fp-title", "编辑按钮");
+  const actions = element("div", "fp-actions");
+  actions.setAttribute("role", "group");
+  actions.setAttribute("aria-label", "编辑按钮与编辑框尺寸及停靠位置");
+  header.title = "编辑按钮：按住标题栏拖动可自由浮动，拖到窗口上/下边缘可停靠，双击恢复默认";
+  header.append(element("span", "fp-grip", "≡"), title, actions);
+  content.parentNode.insertBefore(panel, content);
+  panel.append(header, content);
 
-  const panels = {};
+  const state = Object.assign({ dock: "editor-top", x: 60, y: 96, w: 520, h: null, scale: 1, naturalH: 56 }, saved.tagBar || {});
+  state.scale = clampScale(state.scale);
+  const measured = Math.round(panel.offsetHeight);
+  if (measured) state.naturalH = measured;
 
-  function chromeHeights() {
-    return {
-      header: Math.round(document.querySelector(".site-header")?.getBoundingClientRect().height || 0),
-      footer: Math.round(document.querySelector(".page-footer")?.getBoundingClientRect().height || 0)
-    };
-  }
-
-  function visibleWindowPanels(dock) {
-    return Object.values(panels).filter((st) => st.dock === dock && st.panel.getClientRects().length);
-  }
-
-  function panelMinHeight(st) {
-    const headerHeight = st.header?.getBoundingClientRect().height || 27;
-    return Math.ceil(headerHeight + st.contentMinHeight);
-  }
-
-  function updateControlScale(st, height = st.panel.getBoundingClientRect().height) {
-    const headerHeight = st.header.getBoundingClientRect().height || 27;
-    const naturalContent = Math.max(20, st.naturalH - headerHeight);
-    const contentHeight = Math.max(MIN_CONTROL_HEIGHT, height - headerHeight);
-    // Let controls respond to the panel without becoming comically large or
-    // too small to click. Extra space beyond this range remains as breathing
-    // room around the vertically centred control group.
-    const controlHeight = Math.min(MAX_CONTROL_HEIGHT, Math.max(
-      MIN_CONTROL_HEIGHT,
-      BASE_CONTROL_HEIGHT * contentHeight / naturalContent
-    ));
-    st.panel.style.setProperty("--fp-header-height", `${headerHeight}px`);
-    st.panel.style.setProperty("--fp-control-height", `${controlHeight.toFixed(2)}px`);
-    st.panel.style.setProperty("--fp-pad-y", `${Math.max(1, controlHeight / BASE_CONTROL_HEIGHT * 5).toFixed(2)}px`);
-  }
-
-  const panelResizeObserver = new ResizeObserver((entries) => {
-    for (const { target } of entries) {
-      const st = panels[target.dataset.panel];
-      // Auto-height panels are content-sized, so scaling them here would feed
-      // back into their height. User-resized panels always have an explicit h.
-      if (st?.h != null) updateControlScale(st);
-    }
+  const chromeHeights = () => ({
+    header: Math.round(document.querySelector(".site-header")?.getBoundingClientRect().height || 0),
+    footer: Math.round(document.querySelector(".page-footer")?.getBoundingClientRect().height || 0)
   });
+  const minHeight = () => Math.ceil((header.getBoundingClientRect().height || 27) + CONTROL_HEIGHT * state.scale);
+  const heightLimit = () => {
+    const { header: top, footer } = chromeHeights();
+    const available = Math.max(80, innerHeight - top - footer);
+    return state.dock.startsWith("window-") ? Math.max(minHeight(), available - 120)
+      : state.dock.startsWith("editor-") ? Math.max(minHeight(), panel.parentElement.getBoundingClientRect().height - 100)
+        : available;
+  };
 
-  // Window-docked panels take up real layout space and stack instead of covering one another.
+  function save() {
+    const { dock, x, y, w, h, scale } = state;
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        _editorScale: editorScale,
+        tagBar: { dock, x: Math.round(x), y: Math.round(y), w: Math.round(w), h: h == null ? null : Math.round(h), scale }
+      }));
+    } catch { /* storage is optional */ }
+  }
+
+  function updateScaleControls(target) {
+    const value = target === "editor" ? editorScale : state.scale;
+    const input = actions.querySelector(`[data-scale-input="${target}"]`);
+    input.value = `${Math.round(value * 100)}%`;
+    const group = input.closest(".fp-scale-actions");
+    group.querySelector('[data-scale-action="smaller"]').disabled = value <= MIN_SCALE;
+    group.querySelector('[data-scale-action="larger"]').disabled = value >= MAX_SCALE;
+    if (target === "editor") return window.ReaderUI?.setEditorScale(editorScale);
+    const contentMinHeight = Math.ceil(CONTROL_HEIGHT * state.scale);
+    panel.style.setProperty("--fp-header-height", `${header.getBoundingClientRect().height || 27}px`);
+    panel.style.setProperty("--fp-scale", state.scale);
+    panel.style.setProperty("--fp-content-min-height", `${contentMinHeight}px`);
+  }
+
   function updateWindowDockLayout() {
     const { header, footer } = chromeHeights();
-    const topPanels = visibleWindowPanels("window-top");
-    const bottomPanels = visibleWindowPanels("window-bottom");
-    const windowPanels = [...topPanels, ...bottomPanels];
-    let remaining = Math.max(
-      windowPanels.reduce((sum, st) => sum + panelMinHeight(st), 0),
-      innerHeight - header - footer - 120
-    );
-    windowPanels.forEach((st, index) => {
-      const reserved = windowPanels.slice(index + 1).reduce((sum, other) => sum + panelMinHeight(other), 0);
-      const minimum = panelMinHeight(st);
-      const current = Math.max(minimum, st.panel.getBoundingClientRect().height);
-      const height = Math.min(current, Math.max(minimum, remaining - reserved));
-      st.panel.style.height = `${height}px`;
-      if (st.h != null) st.h = height;
-      updateControlScale(st, height);
-      remaining -= height;
-    });
-    let top = 0;
-    for (const st of topPanels) {
-      st.panel.style.top = `${header + top}px`;
-      top += Math.round(st.panel.getBoundingClientRect().height);
-    }
-    let bottom = 0;
-    for (const st of bottomPanels) {
-      st.panel.style.bottom = `${footer + bottom}px`;
-      bottom += Math.round(st.panel.getBoundingClientRect().height);
-    }
-    document.documentElement.style.setProperty("--window-dock-top", `${top}px`);
-    document.documentElement.style.setProperty("--window-dock-bottom", `${bottom}px`);
-    snapTop.style.top = `${header + top}px`;
-    snapBottom.style.bottom = `${footer + bottom}px`;
+    const docked = state.dock.startsWith("window-") && panel.getClientRects().length;
+    const height = docked ? Math.round(panel.getBoundingClientRect().height) : 0;
+    const topHeight = state.dock === "window-top" ? height : 0;
+    const bottomHeight = state.dock === "window-bottom" ? height : 0;
+    if (topHeight) panel.style.top = `${header}px`;
+    if (bottomHeight) panel.style.bottom = `${footer}px`;
+    document.documentElement.style.setProperty("--window-dock-top", `${topHeight}px`);
+    document.documentElement.style.setProperty("--window-dock-bottom", `${bottomHeight}px`);
+    snapTop.style.top = `${header + topHeight}px`;
+    snapBottom.style.bottom = `${footer + bottomHeight}px`;
   }
 
-  function clampFloatingPanel(st) {
-    if (st.dock !== "floating") return;
+  function clampFloating() {
+    if (state.dock !== "floating") return;
     const { header, footer } = chromeHeights();
-    const height = st.panel.getBoundingClientRect().height || st.h || st.naturalH;
-    st.w = Math.min(Math.max(150, st.w), innerWidth);
-    st.h = Math.min(Math.max(panelMinHeight(st), st.h || height), Math.max(80, innerHeight - header - footer));
-    st.x = Math.min(innerWidth - 36, Math.max(36 - st.w, st.x));
-    st.y = Math.min(innerHeight - footer - 28, Math.max(header, st.y));
-    st.panel.style.left = `${st.x}px`;
-    st.panel.style.top = `${st.y}px`;
-    st.panel.style.width = `${st.w}px`;
-    st.panel.style.height = `${st.h}px`;
+    state.w = Math.min(Math.max(150, state.w), innerWidth);
+    state.h = Math.min(Math.max(minHeight(), state.h || panel.getBoundingClientRect().height || state.naturalH), Math.max(80, innerHeight - header - footer));
+    state.x = Math.min(innerWidth - 36, Math.max(36 - state.w, state.x));
+    state.y = Math.min(innerHeight - footer - 28, Math.max(header, state.y));
+    Object.assign(panel.style, { left: `${state.x}px`, top: `${state.y}px`, width: `${state.w}px`, height: `${state.h}px` });
   }
 
-  function panelHeightLimit(st) {
-    const { header, footer } = chromeHeights();
-    const available = Math.max(80, innerHeight - header - footer);
-    if (st.dock.startsWith("window-")) {
-      const occupied = Object.values(panels).reduce((sum, other) => {
-        if (other === st || !other.dock.startsWith("window-") || !other.panel.getClientRects().length) return sum;
-        return sum + other.panel.getBoundingClientRect().height;
-      }, 0);
-      return Math.max(panelMinHeight(st), available - occupied - 120);
-    }
-    if (st.dock.startsWith("editor-")) {
-      return Math.max(panelMinHeight(st), st.panel.parentElement.getBoundingClientRect().height - 100);
-    }
-    return available;
-  }
-
-  /* ---------------- 布局应用 ---------------- */
-  function applyPanel(st) {
-    const panel = st.panel;
+  function applyPanel() {
     const parent = panel.parentElement;
     panel.classList.remove("dock-editor-top", "dock-editor-bottom", "dock-window-top", "dock-window-bottom", "floating");
     parent.classList.remove("bar-fixed", "bar-bottom");
-
-    switch (st.dock) {
-      case "editor-top":
-        panel.classList.add("dock-editor-top");
-        break;
-      case "editor-bottom":
-        panel.classList.add("dock-editor-bottom");
-        parent.classList.add("bar-bottom");
-        break;
-      case "window-top":
-        panel.classList.add("dock-window-top");
-        parent.classList.add("bar-fixed");
-        break;
-      case "window-bottom":
-        panel.classList.add("dock-window-bottom");
-        parent.classList.add("bar-fixed");
-        break;
-      case "floating":
-        panel.classList.add("floating");
-        parent.classList.add("bar-fixed");
-        break;
-    }
-
+    panel.classList.add(state.dock === "floating" ? "floating" : `dock-${state.dock}`);
+    parent.classList.toggle("bar-bottom", state.dock === "editor-bottom");
+    parent.classList.toggle("bar-fixed", state.dock.startsWith("window-") || state.dock === "floating");
     panel.style.left = panel.style.top = panel.style.right = panel.style.bottom = panel.style.width = "";
-    if (st.dock === "floating") {
-      panel.style.left = `${st.x}px`;
-      panel.style.top = `${st.y}px`;
-      panel.style.width = `${st.w}px`;
-    }
-
-    const fixed = st.dock === "window-top" || st.dock === "window-bottom" || st.dock === "floating";
-    let h = fixed ? (st.h != null ? st.h : st.naturalH) : (st.h != null ? st.h : null);
+    if (state.dock === "floating") Object.assign(panel.style, { left: `${state.x}px`, top: `${state.y}px`, width: `${state.w}px` });
+    const fixed = state.dock.startsWith("window-") || state.dock === "floating";
+    let h = fixed ? state.h ?? state.naturalH : state.h;
     if (h != null) {
-      h = Math.min(Math.max(panelMinHeight(st), h), panelHeightLimit(st));
-      st.h = st.h == null && st.dock !== "floating" ? null : h;
+      h = Math.min(Math.max(minHeight(), h), heightLimit());
+      state.h = state.h == null && state.dock !== "floating" ? null : h;
     }
     panel.style.height = h != null ? `${h}px` : "";
-    updateControlScale(st, h || panel.getBoundingClientRect().height || st.naturalH);
-    clampFloatingPanel(st);
-
+    panel.classList.toggle("auto-height", h == null);
+    updateScaleControls("tag");
+    clampFloating();
     panel.querySelectorAll(".fp-dock").forEach((btn) => {
-      const active = btn.dataset.dock === st.dock;
+      const active = btn.dataset.dock === state.dock;
       btn.classList.toggle("active", active);
       btn.setAttribute("aria-pressed", String(active));
     });
     requestAnimationFrame(updateWindowDockLayout);
   }
 
-  function dock(st, target) {
-    if (target === "floating" && st.dock !== "floating") {
-      const rect = st.panel.getBoundingClientRect();
-      st.x = rect.left; st.y = rect.top;
-      st.w = rect.width;
-      if (st.h == null) st.h = Math.round(rect.height);
+  function dock(target) {
+    if (target === "floating" && state.dock !== "floating") {
+      const rect = panel.getBoundingClientRect();
+      Object.assign(state, { x: rect.left, y: rect.top, w: rect.width, h: state.h ?? Math.round(rect.height) });
     }
-    st.dock = target;
-    applyPanel(st);
+    state.dock = target;
+    applyPanel();
     save();
   }
 
-  /* ---------------- 拖动（自由移动 + 吸附停靠） ---------------- */
-  function bindDrag(st) {
-    st.header.addEventListener("pointerdown", (event) => {
+  function trackPointer(move, finish) {
+    const clean = () => {
+      document.body.classList.remove("panel-dragging");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", clean);
+    };
+    const up = () => { clean(); finish(); };
+    document.body.classList.add("panel-dragging");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+    window.addEventListener("pointercancel", clean, { once: true });
+  }
+
+  function bindDrag() {
+    header.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
-      if (event.target.closest(".fp-dock, .fp-handle")) return;
+      if (event.target.closest(".fp-actions, .fp-handle, button")) return;
       event.preventDefault();
-
-      const rect = st.panel.getBoundingClientRect();
-      if (st.dock !== "floating") {
-        st.dock = "floating";
-        st.x = rect.left; st.y = rect.top;
-        st.w = rect.width;
-        if (st.h == null) st.h = Math.round(rect.height);
-        applyPanel(st);
+      const rect = panel.getBoundingClientRect();
+      if (state.dock !== "floating") {
+        Object.assign(state, { dock: "floating", x: rect.left, y: rect.top, w: rect.width, h: state.h ?? Math.round(rect.height) });
+        applyPanel();
       }
-      const offsetX = event.clientX - st.x;
-      const offsetY = event.clientY - st.y;
+      const offsetX = event.clientX - state.x, offsetY = event.clientY - state.y;
       let snap = null;
-      document.body.classList.add("panel-dragging");
-
       const move = (ev) => {
-        const { header, footer } = chromeHeights();
-        const panelWidth = st.panel.getBoundingClientRect().width;
-        st.x = Math.min(innerWidth - 36, Math.max(36 - panelWidth, ev.clientX - offsetX));
-        st.y = Math.min(innerHeight - footer - 28, Math.max(header, ev.clientY - offsetY));
-        st.panel.style.left = `${st.x}px`;
-        st.panel.style.top = `${st.y}px`;
-        const nearTop = ev.clientY < header + SNAP + 6;
-        const nearBottom = ev.clientY > innerHeight - footer - SNAP - 6;
-        snap = nearTop ? "top" : nearBottom ? "bottom" : null;
+        const { header: top, footer } = chromeHeights();
+        state.x = Math.min(innerWidth - 36, Math.max(36 - panel.offsetWidth, ev.clientX - offsetX));
+        state.y = Math.min(innerHeight - footer - 28, Math.max(top, ev.clientY - offsetY));
+        Object.assign(panel.style, { left: `${state.x}px`, top: `${state.y}px` });
+        snap = ev.clientY < top + SNAP + 6 ? "top" : ev.clientY > innerHeight - footer - SNAP - 6 ? "bottom" : null;
         snapTop.classList.toggle("active", snap === "top");
         snapBottom.classList.toggle("active", snap === "bottom");
       };
-
-      const clean = () => {
+      trackPointer(move, () => {
         snapTop.classList.remove("active");
         snapBottom.classList.remove("active");
-        document.body.classList.remove("panel-dragging");
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        window.removeEventListener("pointercancel", clean);
-      };
-
-      const up = () => {
-        clean();
-        if (snap === "top") dock(st, "window-top");
-        else if (snap === "bottom") dock(st, "window-bottom");
+        if (snap) dock(`window-${snap}`);
         else save();
-      };
-
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up, { once: true });
-      window.addEventListener("pointercancel", clean, { once: true });
+      });
     });
   }
 
-  /* ---------------- 拉伸 ---------------- */
-  function bindResize(st, handle, dir) {
+  function bindResize(handle, dir) {
     handle.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       event.preventDefault();
       event.stopPropagation();
-
-      const rect = st.panel.getBoundingClientRect();
+      const rect = panel.getBoundingClientRect();
       const startX = event.clientX, startY = event.clientY;
       const base = { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
-      document.body.classList.add("panel-dragging");
-
       const move = (ev) => {
         const dx = ev.clientX - startX, dy = ev.clientY - startY;
         let { x, y, w, h } = base;
-        const maxHeight = panelHeightLimit(st);
+        const maxHeight = heightLimit();
         if (dir.includes("e")) w = Math.min(innerWidth - x, Math.max(150, base.w + dx));
         if (dir.includes("w")) {
           w = Math.min(base.x + base.w, Math.max(150, base.w - dx));
           x = base.x + base.w - w;
         }
-        if (dir.includes("s")) h = Math.min(maxHeight, Math.max(panelMinHeight(st), base.h + dy));
-        if (dir.includes("n")) { h = Math.min(maxHeight, Math.max(panelMinHeight(st), base.h - dy)); y = base.y + (base.h - h); }
-        st.x = x; st.y = y; st.w = w; st.h = h;
-        if (st.dock === "floating") {
-          st.panel.style.left = `${x}px`;
-          st.panel.style.top = `${y}px`;
-          st.panel.style.width = `${w}px`;
-        }
-        st.panel.style.height = `${h}px`;
-        updateControlScale(st, h);
+        if (dir.includes("s")) h = Math.min(maxHeight, Math.max(minHeight(), base.h + dy));
+        if (dir.includes("n")) { h = Math.min(maxHeight, Math.max(minHeight(), base.h - dy)); y = base.y + base.h - h; }
+        Object.assign(state, { x, y, w, h });
+        if (state.dock === "floating") Object.assign(panel.style, { left: `${x}px`, top: `${y}px`, width: `${w}px` });
+        panel.style.height = `${h}px`;
         updateWindowDockLayout();
       };
-
-      const clean = () => {
-        document.body.classList.remove("panel-dragging");
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        window.removeEventListener("pointercancel", clean);
-      };
-
-      const up = () => {
-        clean();
-        save();
-      };
-
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up, { once: true });
-      window.addEventListener("pointercancel", clean, { once: true });
+      trackPointer(move, save);
     });
   }
 
-  /* ---------------- 持久化 ---------------- */
-  function save() {
-    const data = {};
-    for (const id in panels) {
-      const s = panels[id];
-      data[id] = {
-        dock: s.dock,
-        x: Math.round(s.x), y: Math.round(s.y),
-        w: Math.round(s.w),
-        h: s.h == null ? null : Math.round(s.h)
-      };
+  function setScale(target, value) {
+    const scale = Math.round(clampScale(value) * 100) / 100;
+    if (target === "editor") {
+      editorScale = scale;
+    } else {
+      state.scale = scale;
+      updateScaleControls("tag");
+      if (state.h != null) {
+        const required = Math.ceil((header.offsetHeight || 27) + content.scrollHeight + panel.offsetHeight - panel.clientHeight);
+        state.h = Math.min(Math.max(state.h, required, minHeight()), heightLimit());
+        panel.style.height = `${state.h}px`;
+      }
+      updateWindowDockLayout();
     }
-    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch (_) { /* ignore */ }
+    updateScaleControls(target);
+    save();
   }
 
-  /* ---------------- 面板装配 ---------------- */
-  function setupPanel(id, contentSelector, title, fallbackH) {
-    const content = document.querySelector(contentSelector);
-    if (!content) return null;
-
-    const panel = document.createElement("div");
-    panel.className = "float-panel";
-    panel.dataset.panel = id;
-
-    const header = document.createElement("div");
-    header.className = "fp-header";
-    header.title = `${title}：按住标题栏拖动可自由浮动，拖到窗口上/下边缘可停靠，双击恢复默认`;
-
-    const grip = document.createElement("span");
-    grip.className = "fp-grip";
-    grip.textContent = "≡";
-
-    const titleEl = document.createElement("span");
-    titleEl.className = "fp-title";
-    titleEl.textContent = title;
-
-    const actions = document.createElement("div");
-    actions.className = "fp-actions";
-    actions.setAttribute("role", "group");
-    actions.setAttribute("aria-label", `${title}停靠位置`);
-    for (const [dockName, label, tip] of DOCK_DEFS) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "fp-dock";
-      btn.dataset.dock = dockName;
-      btn.textContent = label;
-      btn.title = tip;
-      btn.setAttribute("aria-label", tip);
-      actions.appendChild(btn);
+  const changeScale = (target, delta) => setScale(target, (target === "editor" ? editorScale : state.scale) + delta);
+  function commitScaleInput(input) {
+    const match = input.value.trim().match(/^(\d+(?:\.\d+)?)\s*%?$/);
+    const percent = match ? Number(match[1]) : NaN;
+    if (!Number.isFinite(percent) || percent < MIN_SCALE * 100 || percent > MAX_SCALE * 100) {
+      updateScaleControls(input.dataset.scaleInput);
+      window.ReaderUI?.notify("缩放比例请输入 80%–160%", true);
+      return;
     }
-    header.append(grip, titleEl, actions);
-
-    content.parentNode.insertBefore(panel, content);
-    panel.append(header, content);
-
-    const st = Object.assign({
-      id, dock: "editor-top",
-      x: 60, y: 96, w: 520, h: null, naturalH: Math.max(28, fallbackH || 48)
-    }, saved[id] || {});
-    st.contentMinHeight = id === "findBar" ? FIND_BAR_MIN_HEIGHT : TAG_BAR_MIN_HEIGHT;
-    st.panel = panel;
-    st.header = header;
-    st.content = content;
-    panels[id] = st;
-    panel.style.setProperty("--fp-content-min-height", `${st.contentMinHeight}px`);
-    panelResizeObserver.observe(panel);
-
-    // 隐藏面板采用回退高度，避免为了测量而短暂显示并与异步模式切换发生竞争。
-    const measured = Math.round(panel.offsetHeight);
-    if (measured > 0) st.naturalH = measured;
-
-    for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
-      const handle = document.createElement("div");
-      handle.className = `fp-handle fp-handle-${dir}`;
-      handle.dataset.dir = dir;
-      panel.appendChild(handle);
-      bindResize(st, handle, dir);
-    }
-
-    bindDrag(st);
-    actions.addEventListener("click", (event) => {
-      const btn = event.target.closest(".fp-dock");
-      if (btn) dock(st, btn.dataset.dock);
-    });
-    header.addEventListener("dblclick", (event) => {
-      if (event.target.closest(".fp-actions, .fp-dock")) return;
-      st.dock = "editor-top";
-      st.h = null;
-      st.x = 60; st.y = 96; st.w = 520;
-      applyPanel(st);
-      save();
-    });
-
-    applyPanel(st);
-    return st;
+    setScale(input.dataset.scaleInput, percent / 100);
   }
 
-  setupPanel("tagBar", "#tagBar", "编辑按钮", 56);
-  setupPanel("findBar", "#findBar", "查找替换", 82);
+  function makeScaleActions(target, label) {
+    const group = element("span", "fp-scale-actions");
+    group.dataset.scaleTarget = target;
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", `${label}缩放`);
+    group.append(element("span", "fp-scale-label", target === "editor" ? "编辑" : "标签"));
+    for (const [name, mark] of [["smaller", "−"], ["larger", "＋"]]) {
+      const button = element("button", "fp-scale-control", mark);
+      button.type = "button";
+      button.dataset.scaleAction = name;
+      button.title = `${name === "smaller" ? "缩小" : "放大"}${label}（Ctrl+${name === "smaller" ? "−" : "＋"}）`;
+      button.setAttribute("aria-label", button.title);
+      group.append(button);
+      if (name === "smaller") {
+        const input = element("input", "fp-scale-input");
+        Object.assign(input, { type: "text", inputMode: "decimal", maxLength: 5, value: "100%", title: `${label}缩放比例：输入 80%–160% 后按回车；双击恢复 100%` });
+        input.dataset.scaleInput = target;
+        input.setAttribute("aria-label", `${label}缩放比例`);
+        group.append(input);
+      }
+    }
+    return group;
+  }
+
+  actions.append(makeScaleActions("editor", "编辑框"), makeScaleActions("tag", "标签按钮"));
+  for (const [dockName, label, tip] of DOCK_DEFS) {
+    const button = element("button", "fp-dock", label);
+    button.type = "button";
+    button.dataset.dock = dockName;
+    button.title = tip;
+    button.setAttribute("aria-label", tip);
+    actions.append(button);
+  }
+  for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
+    const handle = element("div", `fp-handle fp-handle-${dir}`);
+    handle.dataset.dir = dir;
+    panel.append(handle);
+    bindResize(handle, dir);
+  }
+
+  bindDrag();
+  actions.addEventListener("pointerdown", (event) => {
+    const group = event.target.closest("[data-scale-target]");
+    if (!group) return;
+    lastScaleTarget = group.dataset.scaleTarget;
+    event.stopPropagation();
+    if (!event.target.matches("input")) event.preventDefault();
+  });
+  actions.addEventListener("click", (event) => {
+    const scaleButton = event.target.closest("[data-scale-action]");
+    if (scaleButton) {
+      event.preventDefault();
+      changeScale(scaleButton.closest("[data-scale-target]").dataset.scaleTarget, scaleButton.dataset.scaleAction === "larger" ? .1 : -.1);
+    }
+    const dockButton = event.target.closest(".fp-dock");
+    if (dockButton) dock(dockButton.dataset.dock);
+  });
+  for (const input of actions.querySelectorAll("[data-scale-input]")) {
+    input.addEventListener("focus", () => input.select());
+    input.addEventListener("change", () => commitScaleInput(input));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); commitScaleInput(input); input.select(); }
+      else if (event.key === "Escape") { event.preventDefault(); updateScaleControls(input.dataset.scaleInput); input.blur(); }
+    });
+    input.addEventListener("dblclick", () => { setScale(input.dataset.scaleInput, 1); input.select(); });
+  }
+  header.addEventListener("dblclick", (event) => {
+    if (event.target.closest(".fp-actions, button")) return;
+    Object.assign(state, { dock: "editor-top", h: null, x: 60, y: 96, w: 520 });
+    applyPanel();
+    save();
+  });
+
+  const mainScaleTarget = event => {
+    const target = event.target.closest?.('.float-panel[data-panel="tagBar"]') ? "tag" : event.target.closest?.("#sourcePane, #monacoEditor, #visualEditor") ? "editor" : null;
+    if (target) lastScaleTarget = target;
+    return target;
+  };
+
+  function bindScaleShortcuts(doc, fixedTarget = null) {
+    doc.addEventListener("wheel", (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const target = fixedTarget || mainScaleTarget(event);
+      if (!target) return;
+      lastScaleTarget = target;
+      event.preventDefault();
+      changeScale(target, event.deltaY < 0 ? .1 : -.1);
+    }, { capture: true, passive: false });
+    doc.addEventListener("keydown", (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const direction = ["Equal", "NumpadAdd"].includes(event.code) || event.key === "+" ? 1
+        : ["Minus", "NumpadSubtract"].includes(event.code) || event.key === "-" ? -1 : 0;
+      if (!direction) return;
+      const target = fixedTarget || mainScaleTarget(event) || lastScaleTarget;
+      lastScaleTarget = target;
+      event.preventDefault();
+      event.stopPropagation();
+      changeScale(target, direction * .1);
+    }, true);
+  }
+
+  updateScaleControls("editor");
+  applyPanel();
+  bindScaleShortcuts(document);
+  window.addEventListener("reader-visual-ready", (event) => bindScaleShortcuts(event.detail.document, "editor"));
   window.addEventListener("reader-mode-change", updateWindowDockLayout);
   window.addEventListener("reader-chrome-resize", updateWindowDockLayout);
   window.addEventListener("resize", () => {
-    Object.values(panels).forEach(clampFloatingPanel);
+    clampFloating();
     updateWindowDockLayout();
   });
   updateWindowDockLayout();

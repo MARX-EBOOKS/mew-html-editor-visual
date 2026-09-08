@@ -1,11 +1,13 @@
 import http from "node:http";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(HERE, "public");
+const MONACO = existsSync(path.join(HERE, "monaco", "min", "vs", "loader.js"))
+  ? path.join(HERE, "monaco") : path.join(HERE, "node_modules", "monaco-editor");
 const SETTINGS_FILE = path.join(HERE, "reader.settings.json");
 const CONFIG_FILE = path.resolve(valueOf(["-c", "--config"]) || process.env.CONFIG || path.join(HERE, "reader.config.mjs"));
 const PORT = Number(valueOf(["-p", "--port"]) || process.env.PORT || 49100);
@@ -283,10 +285,22 @@ async function vendorFile(res, pathname) {
   }
 }
 
+async function monacoFile(res, pathname) {
+  const relative = pathname.slice("/monaco/".length);
+  const full = path.resolve(MONACO, relative);
+  if (full !== MONACO && !full.startsWith(`${MONACO}${path.sep}`)) return reply(res, 403, "Forbidden", "text/plain");
+  try {
+    return reply(res, 200, await fs.readFile(full), MIME[path.extname(full).toLowerCase()] || "application/octet-stream");
+  } catch {
+    return reply(res, 404, "Not found", "text/plain");
+  }
+}
+
 await loadLibrary();
 http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname.startsWith("/api/reader/")) return api(req, res, url);
   if (url.pathname.startsWith("/vendor/pdfjs/")) return vendorFile(res, url.pathname);
+  if (url.pathname.startsWith("/monaco/")) return monacoFile(res, url.pathname);
   return staticFile(res, url.pathname);
 }).listen(PORT, () => console.log(`MEW 对照阅读编辑器：http://localhost:${PORT}（${library.volumes.length} 卷）`));

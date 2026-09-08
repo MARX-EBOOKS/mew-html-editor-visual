@@ -6,9 +6,13 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 
 const fixture = await mkdtemp(path.join(tmpdir(), 'mew-monaco-'));
-const original = '<!doctype html>\r\n<html><body><p>Alpha</p></body></html>\r\n';
-await writeFile(path.join(fixture, 'a.html'), original);
-await writeFile(path.join(fixture, 'b.html'), '<p>Beta</p>');
+  const original = '<!doctype html>\r\n<html><head><style>a{background:rgb(1,2,3)}</style></head><body><p style="color:#0f0">Alpha</p><a href="#F10">10</a></body></html>\r\n';
+  await writeFile(path.join(fixture, 'a.html'), original);
+  await writeFile(path.join(fixture, 'b.html'), '<p>Beta</p>');
+  await writeFile(path.join(fixture, 'theme.css'), 'a { color: #f10; }');
+  await writeFile(path.join(fixture, 'logic.js'), 'export const answer = 42;');
+  await writeFile(path.join(fixture, 'data.json'), '{"answer":42}');
+  await writeFile(path.join(fixture, 'README'), 'plain text');
 const tabFiles = Array.from({ length: 12 }, (_, index) => `long-tab-name-${String(index + 1).padStart(2, '0')}.html`);
 for (const file of tabFiles) await writeFile(path.join(fixture, file), `<p>${file}</p>`);
 const server = spawn(process.execPath, ['server.js', '-p', '41874', '-r', fixture], { windowsHide: true, stdio: 'pipe' });
@@ -32,6 +36,29 @@ try {
   assert.equal(await page.locator('#preview').isVisible(), true, 'opening a file displays the preview iframe');
   const value = () => page.evaluate(() => mewWorkbench.editor.getValue());
   await page.waitForFunction(() => document.querySelector('#fileName').textContent === 'a.html');
+  assert.deepEqual(await page.evaluate(() => ({
+    language: mewWorkbench.editor.getModel().getLanguageId(),
+    decorators: mewWorkbench.editor.getOption(monaco.editor.EditorOption.colorDecorators),
+    defaultDecorators: mewWorkbench.editor.getOption(monaco.editor.EditorOption.defaultColorDecorators),
+    status: document.querySelector('#languageInfo').textContent
+  })), { language: 'html', decorators: true, defaultDecorators: 'never', status: 'HTML · UTF-8' });
+  await page.waitForFunction(() => document.querySelectorAll('#monacoEditor .colorpicker-color-decoration').length === 2);
+  assert.equal(await page.locator('#monacoEditor .colorpicker-color-decoration').count(), 2, 'only style attribute and style block colors are decorated; href is ignored');
+  for (const [file, language] of [['theme.css', 'css'], ['logic.js', 'javascript'], ['data.json', 'json'], ['README', 'plaintext']]) {
+    await page.evaluate(file => mewWorkbench.openFile(file), file);
+    await page.waitForFunction(([file, language]) => document.querySelector('#fileName').textContent === file
+      && mewWorkbench.editor.getModel().getLanguageId() === language, [file, language]);
+  }
+  assert.equal(await page.evaluate(() => mewWorkbench.editor.getOption(monaco.editor.EditorOption.colorDecorators)), false, 'plain text has no color decorators');
+  await page.evaluate(() => mewWorkbench.openFile('theme.css'));
+  await page.waitForFunction(() => mewWorkbench.editor.getModel().getLanguageId() === 'css');
+  assert.equal(await page.evaluate(() => mewWorkbench.editor.getOption(monaco.editor.EditorOption.colorDecorators)), true, 'CSS keeps useful color decorators');
+  await page.evaluate(() => mewWorkbench.openFile('a.html'));
+  await page.waitForFunction(() => mewWorkbench.editor.getModel().getLanguageId() === 'html');
+  for (const file of ['theme.css', 'logic.js', 'data.json', 'README']) {
+    await page.locator(`#tabs [data-close="${file}"]`).click();
+    await page.waitForFunction(file => !mewWorkbench.documents.has(file), file);
+  }
   await page.keyboard.press('Control+s');
   await page.waitForTimeout(250);
   assert.equal(await readFile(path.join(fixture, 'a.html'), 'utf8'), original, 'opening and saving preserves CRLF');
@@ -66,17 +93,24 @@ try {
   await page.locator('#findBtn').click();
   await page.waitForFunction(() => document.querySelector('.find-widget')?.classList.contains('visible'));
   assert.deepEqual(await findLayout(), closedLayout, 'opening find adds no editor space');
-  await page.keyboard.press('Escape');
+  await page.locator('#findBtn').click();
   await page.waitForFunction(() => !document.querySelector('.find-widget')?.classList.contains('visible'));
-  assert.deepEqual(await findLayout(), closedLayout, 'closing find leaves no reserved rows');
-  // Reproduce the reported mouse-close path, including the delayed tooltip.
+  assert.deepEqual(await findLayout(), closedLayout, 'second button click closes find without reserved rows');
+  // Find action tooltips may escape above the editor instead of covering their
+  // buttons. The close tooltip is no longer suppressed as a special case.
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.locator('#findBtn').click();
     const closeFind = page.locator('.find-widget .codicon-widget-close');
     await closeFind.hover();
     await page.waitForTimeout(900);
-    assert.equal(await page.locator('.monaco-hover.workbench-hover:visible').count(), 0, 'close tooltip must not pop up');
+    const closeTooltip = page.locator('.monaco-hover.workbench-hover:visible');
+    assert.equal(await closeTooltip.count(), 1, 'close tooltip remains available');
+    const tooltipRect = await closeTooltip.boundingBox();
     const rect = await closeFind.boundingBox();
+    const editorTop = await page.locator('.editorWrap').evaluate(node => node.getBoundingClientRect().top);
+    assert.ok(tooltipRect.y < editorTop, 'tooltip may overflow upward into the editor header/chrome');
+    assert.ok(tooltipRect.y + tooltipRect.height <= rect.y,
+      'close tooltip is placed above and does not cover its button');
     await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
     await page.waitForFunction(() => !document.querySelector('.find-widget')?.classList.contains('visible'));
   }

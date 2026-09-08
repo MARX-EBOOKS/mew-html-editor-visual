@@ -26,9 +26,47 @@ try {
     await page.mouse.up();
     assert.ok(await width(pane) > before + 50);
   }
+  const mainRect = await page.locator('main').boundingBox();
+  const editorBeforeClose = await width('.editorPane');
+  let rect = await page.locator('#treeSplitter').boundingBox();
+  await page.mouse.move(rect.x + 3, rect.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(mainRect.x + 1, rect.y + 100, { steps: 8 });
+  await page.mouse.up();
+  assert.equal(await page.locator('#explorerPane').isVisible(), false);
+  assert.equal(await page.locator('#treeSplitter').isVisible(), false);
+  const editorAfterTreeClose = await width('.editorPane');
+  assert.ok(editorAfterTreeClose > editorBeforeClose + 200, `closed file tree leaves no layout track behind (${editorBeforeClose} -> ${editorAfterTreeClose})`);
+  assert.equal(await page.locator('#treePaneToggle').textContent(), '显示文件树');
+  await page.locator('#fileMenu > summary').click();
+  await page.locator('#treePaneToggle').click();
+  assert.ok(await page.locator('#explorerPane').isVisible());
+
+  rect = await page.locator('#previewSplitter').boundingBox();
+  await page.mouse.move(rect.x + 3, rect.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(mainRect.x + mainRect.width - 1, rect.y + 100, { steps: 8 });
+  await page.mouse.up();
+  assert.equal(await page.locator('#previewPane').isVisible(), false);
+  await page.reload();
+  assert.equal(await page.locator('#previewPane').isVisible(), false, 'closed preview persists after reload');
+  await page.locator('#fileMenu > summary').click();
+  await page.locator('#previewPaneToggle').click();
+  assert.ok(await page.locator('#previewPane').isVisible());
   const tree = await width('#explorerPane');
+  const toolbarBefore = await page.locator('#tagPanel').evaluate(panel => ({
+    dock: panel.className,
+    pageScroll: document.scrollingElement.scrollTop,
+    barScroll: panel.querySelector('.bar').scrollTop
+  }));
   await page.locator('#toolbarLarger').click();
   assert.equal(await page.locator('#toolbarReset').textContent(), '110%');
+  assert.equal(await page.locator('#tagPanel .bar').evaluate(bar => bar.scrollHeight > bar.clientHeight + 1), false, 'toolbar zoom does not create a vertical scrollbar');
+  assert.deepEqual(await page.locator('#tagPanel').evaluate(panel => ({
+    dock: panel.className,
+    pageScroll: document.scrollingElement.scrollTop,
+    barScroll: panel.querySelector('.bar').scrollTop
+  })), toolbarBefore, 'one size click does not drag or scroll the tag panel');
   await page.reload();
   assert.equal(await width('#explorerPane'), tree);
   assert.equal(await page.locator('#toolbarReset').textContent(), '110%');
@@ -42,7 +80,7 @@ try {
   await page.locator('#toolbarLarger').click();
   await page.setViewportSize({ width: 1000, height: 700 });
   await page.waitForTimeout(150);
-  assert.ok(await page.locator('#preview').isVisible());
+  assert.ok(await page.locator('#previewPane').isVisible());
   assert.ok(await width('.editorPane') >= 320);
   await page.locator('[data-tag-dock="top"]').click();
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -51,7 +89,7 @@ try {
   await page.locator('#darkBtn').click();
   await page.screenshot({ path: process.env.TEMP + '/mew-layout-dark.png' });
   assert.deepEqual(errors, []);
-  console.log('PASS: pane drag, keyboard resize, toolbar zoom, persisted layout, reset, floating toolbar, responsive preview, light/dark rendering');
+  console.log('PASS: pane drag/close/reopen, keyboard resize, toolbar zoom, persisted layout, reset, floating toolbar, responsive preview, light/dark rendering');
 } finally {
   await browser?.close();
   server.kill();

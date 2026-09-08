@@ -33,7 +33,14 @@ async function diskEquals(file, expected) {
   assert.equal(await readFile(file, 'utf8'), expected);
 }
 async function valueEquals(page, value) {
-  await page.waitForFunction(v => document.querySelector('#editor').value === v, value);
+  try {
+    await page.waitForFunction(v => window.readerMonaco
+      ? readerMonaco.editor.getValue().replace(/\r\n?/g, '\n') === v.replace(/\r\n?/g, '\n')
+      : document.querySelector('#editor')?.value === v, value);
+  } catch (error) {
+    const state = await page.evaluate(() => ({ value: window.readerMonaco?.editor.getValue(), status: document.querySelector('#status')?.textContent, body: document.body.innerText.slice(0, 300) }));
+    throw new Error(`${error.message}: ${JSON.stringify(state)}`);
+  }
 }
 async function click(page, id) {
   const button = page.locator(`#${id}`);
@@ -41,7 +48,19 @@ async function click(page, id) {
   if (await button.isEnabled()) await button.click();
 }
 async function type(page, value) {
-  await page.locator('#editor').fill(value);
+  if (await page.evaluate(() => Boolean(window.readerMonaco))) {
+    await page.evaluate(text => {
+      const { editor, model } = readerMonaco;
+      editor.pushUndoStop();
+      editor.executeEdits('browser-test', [{ range: model.getFullModelRange(), text }]);
+      editor.pushUndoStop();
+    }, value);
+  } else await page.locator('#editor').fill(value);
+}
+async function sourceValue(page) {
+  return page.evaluate(() => window.readerMonaco
+    ? readerMonaco.editor.getValue()
+    : document.querySelector('#editor').value);
 }
 try {
   const folder = path.join(fixture, '1'); await mkdir(folder);
@@ -56,9 +75,10 @@ try {
   await start('reader-server.js', 41872, ['-c', path.join(fixture, 'config.mjs')]);
   browser = await chromium.launch({ executablePath: process.env.EDGE_PATH || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', headless: true });
   const context = await browser.newContext();
+  const readerVariants = process.env.READER_ONLY ? [true] : [false, true];
   // Real textareas normalize line endings; opening/switching/saving must not
   // treat that or the visual DOM's HTML serialization as a user edit.
-  for (const reader of [false, true]) {
+  for (const reader of readerVariants) {
     const page = await context.newPage(); page.setDefaultTimeout(10000);
     const file = reader ? readerFile : editorFile;
     const url = reader ? 'http://127.0.0.1:41872/?volume=1&page=1&mode=source' : 'http://127.0.0.1:41871/legacy.html?file=a.html';
@@ -69,12 +89,92 @@ try {
       await writeFile(file, original);
       await page.goto(url); await valueEquals(page, original.replace(/\r\n?/g, '\n'));
       assert.equal(await dirty(), false, 'opening untouched source stays clean');
+      if (reader && original === base) {
+        const panel = page.locator('.float-panel[data-panel="tagBar"]');
+        const editorScaleInput = panel.locator('[data-scale-input="editor"]');
+        const tagScaleInput = panel.locator('[data-scale-input="tag"]');
+        assert.equal(await panel.evaluate(node => {
+          const editor = node.querySelector('[data-scale-input="editor"]');
+          const tag = node.querySelector('[data-scale-input="tag"]');
+          return Boolean(editor.compareDocumentPosition(tag) & Node.DOCUMENT_POSITION_FOLLOWING);
+        }), true, 'editor zoom controls precede tag zoom controls');
+        const before = await panel.evaluate(node => ({ dock: node.className, scroll: document.scrollingElement.scrollTop }));
+        await tagScaleInput.fill('100'); await tagScaleInput.press('Enter');
+        const scaleButton = panel.locator('[data-scale-target="tag"] [data-scale-action="larger"]');
+        const scaleButtonBox = await scaleButton.boundingBox();
+        await page.mouse.move(scaleButtonBox.x + scaleButtonBox.width / 2, scaleButtonBox.y + scaleButtonBox.height / 2);
+        await page.mouse.down();
+        assert.deepEqual(await panel.locator('.fp-actions').evaluate(actions => {
+          const style = getComputedStyle(actions);
+          const border = parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth);
+          return { overflowY: style.overflowY, scrollbarWidth: Math.round(actions.offsetWidth - actions.clientWidth - border) };
+        }), { overflowY: 'hidden', scrollbarWidth: 0 }, 'pressed plugin controls do not create a vertical scrollbar');
+        await page.mouse.up();
+        assert.equal(await tagScaleInput.inputValue(), '110%', 'one click enlarges tag buttons');
+        assert.equal(await panel.locator('.tag-bar').evaluate(bar => bar.scrollHeight > bar.clientHeight + 1), false, 'reader tag zoom does not create a vertical scrollbar');
+        const after = await panel.evaluate(node => ({ dock: node.className, scroll: document.scrollingElement.scrollTop }));
+        assert.equal(after.dock, before.dock, 'size click does not start panel dragging');
+        assert.equal(after.scroll, before.scroll, 'size click does not scroll the page');
+        await tagScaleInput.fill('125%'); await tagScaleInput.press('Enter');
+        assert.equal(await panel.evaluate(node => node.style.getPropertyValue('--fp-scale')), '1.25', 'tag zoom accepts numeric input');
+        await panel.locator('.tag-bar').hover(); await page.keyboard.down('Control'); await page.mouse.wheel(0, -100); await page.keyboard.up('Control');
+        assert.equal(await tagScaleInput.inputValue(), '135%', 'Ctrl+wheel over tag bar changes tag zoom');
+        await tagScaleInput.fill('150'); await tagScaleInput.press('Enter');
+        const tagButton = panel.locator('.tag-bar button').first();
+        const tagGeometry = () => panel.locator('.tag-bar').evaluate(bar => ({
+          buttons: [...bar.querySelectorAll('button')].map(button => {
+            const rect = button.getBoundingClientRect();
+            return [rect.x, rect.y, rect.width, rect.height];
+          }),
+          overflowY: getComputedStyle(bar).overflowY,
+          scrollTop: bar.scrollTop,
+          verticalScrollbar: bar.offsetWidth - bar.clientWidth
+        }));
+        const tagsBeforePress = await tagGeometry();
+        const tagButtonBox = await tagButton.boundingBox();
+        await page.mouse.move(tagButtonBox.x + tagButtonBox.width / 2, tagButtonBox.y + tagButtonBox.height / 2);
+        await page.mouse.down();
+        assert.deepEqual(await tagGeometry(), tagsBeforePress, 'pressed tag button keeps every button at the same size and position');
+        await page.mouse.up();
+        const tagsAfterPress = await tagGeometry();
+        assert.deepEqual(tagsAfterPress.buttons, tagsBeforePress.buttons, 'tag click does not rewrap or move buttons');
+        assert.equal(tagsAfterPress.overflowY, 'hidden', 'tag bar permanently disables vertical scrolling');
+        assert.equal(tagsAfterPress.verticalScrollbar, 0, 'tag bar has no vertical scrollbar');
+        assert.equal(tagsAfterPress.scrollTop, 0, 'tag click does not vertically scroll the tag bar');
+        await tagScaleInput.fill('100'); await tagScaleInput.press('Enter');
+        await editorScaleInput.fill('120'); await editorScaleInput.press('Enter');
+        assert.equal(await page.evaluate(() => readerMonaco.editor.getOption(monaco.editor.EditorOption.fontSize)), 16.8, 'editor zoom input changes Monaco font size');
+        await page.evaluate(() => readerMonaco.editor.focus()); await page.keyboard.press('Control+-');
+        assert.equal(await editorScaleInput.inputValue(), '110%', 'Ctrl+- changes editor zoom');
+        await page.locator('#monacoEditor').hover(); await page.keyboard.down('Control'); await page.mouse.wheel(0, -100); await page.keyboard.up('Control');
+        assert.equal(await editorScaleInput.inputValue(), '120%', 'Ctrl+wheel over editor changes editor zoom');
+        await editorScaleInput.fill('100'); await editorScaleInput.press('Enter');
+        const colorFixture = '<p style="color:#0f0">styled</p><a href="#F10">linked</a>';
+        await page.evaluate(text => readerMonaco.model.setValue(text), colorFixture);
+        await page.waitForFunction(() => document.querySelectorAll('#monacoEditor .colorpicker-color-decoration').length === 1);
+        assert.equal(await page.locator('#monacoEditor .colorpicker-color-decoration').count(), 1, 'reader decorates style color but not href');
+        await page.evaluate(text => readerMonaco.model.setValue(text), original.replace(/\r\n?/g, '\n'));
+        await page.waitForFunction(() => !document.querySelector('#saveBtn').classList.contains('dirty'));
+      }
       await click(page, 'saveBtn');
       if (reader) {
+        if (original === base) {
+          const input = page.locator('[data-scale-input="editor"]');
+          await input.fill('130'); await input.press('Enter');
+          assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('readerDockPanels.v1'))._editorScale), 1.3, 'editor zoom is persisted with panel layout');
+        }
         await page.locator('#modeBtn').click();
-        await page.frameLocator('#visualEditor').locator('body[contenteditable]').waitFor();
+        const visualBody = page.frameLocator('#visualEditor').locator('body[contenteditable]');
+        await visualBody.waitFor();
+        if (original === base) {
+          assert.equal(await page.locator('#visualEditor').evaluate(frame => frame.contentDocument.documentElement.style.zoom), '1.3', 'editor zoom applies to visual editing');
+          await visualBody.click(); await page.keyboard.press('Control+Equal');
+          assert.equal(await page.locator('[data-scale-input="editor"]').inputValue(), '140%', 'Ctrl++ changes visual editor zoom');
+          const input = page.locator('[data-scale-input="editor"]');
+          await input.fill('100'); await input.press('Enter');
+        }
         await click(page, 'saveBtn');
-        assert.equal(await dirty(), false, 'untouched visual save stays clean');
+        assert.equal(await dirty(), false, `untouched visual save stays clean: ${JSON.stringify(await sourceValue(page))}`);
         await page.locator('#modeBtn').click();
         assert.equal(await dirty(), false, 'source / visual round trip stays clean');
       } else {
@@ -83,16 +183,36 @@ try {
         assert.equal(await dirty(), false, 'tab round trip stays clean');
       }
       assert.equal(await readFile(file, 'utf8'), original, 'untouched save preserves exact source');
-      await type(page, original + 'edit'); assert.equal(await dirty(), true);
+      await type(page, original + 'edit');
+      await page.waitForFunction(isReader => isReader
+        ? document.querySelector('#saveBtn').classList.contains('dirty')
+        : document.querySelector('#fileName').textContent.endsWith(' *'), reader);
+      assert.equal(await dirty(), true);
       await click(page, 'undoBtn'); assert.equal(await dirty(), false, 'undo returns to clean original');
       await click(page, 'redoBtn'); assert.equal(await dirty(), true);
-      await type(page, original); assert.equal(await dirty(), false, 'manually restoring original stays clean');
+      await type(page, original);
+      await page.waitForFunction(isReader => isReader
+        ? !document.querySelector('#saveBtn').classList.contains('dirty')
+        : !document.querySelector('#fileName').textContent.endsWith(' *'), reader);
+      assert.equal(await dirty(), false, 'manually restoring original stays clean');
     }
     await page.close(); await writeFile(file, base);
     console.log(`${reader ? 'reader' : 'editor'}: untouched LF / CRLF / CR / mixed source, exact save, mode or tab switch, undo / redo passed`);
   }
-  for (const reader of [false, true]) {
+  for (const reader of readerVariants) {
     const page = await context.newPage(); page.setDefaultTimeout(10000);
+    if (reader) await page.addInitScript(() => {
+      let ui;
+      Object.defineProperty(window, 'ReaderUI', {
+        configurable: true,
+        get: () => ui,
+        set: value => {
+          ui = value;
+          const init = value.init.bind(value);
+          value.init = handlers => { window.__readerHandlers = handlers; return init(handlers); };
+        }
+      });
+    });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', dialog => dialog.accept());
     const url = reader ? 'http://127.0.0.1:41872/?volume=1&page=1&mode=source' : 'http://127.0.0.1:41871/legacy.html?file=./a.html';
@@ -100,6 +220,12 @@ try {
     await page.goto(url); await valueEquals(page, base);
     const changed = html('edited');
     await type(page, changed);
+    if (reader) {
+      await page.evaluate(() => __readerHandlers.pdfPageChange({ pageNumber: 2, pageLabel: '2' }));
+      await page.waitForTimeout(150);
+      await valueEquals(page, changed);
+      assert.equal(await readFile(file, 'utf8'), base, 'PDF scrolling does not auto-save a dirty web page');
+    }
     await click(page, 'undoBtn'); await valueEquals(page, base);
     await click(page, 'redoBtn'); await valueEquals(page, changed);
     await click(page, 'saveBtn'); await diskEquals(file, changed);
@@ -143,6 +269,31 @@ try {
 
     await page.reload(); await valueEquals(page, disk);
     if (reader) {
+      await page.evaluate(() => {
+        const { editor, model } = readerMonaco;
+        const start = model.getValue().indexOf('disk conflict');
+        editor.setSelection(monaco.Selection.fromPositions(model.getPositionAt(start), model.getPositionAt(start + 13)));
+      });
+      await page.locator('#tagBar [data-tag="0"]').click();
+      await page.waitForFunction(() => readerMonaco.editor.getValue().includes('<b>disk conflict</b>'));
+      await click(page, 'undoBtn'); await valueEquals(page, disk);
+      await click(page, 'redoBtn');
+      await page.waitForFunction(() => readerMonaco.editor.getValue().includes('<b>disk conflict</b>'));
+      await click(page, 'undoBtn'); await valueEquals(page, disk);
+      await page.locator('#findBtn').click();
+      await page.waitForFunction(() => document.querySelector('.find-widget')?.classList.contains('visible'));
+      await page.locator('#findBtn').click();
+      await page.waitForFunction(() => !document.querySelector('.find-widget')?.classList.contains('visible'));
+      await page.evaluate(() => readerMonaco.editor.focus());
+      await page.keyboard.press('Control+H');
+      await page.waitForFunction(() => document.querySelector('.find-widget')?.classList.contains('visible'));
+      await page.keyboard.press('Escape');
+      const shortcutText = html('shortcut save');
+      await type(page, shortcutText);
+      await page.evaluate(() => readerMonaco.editor.focus());
+      await page.keyboard.press('Control+S');
+      await diskEquals(file, shortcutText);
+      console.log('reader: Monaco tag edit / native undo-redo / native find-replace / Ctrl+S passed');
       const navigationText = html('save before navigation'); await type(page, navigationText);
       await page.locator('#nextPageBtn').click(); await valueEquals(page, second);
       await diskEquals(file, navigationText);
@@ -153,9 +304,9 @@ try {
       await click(page, 'undoBtn'); await body.locator('p').filter({ hasText: 'save before navigation' }).waitFor();
       await click(page, 'redoBtn'); assert.equal(await body.textContent(), 'visual edit');
       await page.locator('#modeBtn').click();
-      assert.match(await page.locator('#editor').inputValue(), /visual edit/);
+      assert.match(await sourceValue(page), /visual edit/);
       await click(page, 'saveBtn');
-      await diskEquals(file, await page.locator('#editor').inputValue());
+      await diskEquals(file, await sourceValue(page));
       console.log('reader: navigation save / source-visual switching / visual undo-redo passed');
       let releaseRead, enterRead;
       const readGate = new Promise(r => { releaseRead = r; });

@@ -133,23 +133,18 @@ class DocumentModel {
   refresh() {
     return this.enqueue(async () => {
       const data = await this.read();
-      if (data.text === this.savedContent) {
-        this.mtime = data.mtime;
-        return "unchanged";
+      const result = data.text === this.savedContent ? "unchanged"
+        : data.text === this.content ? "saved" : "updated";
+      if (result === "updated") {
+        if (this.dirty) return "conflict";
+        this.reloadRevision += 1;
+        this.update(data.text);
+        this.undoStack = [];
+        this.redoStack = [];
       }
-      if (data.text === this.content) {
-        this.savedContent = data.text;
-        this.mtime = data.mtime;
-        return "saved";
-      }
-      if (this.dirty) return "conflict";
-      this.reloadRevision += 1;
-      this.update(data.text);
       this.savedContent = data.text;
       this.mtime = data.mtime;
-      this.undoStack = [];
-      this.redoStack = [];
-      return "updated";
+      return result;
     });
   }
 }
@@ -200,14 +195,23 @@ function persistEditor() {
 }
 function markDirty(forceTabs = false) {
   const d = doc();
+  const tagTitle = $("tagPanelTitle");
   if (!d) {
     $("fileName").textContent = "No file open";
+    tagTitle.textContent = "标签";
+    tagTitle.title = "";
+    $("tagPrevFileBtn").disabled = true;
+    $("tagNextFileBtn").disabled = true;
     renderTabs();
     return;
   }
   const wasDirty = d.dirty;
   d.update(d.textFromEditor($("editor").value));
   $("fileName").textContent = d.path + (d.dirty ? " *" : "");
+  tagTitle.textContent = `标签 · ${fileLabel(d.path)}`;
+  tagTitle.title = d.path;
+  $("tagPrevFileBtn").disabled = false;
+  $("tagNextFileBtn").disabled = false;
   if (forceTabs || wasDirty !== d.dirty) renderTabs();
 }
 function scheduleEditorRefresh() {
@@ -339,6 +343,17 @@ async function openFile(rel) {
 }
 async function openSiblingFile(direction) {
   if (!state.path) return note("Open a file first");
+  persistEditor();
+  const current = doc();
+  if (current?.dirty) {
+    try {
+      await current.saveUntilClean();
+      markDirty();
+    } catch (error) {
+      note(`自动保存失败：${error.message}`);
+      return;
+    }
+  }
   const parts = state.path.split("/");
   const currentName = parts.pop();
   const dir = parts.join("/");
@@ -356,12 +371,12 @@ async function openSiblingFile(direction) {
 function switchDoc(path) {
   persistEditor();
   const d = state.docs.get(path);
-  if (!d) return;
+  if (path && !d) return;
   state.path = path;
-  $("editor").value = d.content;
+  $("editor").value = d?.content || "";
   setActiveTreePath(path);
   markDirty(true); refreshDocumentView(); $("editor").focus();
-  $("editor").setSelectionRange(d.selA || 0, d.selB || 0);
+  $("editor").setSelectionRange(d?.selA || 0, d?.selB || 0);
 }
 function closeDocs(paths) {
   let next = state.path;
@@ -376,14 +391,7 @@ function closeDocs(paths) {
   }
   if (next !== state.path) {
     state.path = "";
-    if (next) switchDoc(next);
-    else {
-      $("editor").value = "";
-      $("preview").hidden = true;
-      $("preview").srcdoc = "";
-      setActiveTreePath();
-      markDirty(false); refreshDocumentView();
-    }
+    switchDoc(next);
   } else {
     renderTabs();
   }
@@ -396,44 +404,45 @@ function openFileWindow() {
   if (!state.path) return note("Open a file first");
   window.open(`/?file=${encodeURIComponent(state.path)}`, "_blank");
 }
-async function save() {
-  const d = doc();
-  if (!d) return note("Open a file first");
+async function save(all = false) {
+  all = all === true;
   persistEditor();
-  const savedText = d.content;
-  try {
-    const data = await d.save(savedText);
-    if (d.path === state.path) markDirty(true);
-    else renderTabs();
-    note(`Saved ${data.path}${d.dirty ? "; newer edits remain unsaved" : ""}`);
-  } catch (e) {
-    note(e.message);
-  }
-}
-async function saveAll() {
-  persistEditor();
-  for (const d of [...state.docs.values()]) {
-    if (!d.dirty) continue;
-    const savedText = d.content;
+  const documents = all ? [...state.docs.values()] : [doc()];
+  if (!all && !documents[0]) return note("Open a file first");
+  let savedPath;
+  for (const d of documents) {
+    // A document may have become clean while a preceding save was in flight.
+    if (all && !d.dirty) continue;
     try {
-      await d.save(savedText);
+      savedPath = (await d.save()).path;
     } catch (e) {
-      switchDoc(d.path); note(e.message); return;
+      if (all) switchDoc(d.path);
+      note(e.message);
+      return;
     }
   }
   markDirty(true);
-  note([...state.docs.values()].some(d => d.dirty) ? "Saved snapshots; newer edits remain unsaved" : "Saved all");
+  const dirty = (all ? [...state.docs.values()] : documents).some(d => d.dirty);
+  note(all ? dirty ? "Saved snapshots; newer edits remain unsaved" : "Saved all"
+    : `Saved ${savedPath}${dirty ? "; newer edits remain unsaved" : ""}`);
 }
+function saveAll() { return save(true); }
 function refreshPreview() {
   clearTimeout(previewTimer);
-  if (!state.path) return;
-  $("preview").hidden = false;
+  const preview = $("preview");
+  preview.hidden = !state.path;
+  if (!state.path) {
+    // Do not navigate an already-empty iframe: a startup empty navigation can
+    // swallow the srcdoc navigation made moments later when a file opens.
+    if (preview.srcdoc) preview.srcdoc = "";
+    return;
+  }
   const dir = state.path.split("/").slice(0, -1).join("/");
   const { bg, ink } = themeColors();
   const css = `${state.cssText ? `<style>${state.cssText}</style>` : '<link rel="stylesheet" href="/mewde.css">'}<style>body{background:${bg};color:${ink}}</style>`;
   const baseUrl = window.MEWBackend?.rawUrl(dir, true) || `/raw/${encodeURI(dir)}${dir ? "/" : ""}`;
   const base = `<base href="${baseUrl}">`;
-  $("preview").srcdoc = base + css + $("editor").value;
+  preview.srcdoc = base + css + $("editor").value;
 }
 function openRaw() {
   if (state.path) {
@@ -530,16 +539,15 @@ function innermost(elements, start, end) {
 }
 
 function isCompleteSelection(text, elements, start, end) {
+  // Each opening token has one pair: index it once instead of rescanning per sibling.
+  const byStart = new Map(elements.map(element => [element.start, element]));
   let cursor = start, found = false;
-  while (cursor < end && /\s/.test(text[cursor])) cursor += 1;
   while (cursor < end) {
-    const outer = elements
-      .filter(element => element.start === cursor && element.end <= end)
-      .reduce((root, element) => !root || element.end > root.end ? element : root, undefined);
-    if (!outer) return false;
+    if (/\s/.test(text[cursor])) { cursor += 1; continue; }
+    const outer = byStart.get(cursor);
+    if (!outer || outer.end > end) return false;
     found = true;
     cursor = outer.end;
-    while (cursor < end && /\s/.test(text[cursor])) cursor += 1;
   }
   return found;
 }
@@ -594,17 +602,19 @@ function insertAttr(attr) {
 function buildTagBar() {
   $("tagBar").innerHTML = [
     ...tags.map((tag, i) => `<button class="tag" data-i="${i}" title="${esc(tag.title)}">${esc(tag.label)}</button>`),
+    '<span class="spacer"></span>',
     ...attrs.map((attr, i) => `<button class="tag attrTag" data-attr="${i}" title="${esc(attr.title)}">${esc(attr.label)}</button>`),
-    '<button class="tag attrTag" data-nav="-1" title="Open previous file in folder">←</button>',
-    '<button class="tag attrTag" data-nav="1" title="Open next file in folder">→</button>'
+    '<span class="spacer"></span>',
+    '<button id="tagPrevFileBtn" class="tag attrTag tagFileNav" data-nav="-1" title="上一文件；切换前自动保存">←</button>',
+    '<button id="tagNextFileBtn" class="tag attrTag tagFileNav" data-nav="1" title="下一文件；切换前自动保存">→</button>'
   ].join("");
   $("tagBar").onclick = e => {
-    const tag = e.target.closest("button[data-i]");
-    const attr = e.target.closest("button[data-attr]");
-    const nav = e.target.closest("button[data-nav]");
-    if (tag) editTag(tags[Number(tag.dataset.i)]);
-    if (attr) insertAttr(attrs[Number(attr.dataset.attr)]);
-    if (nav) openSiblingFile(Number(nav.dataset.nav));
+    const button = e.target.closest("button");
+    if (!button) return;
+    const { i, attr, nav } = button.dataset;
+    if (i != null) editTag(tags[Number(i)]);
+    else if (attr != null) insertAttr(attrs[Number(attr)]);
+    else if (nav != null) openSiblingFile(Number(nav));
   };
 }
 
@@ -759,25 +769,17 @@ function attrToken(raw, value) {
 }
 function colorTag(raw) {
   if (raw.startsWith("<!--")) return `<span class="tok-comment">${esc(raw)}</span>`;
-  let out = "", last = 0;
-  const re = /(<\/?)([A-Za-z][\w:-]*)|([\w:-]+)(\s*=\s*)("[^"]*"|'[^']*')|([<>/=])/g;
-  for (let m; (m = re.exec(raw));) {
-    out += esc(raw.slice(last, m.index));
-    if (m[1]) out += `<span class="tok-punct">${esc(m[1])}</span><span class="tok-tag">${esc(m[2])}</span>`;
-    else if (m[3]) out += `<span class="tok-attr">${esc(m[3])}</span><span class="tok-punct">${esc(m[4])}</span>${attrToken(m[0], m[5])}`;
-    else if (m[6]) out += `<span class="tok-punct">${esc(m[6])}</span>`;
-    last = m.index + m[0].length;
-  }
-  return out + esc(raw.slice(last));
+  return raw.replace(/(<\/?)([A-Za-z][\w:-]*)|([\w:-]+)(\s*=\s*)("[^"]*"|'[^']*')|([<>/=])|[&"']/g,
+    (token, opening, name, attr, equals, value, punctuation) => {
+      if (opening) return `<span class="tok-punct">${esc(opening)}</span><span class="tok-tag">${esc(name)}</span>`;
+      if (attr) return `<span class="tok-attr">${esc(attr)}</span><span class="tok-punct">${esc(equals)}</span>${attrToken(token, value)}`;
+      return punctuation ? `<span class="tok-punct">${esc(punctuation)}</span>` : esc(token);
+    });
 }
 function highlightHtml(text) {
-  let out = "", last = 0;
-  const re = /<!--[\s\S]*?-->|<\/?[A-Za-z][^>]*?>/g;
-  for (let m; (m = re.exec(text));) {
-    out += esc(text.slice(last, m.index)) + colorTag(m[0]);
-    last = m.index + m[0].length;
-  }
-  return out + esc(text.slice(last)) + (text.endsWith("\n") ? " " : "");
+  return text.replace(/<!--[\s\S]*?-->|<\/?[A-Za-z][^>]*?>|[&<>"']/g,
+    token => token.length === 1 ? esc(token) : colorTag(token))
+    + (text.endsWith("\n") ? " " : "");
 }
 function updateHighlight() {
   $("highlight").innerHTML = highlightHtml($("editor").value);
@@ -831,6 +833,14 @@ function openEditorLink(e) {
   const dir = state.path.split("/").slice(0, -1).join("/");
   const base = state.path ? (window.MEWBackend?.rawUrl(dir, true) || `${location.origin}/raw/${encodeURI(dir)}${dir ? "/" : ""}`) : location.href;
   window.open(new URL(href, base).href, "_blank");
+}
+function trimSourceWordSelection() {
+  const ed = $("editor");
+  let start = ed.selectionStart, end = ed.selectionEnd;
+  if (start === end) return;
+  while (start < end && /\s/.test(ed.value[start])) start += 1;
+  while (end > start && /\s/.test(ed.value[end - 1])) end -= 1;
+  ed.setSelectionRange(start, end);
 }
 function applyExternalUpdate(d) {
   if (d.path !== state.path) return renderTabs();
@@ -902,10 +912,11 @@ function closeMenus(except) {
   });
 }
 
-buildTagBar(); setupTagPanel(); refreshTree(); connectFileEvents(); checkCssUpdate();
+buildTagBar(); setupTagPanel(); markDirty(); refreshTree(); connectFileEvents(); checkCssUpdate();
 $("editor").addEventListener("beforeinput", remember);
 $("editor").addEventListener("input", commitEditorChange);
 $("editor").addEventListener("scroll", syncHighlightScroll);
+$("editor").addEventListener("dblclick", trimSourceWordSelection);
 $("editor").addEventListener("click", openEditorLink);
 document.addEventListener("keydown", keydown);
 $("saveBtn").onclick = save; $("saveAllBtn").onclick = saveAll; $("undoBtn").onclick = undo; $("redoBtn").onclick = redo;

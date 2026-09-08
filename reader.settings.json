@@ -1,8 +1,8 @@
 {
-  "brightness": 87,
+  "brightness": 100,
   "paper": "#ffffff",
   "ink": "#000000",
   "invert": false,
   "horizontal": false,
-  "scale": "page-width"
+  "scale": "1"
 }

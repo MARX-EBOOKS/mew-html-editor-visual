@@ -6,7 +6,8 @@ npm run start:editor -- -p 4127 -r "D:\马恩列总装\MEW_BRIEF"
 ```
 
 打开 `http://localhost:4127/`。旧 textarea 编辑器保留在 `/legacy.html`。
-`npm start` 继续启动原有阅读器。
+`npm start` 启动对照阅读器；阅读器的源码模式也由 Monaco 接管，和可视化模式
+共用同一工作副本及原生撤销栈，原自制高亮层和查找替换栏已移除。
 
 新入口是 `public/index.html`，实现是 `public/monaco-app.js`。
 Monaco 接管源码编辑、语法高亮、选择、撤销重做、查找替换和每个文件的文档模型。
