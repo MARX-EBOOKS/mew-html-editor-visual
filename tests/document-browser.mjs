@@ -75,6 +75,7 @@ try {
   await start('reader-server.js', 41872, ['-c', path.join(fixture, 'config.mjs')]);
   browser = await chromium.launch({ executablePath: process.env.EDGE_PATH || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', headless: true });
   const context = await browser.newContext();
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:41872' });
   const readerVariants = process.env.READER_ONLY ? [true] : [false, true];
   // Real textareas normalize line endings; opening/switching/saving must not
   // treat that or the visual DOM's HTML serialization as a user edit.
@@ -225,6 +226,7 @@ try {
       await page.waitForTimeout(150);
       await valueEquals(page, changed);
       assert.equal(await readFile(file, 'utf8'), base, 'PDF scrolling does not auto-save a dirty web page');
+      await page.evaluate(() => __readerHandlers.pdfPageChange({ pageNumber: 1, pageLabel: '1' }));
     }
     await click(page, 'undoBtn'); await valueEquals(page, base);
     await click(page, 'redoBtn'); await valueEquals(page, changed);
@@ -280,8 +282,10 @@ try {
       await click(page, 'redoBtn');
       await page.waitForFunction(() => readerMonaco.editor.getValue().includes('<b>disk conflict</b>'));
       await click(page, 'undoBtn'); await valueEquals(page, disk);
+      await page.evaluate(() => navigator.clipboard.writeText('clipboard search text'));
       await page.locator('#findBtn').click();
       await page.waitForFunction(() => document.querySelector('.find-widget')?.classList.contains('visible'));
+      await page.waitForFunction(() => document.querySelector('.find-widget .input')?.value === 'clipboard search text');
       await page.locator('#findBtn').click();
       await page.waitForFunction(() => !document.querySelector('.find-widget')?.classList.contains('visible'));
       await page.evaluate(() => readerMonaco.editor.focus());
@@ -360,6 +364,115 @@ try {
     }
     assert.deepEqual(errors, []); await page.close();
   }
+
+  // A PDF turn made while the HTML is dirty is remembered. Once the user
+  // explicitly saves, the reader must immediately catch up to that PDF page.
+  await writeFile(readerFile, base);
+  await writeFile(path.join(folder, 'ME01-002.html'), second);
+  const pdfSyncPage = await context.newPage(); pdfSyncPage.setDefaultTimeout(10000);
+  await pdfSyncPage.addInitScript(() => {
+    let ui;
+    Object.defineProperty(window, 'ReaderUI', {
+      configurable: true,
+      get: () => ui,
+      set: value => {
+        ui = value;
+        const init = value.init.bind(value);
+        value.init = handlers => { window.__readerHandlers = handlers; return init(handlers); };
+      }
+    });
+  });
+  const pdfSyncErrors = []; pdfSyncPage.on('pageerror', error => pdfSyncErrors.push(error.message));
+  await pdfSyncPage.goto('http://127.0.0.1:41872/?volume=1&page=1&mode=source');
+  const savedBeforePdfSync = html('save then follow PDF');
+  await type(pdfSyncPage, savedBeforePdfSync);
+  await pdfSyncPage.evaluate(() => __readerHandlers.pdfPageChange({ pageNumber: 2, pageLabel: '2' }));
+  await valueEquals(pdfSyncPage, savedBeforePdfSync);
+  assert.equal(await readFile(readerFile, 'utf8'), base, 'dirty PDF turn still does not auto-save');
+  await click(pdfSyncPage, 'saveBtn');
+  await diskEquals(readerFile, savedBeforePdfSync);
+  await valueEquals(pdfSyncPage, second);
+  await pdfSyncPage.waitForFunction(() => new URL(location.href).searchParams.get('page') === '2');
+  assert.deepEqual(pdfSyncErrors, []);
+  await pdfSyncPage.close();
+  console.log('reader: saved HTML immediately follows the pending PDF page');
+
+  // Split mode keeps the PDF window read-only and lets index.html retain all
+  // working copies and save/conflict behavior. Page changes travel both ways.
+  await writeFile(readerFile, base);
+  await writeFile(path.join(folder, 'ME01-002.html'), second);
+  const session = `browser-${Date.now()}`;
+  const pureReader = await context.newPage(); pureReader.setDefaultTimeout(10000);
+  await pureReader.addInitScript(() => {
+    let ui;
+    Object.defineProperty(window, 'ReaderUI', {
+      configurable: true,
+      get: () => ui,
+      set: value => {
+        ui = value;
+        const init = value.init.bind(value);
+        value.init = handlers => { window.__readerHandlers = handlers; return init(handlers); };
+      }
+    });
+  });
+  await pureReader.goto(`http://127.0.0.1:41872/?view=reader&sync=${session}&volume=1&page=1`);
+  await pureReader.waitForFunction(() => document.body.classList.contains('reader-only') && new URL(location.href).searchParams.get('page') === '1');
+  assert.equal(await pureReader.evaluate(() => Boolean(window.readerMonaco)), false, 'pure reader does not initialize its internal Monaco editor');
+  assert.equal(await pureReader.locator('.text-pane').isHidden(), true);
+  assert.equal(await pureReader.locator('#saveBtn').isHidden(), true);
+  assert.equal(await pureReader.evaluate(() => document.querySelector('.scan-pane').getBoundingClientRect().width >= innerWidth - 1), true, 'PDF pane occupies the pure-reader window');
+  await pureReader.setViewportSize({ width: 1244, height: 900 });
+  assert.deepEqual(await pureReader.locator('.actions').evaluate(actions => ({
+    horizontalOverflow: actions.scrollWidth > actions.clientWidth,
+    verticalOverflow: actions.scrollHeight > actions.clientHeight
+  })), { horizontalOverflow: false, verticalOverflow: false }, 'split reader header does not grow a scrollbar at app-window width');
+
+  const pairedEditor = await context.newPage(); pairedEditor.setDefaultTimeout(10000);
+  await pairedEditor.goto(`http://127.0.0.1:41872/index.html?readerSession=${session}&file=1/ME01-001.html`);
+  await pairedEditor.waitForFunction(() => mewWorkbench?.documents?.has('1/ME01-001.html'));
+  assert.equal(await pairedEditor.locator('#pdfFrame').count(), 0, 'paired window is index.html, not another combined reader');
+  const pairedDirty = html('paired dirty working copy');
+  await pairedEditor.evaluate(text => {
+    const model = mewWorkbench.editor.getModel();
+    mewWorkbench.editor.executeEdits('paired-test', [{ range: model.getFullModelRange(), text }]);
+  }, pairedDirty);
+  await pureReader.evaluate(() => __readerHandlers.pdfPageChange({ pageNumber: 2, pageLabel: '2' }));
+  await pairedEditor.waitForFunction(() => mewWorkbench.editor.getModel()?.uri.path === '/1/ME01-002.html');
+  assert.equal(await readFile(readerFile, 'utf8'), base, 'split reader navigation never saves the editor working copy');
+  assert.equal(await pairedEditor.evaluate(() => mewWorkbench.documents.get('1/ME01-001.html').dirty), true, 'index.html retains the dirty tab');
+  await pairedEditor.evaluate(() => mewWorkbench.openFile('1/ME01-001.html'));
+  await pureReader.waitForFunction(() => new URL(location.href).searchParams.get('page') === '1');
+  await click(pairedEditor, 'saveBtn');
+  await diskEquals(readerFile, pairedDirty);
+  await pairedEditor.evaluate(() => mewWorkbench.openFile('1/ME01-002.html'));
+  await pureReader.waitForFunction(() => new URL(location.href).searchParams.get('page') === '2');
+  await pairedEditor.close(); await pureReader.close();
+  console.log('reader: split PDF / index.html page sync and save ownership passed');
+
+  const modePage = await context.newPage(); modePage.setDefaultTimeout(10000);
+  await modePage.addInitScript(() => {
+    const nativeOpen = window.open.bind(window);
+    window.open = (url, target, features) => {
+      const seen = JSON.parse(sessionStorage.getItem('__openFeatures') || '[]');
+      seen.push(features || '');
+      sessionStorage.setItem('__openFeatures', JSON.stringify(seen));
+      return nativeOpen(url, target, features);
+    };
+  });
+  await modePage.goto('http://127.0.0.1:41872/?volume=1&page=1&mode=source');
+  await modePage.waitForFunction(() => Boolean(window.readerMonaco));
+  const [openedEditor] = await Promise.all([
+    modePage.waitForEvent('popup'),
+    modePage.locator('#splitViewBtn').click()
+  ]);
+  assert.equal(await modePage.evaluate(() => JSON.parse(sessionStorage.getItem('__openFeatures') || '[]').at(-1)), 'popup=yes', 'Chromium split editor requests an app-style popup window');
+  await modePage.waitForFunction(() => document.body.classList.contains('reader-only') && !window.readerMonaco);
+  await openedEditor.waitForFunction(() => Boolean(window.mewWorkbench?.documents?.has('1/ME01-001.html')));
+  await modePage.locator('#combinedViewBtn').click();
+  await modePage.waitForFunction(() => !document.body.classList.contains('reader-only') && Boolean(window.readerMonaco));
+  assert.equal(await modePage.locator('.text-pane').isVisible(), true, 'combined reader mode can be restored');
+  await openedEditor.close(); await modePage.close();
+  console.log('reader: split button and combined-mode restoration passed');
 } finally {
   await browser?.close();
   await Promise.all(servers.map(child => new Promise(resolve => {

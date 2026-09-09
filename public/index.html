@@ -16,7 +16,7 @@
       <summary>File</summary>
       <div class="menuPanel">
       <button id="saveBtn" title="Save current file">Save</button>
-      <button id="saveAllBtn" title="Save all open files">Save all</button>
+      <button id="saveAllBtn" title="Save all open files (Ctrl+K S)">Save all</button>
       <button id="submitChangeBtn" hidden title="Create a pull/merge request from staged changes">提交 PR/MR</button>
       <button id="gitConfigBtn" hidden title="Change Git provider or repository">切换仓库</button>
         <button id="undoBtn" title="Undo last edit">Undo</button>
@@ -56,6 +56,12 @@
         <div id="tagPanelGrip" class="tagPanelGrip" title="拖动标签栏悬浮">
           <strong id="tagPanelTitle">标签</strong>
           <span class="tagPanelActions">
+            <span class="editorScaleActions" role="group" aria-label="编辑框缩放">
+              <span class="scaleLabel">编辑</span>
+              <button type="button" id="editorScaleSmaller" title="缩小编辑框（Ctrl+−）" aria-label="缩小编辑框">−</button>
+              <input id="editorScaleInput" type="text" inputmode="decimal" maxlength="5" value="100%" aria-label="编辑框缩放比例" title="编辑框缩放比例：输入 80%–160% 后按回车；双击恢复 100%">
+              <button type="button" id="editorScaleLarger" title="放大编辑框（Ctrl+＋）" aria-label="放大编辑框">＋</button>
+            </span>
             <button type="button" id="toolbarSmaller" title="缩小标签按钮" aria-label="缩小标签按钮">−</button>
             <button type="button" id="toolbarReset" title="恢复默认按钮尺寸">100%</button>
             <button type="button" id="toolbarLarger" title="放大标签按钮" aria-label="放大标签按钮">＋</button>

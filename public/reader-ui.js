@@ -1,6 +1,10 @@
 (() => {
   "use strict";
   const byId = (id) => document.getElementById(id);
+  const element = (tag, className = "", textContent = "", properties = {}) =>
+    Object.assign(document.createElement(tag), { className, textContent }, properties);
+  const button = (label, title = label, properties = {}) =>
+    element("button", "", label, { type: "button", title, ...properties });
   const root = document.documentElement;
   const body = document.body;
   const grid = document.querySelector(".reader-grid");
@@ -15,11 +19,12 @@
   let statusTimer = null;
   let pendingPdfOptions = null;
   let pdfRuntimePromise = null, pdfViewer = null, pdfLinkService = null, pdfLoadingTask = null;
-  let pdfUrl = "", pdfPageLabels = null, pdfFrameReady = false, scrollMode = null, pdfWriteTimer = null, pdfRevision = 0, pdfRoot = null;
+  let pdfUrl = "", pdfPageLabels = null, scrollMode = null, pdfWriteTimer = null, pdfRevision = 0;
+  let pdfShortcutActive = false;
   const PDF_SETTINGS_KEY = "readerPdfSettings.v1";
   const PDF_DEFAULTS = { brightness: 100, paper: "#ffffff", ink: "#000000", invert: false, horizontal: false, scale: "page-width" };
   let pdfSettings = { ...PDF_DEFAULTS };
-  const PDF_DIRECT_HTML = `<svg aria-hidden="true" width="0" height="0"><filter id="scanColorFilter" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR id="filterR" type="table" tableValues="0 1"/><feFuncG id="filterG" type="table" tableValues="0 1"/><feFuncB id="filterB" type="table" tableValues="0 1"/></feComponentTransfer></filter></svg><div class="pdf-tools"><div class="pdf-group"><button id="direction" type="button">左右翻页</button><button id="settings" type="button">显示设置</button></div><div class="pdf-group pdf-zoom"><button id="zoomOut" type="button" aria-label="缩小 PDF">−</button><input id="zoomValue" type="text" inputmode="decimal" maxlength="8" value="页宽" aria-label="PDF 缩放比例" title="输入 25%–1000% 并按回车；输入“页宽”恢复适合页宽"><button id="zoomIn" type="button" aria-label="放大 PDF">＋</button></div><button id="full" type="button">全屏</button></div><div id="stage"><div id="viewer" class="pdfViewer"></div><p id="missing">正在载入 PDF…</p></div><dialog id="settingsDialog"><form method="dialog"><header><strong>扫描件显示设置</strong><button value="close">×</button></header><label>亮度 <output id="brightnessValue"></output><input id="brightness" type="range" min="50" max="160"></label><label>背景色 <input id="paper" type="color"></label><label>文字色 <input id="ink" type="color"></label><label class="toggle"><input id="invert" type="checkbox">反色</label><footer><button id="reset" type="button">恢复默认</button><button value="close">完成</button></footer></form></dialog>`;
+  const PDF_DIRECT_HTML = `<svg aria-hidden="true" width="0" height="0"><filter id="scanColorFilter" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR id="filterR" type="table" tableValues="0 1"/><feFuncG id="filterG" type="table" tableValues="0 1"/><feFuncB id="filterB" type="table" tableValues="0 1"/></feComponentTransfer></filter></svg><div class="pdf-tools"><div class="pdf-group"><button id="direction" type="button">左右翻页</button><button id="settings" type="button">显示设置</button></div><div class="pdf-group pdf-zoom"><button id="zoomOut" type="button" aria-label="缩小 PDF" title="缩小 PDF（Ctrl+−）">−</button><input id="zoomValue" type="text" inputmode="decimal" maxlength="8" value="页宽" aria-label="PDF 缩放比例" title="输入 25%–1000% 并按回车；输入“页宽”恢复适合页宽；PDF 区域支持 Ctrl+滚轮及 Ctrl+＋/−"><button id="zoomIn" type="button" aria-label="放大 PDF" title="放大 PDF（Ctrl+＋）">＋</button></div><button id="full" type="button">全屏</button></div><div id="stage"><div id="viewer" class="pdfViewer"></div><p id="missing">正在载入 PDF…</p></div><dialog id="settingsDialog"><form method="dialog"><header><strong>扫描件显示设置</strong><button value="close">×</button></header><label>亮度 <output id="brightnessValue"></output><input id="brightness" type="range" min="50" max="160"></label><label>背景色 <input id="paper" type="color"></label><label>文字色 <input id="ink" type="color"></label><label class="toggle"><input id="invert" type="checkbox">反色</label><footer><button id="reset" type="button">恢复默认</button><button value="close">完成</button></footer></form></dialog>`;
 
   function emit(name, ...args) {
     return listeners[name]?.(...args);
@@ -119,8 +124,10 @@
       padding: { top: 14, bottom: 14 }, readOnly: true,
       colorDecorators: true, defaultColorDecorators: "never"
     });
-    sourceModel.onDidChangeContent(() => { emit("sourceInput"); emit("historyChanged"); });
+    sourceModel.onDidChangeContent(() => emit("sourceInput"));
     sourceEditor.onDidChangeCursorSelection(() => emit("historyChanged"));
+    sourceEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyF, () => toggleSourceFind(false, false));
+    sourceEditor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyH, () => toggleSourceFind(true, false));
     setTheme(body.classList.contains("dark"));
     window.readerMonaco = { editor: sourceEditor, model: sourceModel };
     return sourceEditor;
@@ -156,20 +163,42 @@
     window.dispatchEvent(new Event("reader-mode-change"));
   }
 
+  function setWorkspaceMode(mode, editorAvailable = true) {
+    const readerOnly = mode === "reader";
+    body.classList.toggle("reader-only", readerOnly);
+    document.title = readerOnly ? "MEW 对照阅读器" : "MEW 对照阅读编辑器";
+    document.querySelector(".brand-name").textContent = document.title;
+    document.querySelector(".action-group-edit").hidden = readerOnly;
+    byId("modeBtn").hidden = readerOnly;
+    byId("combinedViewBtn").hidden = !readerOnly;
+    const splitButton = byId("splitViewBtn");
+    splitButton.disabled = !editorAvailable;
+    splitButton.textContent = readerOnly ? "打开编辑器" : "双窗口";
+    splitButton.title = editorAvailable
+      ? (readerOnly ? "打开或重新聚焦联控编辑器窗口" : "用独立窗口打开编辑器，并把本窗口切换为纯阅读器")
+      : "当前阅读器配置没有可用的本地编辑目录";
+    splitter.hidden = readerOnly;
+    requestAnimationFrame(() => {
+      pdfViewer?.update();
+      syncChromeMetrics();
+    });
+  }
+
   function notify(message, persistent = false) {
     byId("status").textContent = message || "";
     clearTimeout(statusTimer);
     if (message && !persistent) statusTimer = setTimeout(() => { byId("status").textContent = ""; }, 2600);
   }
 
+  const pageButtons = [
+    ["prevBtn", "hasPrevious", "Alt+←", " & 保存"], ["nextPageBtn", "hasNext", "Alt+→", " & 保存"],
+    ["tagPrevBtn", "hasPrevious", "Prev", " · Auto Save"], ["tagNextPageBtn", "hasNext", "Next", " · Auto Save"]
+  ];
   function setDirty(dirty) {
     byId("saveBtn").classList.toggle("dirty", dirty);
     byId("saveBtn").textContent = dirty ? "保存*" : "保存";
-    byId("prevBtn").title = dirty ? "Alt+← & 保存" : "Alt+←";
-    byId("nextPageBtn").title = dirty ? "Alt+→ & 保存" : "Alt+→";
-    for (const id of ["tagPrevBtn", "tagNextPageBtn"]) {
-      const button = byId(id);
-      if (button) button.title = dirty ? `${id === "tagPrevBtn" ? "Prev" : "Next"} · Auto Save` : id === "tagPrevBtn" ? "Prev" : "Next";
+    for (const [id, , title, suffix] of pageButtons) {
+      if (byId(id)) byId(id).title = title + (dirty ? suffix : "");
     }
   }
 
@@ -180,12 +209,7 @@
 
   function renderVolumes(volumes, selected) {
     const select = byId("volumeSelect");
-    select.replaceChildren(...volumes.map((item) => {
-      const option = document.createElement("option");
-      option.value = item.id;
-      option.textContent = item.shortTitle;
-      return option;
-    }));
+    select.replaceChildren(...volumes.map(item => element("option", "", item.shortTitle, { value: item.id })));
     select.value = selected || "";
   }
 
@@ -193,14 +217,11 @@
     byId("tocTitle").textContent = `${title}目录`;
     const list = byId("tocList");
     list.replaceChildren(...items.map((item) => {
-      const li = document.createElement("li");
+      const li = element("li");
       li.style.setProperty("--level", item.level);
-      const link = document.createElement("a");
-      link.href = "#";
+      const link = element("a", "", "", { href: "#" });
       link.dataset.page = item.page;
-      const page = document.createElement("span");
-      page.textContent = item.page;
-      link.append(page, item.title);
+      link.append(element("span", "", item.page), item.title);
       li.append(link);
       return li;
     }));
@@ -213,11 +234,8 @@
     byId("pagePosition").textContent = view.pageTotal;
     if (document.activeElement !== byId("pageInput")) byId("pageInput").value = view.page;
     byId("volumeSelect").value = view.volume;
-    byId("prevBtn").disabled = !view.hasPrevious;
-    byId("nextPageBtn").disabled = !view.hasNext;
-    for (const [id, enabled] of [["tagPrevBtn", view.hasPrevious], ["tagNextPageBtn", view.hasNext]]) {
-      const button = byId(id);
-      if (button) button.disabled = !enabled;
+    for (const [id, enabled] of pageButtons) {
+      if (byId(id)) byId(id).disabled = !view[enabled];
     }
     const panel = document.querySelector('.float-panel[data-panel="tagBar"]');
     const pageTitle = view.page ? `编辑按钮 · 第 ${view.page} 页 · ${view.pageIndex} / ${view.pageTotal}` : "编辑按钮";
@@ -231,39 +249,22 @@
   }
 
   function renderTools(tags, attrs) {
-    const bar = byId("tagBar");
-    const spacer = document.createElement("span");
-    spacer.className="spacer";
-    const pageButton = (id, direction, label) => {
-      const button = document.createElement("button");
-      button.id = id;
-      button.type = "button";
-      button.className = "tag-page-button";
-      button.dataset.pageAdjacent = direction;
-      button.textContent = label;
-      button.title = direction < 0 ? "Prev" : "Next";
-      return button;
+    const tools = (items, kind) => items.map((item, index) => {
+      const node = button(item.label, kind === "attr" ? "" : item.hotkey
+        ? `Alt+${item.hotkey === "Enter" ? "Enter" : item.hotkey.toUpperCase()}` : item.title || item.label);
+      node.dataset[kind] = index;
+      return node;
+    });
+    const pageButton = (id, direction, label, title) => {
+      const node = button(label, title, { id, className: "tag-page-button" });
+      node.dataset.pageAdjacent = direction;
+      return node;
     };
-    bar.replaceChildren(
-      ...tags.map((tag, index) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.dataset.tag = index;
-        button.textContent = tag.label;
-        button.title = tag.hotkey ? `Alt+${tag.hotkey === "Enter" ? "Enter" : tag.hotkey.toUpperCase()}` : tag.title || tag.label;
-        return button;
-      }),
-      spacer,
-      ...attrs.map((attr, index) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.dataset.attr = index;
-        button.textContent = attr.label;
-        return button;
-      }),
-      spacer.cloneNode(true),
-      pageButton("tagPrevBtn", -1, "← "),
-      pageButton("tagNextPageBtn", 1, " →")
+    byId("tagBar").replaceChildren(
+      ...tools(tags, "tag"), element("span", "spacer"),
+      ...tools(attrs, "attr"), element("span", "spacer"),
+      pageButton("tagPrevBtn", -1, "← Prev", "Prev"),
+      pageButton("tagNextPageBtn", 1, "Next →", "Next")
     );
   }
 
@@ -290,7 +291,7 @@
     visualFrame.srcdoc = source;
   }
 
-  const frameId = (id) => pdfRoot?.querySelector(`#${id}`);
+  const frameId = (id) => pdfFrame?.querySelector(`#${id}`);
   function normalizedPdfSettings(value = {}) {
     const color = (input, fallback) => /^#[0-9a-f]{6}$/i.test(String(input)) ? String(input).toLowerCase() : fallback;
     const scale = typeof value.scale === "string" && value.scale.length <= 32 ? value.scale : PDF_DEFAULTS.scale;
@@ -324,6 +325,22 @@
     if (!input) return;
     input.value = pdfViewer?.currentScale ? `${Math.round(pdfViewer.currentScale * 100)}%` : "页宽";
   }
+  function scalePercent(input, min, max, restore, label = "") {
+    const match = input.value.trim().match(/^(\d+(?:\.\d+)?)\s*%?$/);
+    const percent = match ? Number(match[1]) : NaN;
+    if (Number.isFinite(percent) && percent >= min && percent <= max) return percent / 100;
+    restore();
+    notify(`${label}缩放比例请输入 ${min}%–${max}%`, true);
+  }
+
+  function bindScaleInput(input, commit, restore) {
+    input.addEventListener("change", commit);
+    input.addEventListener("keydown", event => {
+      if (event.key === "Enter") { event.preventDefault(); commit(); input.select(); }
+      else if (event.key === "Escape") { event.preventDefault(); restore(); input.blur(); }
+    });
+  }
+
   function applyPdfScaleInput() {
     const input = frameId("zoomValue");
     if (!input || !pdfViewer) return showPdfScaleValue();
@@ -332,15 +349,30 @@
       pdfViewer.currentScaleValue = "page-width";
       return;
     }
-    const match = value.match(/^(\d+(?:\.\d+)?)\s*%?$/);
-    const percent = match ? Number(match[1]) : NaN;
-    if (!Number.isFinite(percent) || percent < 25 || percent > 1000) {
-      showPdfScaleValue();
-      notify("PDF 缩放比例请输入 25%–1000%", true);
-      return;
-    }
-    pdfViewer.currentScaleValue = String(percent / 100);
+    const scale = scalePercent(input, 25, 1000, showPdfScaleValue, "PDF ");
+    if (scale != null) pdfViewer.currentScaleValue = String(scale);
   }
+
+  function changePdfScale(direction) {
+    if (direction > 0) pdfViewer?.increaseScale();
+    else if (direction < 0) pdfViewer?.decreaseScale();
+  }
+
+  function handlePdfScaleShortcut(event) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const wheel = event.type === "wheel";
+    const insidePdf = event.target === pdfFrame || event.target.closest?.("#pdfFrame");
+    if ((wheel && !insidePdf) || (!wheel && !insidePdf && !pdfShortcutActive)) return;
+    const direction = wheel ? (event.deltaY < 0 ? 1 : event.deltaY > 0 ? -1 : 0)
+      : ["Equal", "NumpadAdd"].includes(event.code) || event.key === "+" ? 1
+        : ["Minus", "NumpadSubtract"].includes(event.code) || event.key === "-" ? -1 : 0;
+    if (!direction) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (wheel) pdfShortcutActive = true;
+    changePdfScale(direction);
+  }
+
   function pdfPageNumberForLabel(label) {
     const matches = pdfPageLabels?.map((value, index) => String(value) === String(label) ? index + 1 : 0).filter(Boolean);
     const current = pdfViewer?.currentPageNumber || matches?.[0];
@@ -364,7 +396,6 @@
   }
   async function setPdf(options) {
     pendingPdfOptions = options;
-    if (!pdfFrameReady) return;
     const pdfjs = await ensurePdfRuntime();
     const url = options.url || "";
     if (url === pdfUrl && (pdfViewer.pdfDocument || pdfLoadingTask)) return showPendingPdfPage();
@@ -387,10 +418,11 @@
     }
   }
   function initPdfFrame() {
-    pdfRoot = pdfFrame;
-    pdfRoot.innerHTML = PDF_DIRECT_HTML;
+    pdfFrame.innerHTML = PDF_DIRECT_HTML;
+    document.addEventListener("pointerdown", (event) => { pdfShortcutActive = pdfFrame.contains(event.target); }, true);
+    document.addEventListener("wheel", handlePdfScaleShortcut, { capture: true, passive: false });
+    document.addEventListener("keydown", handlePdfScaleShortcut, true);
     (async () => {
-      pdfFrameReady = true;
       let saved = {};
       try { saved = JSON.parse(localStorage.getItem(PDF_SETTINGS_KEY) || "{}"); } catch { localStorage.removeItem(PDF_SETTINGS_KEY); }
       const legacy = {};
@@ -400,12 +432,8 @@
       saved = { ...legacy, ...saved };
       try { pdfSettings = normalizedPdfSettings({ ...(await fetch("/api/reader/settings").then((r) => r.ok ? r.json() : {})), ...saved }); } catch { pdfSettings = normalizedPdfSettings(saved); }
       applyPdfSettings();
-      frameId("zoomIn").onclick = () => pdfViewer?.increaseScale(); frameId("zoomOut").onclick = () => pdfViewer?.decreaseScale();
-      frameId("zoomValue").onchange = applyPdfScaleInput;
-      frameId("zoomValue").onkeydown = (event) => {
-        if (event.key === "Enter") { event.preventDefault(); applyPdfScaleInput(); event.currentTarget.select(); }
-        if (event.key === "Escape") { event.preventDefault(); showPdfScaleValue(); event.currentTarget.blur(); }
-      };
+      frameId("zoomIn").onclick = () => changePdfScale(1); frameId("zoomOut").onclick = () => changePdfScale(-1);
+      bindScaleInput(frameId("zoomValue"), applyPdfScaleInput, showPdfScaleValue);
       frameId("zoomValue").ondblclick = () => { if (pdfViewer) pdfViewer.currentScaleValue = "page-width"; };
       frameId("direction").onclick = () => changePdfSettings({ horizontal: !pdfSettings.horizontal }); frameId("settings").onclick = () => frameId("settingsDialog").showModal(); frameId("brightness").oninput = (event) => changePdfSettings({ brightness: event.target.value }); frameId("paper").oninput = (event) => changePdfSettings({ paper: event.target.value }); frameId("ink").oninput = (event) => changePdfSettings({ ink: event.target.value }); frameId("invert").onchange = (event) => changePdfSettings({ invert: event.target.checked }); frameId("reset").onclick = () => changePdfSettings(PDF_DEFAULTS); frameId("full").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : pdfFrame.requestFullscreen()).catch((error) => notify(error.message, true));
       document.addEventListener("fullscreenchange", () => { frameId("full").textContent = document.fullscreenElement ? "退出全屏" : "全屏"; requestAnimationFrame(() => pdfViewer?.update()); });
@@ -418,7 +446,9 @@
     if (initialized) return;
     initialized = true;
     initPdfFrame();
-    for (const [id, action] of [["modeBtn", "mode"], ["saveBtn", "save"], ["undoBtn", "undo"], ["redoBtn", "redo"]]) bind(id, "click", () => emit(action));
+    for (const action of ["mode", "save", "undo", "redo", "splitView", "combinedView", "find"]) {
+      bind(`${action}Btn`, "click", () => emit(action));
+    }
     bind("volumeSelect", "change", (event) => emit("volume", event.target.value));
     bind("pageForm", "submit", (event) => {
       event.preventDefault();
@@ -439,14 +469,11 @@
     });
     bind("darkBtn", "click", () => setTheme(!body.classList.contains("dark")));
     bind("tagBar", "click", (event) => {
-      const adjacent = event.target.closest("[data-page-adjacent]");
-      const tag = event.target.closest("[data-tag]");
-      const attr = event.target.closest("[data-attr]");
-      if (adjacent) emit("adjacent", Number(adjacent.dataset.pageAdjacent));
-      if (tag) emit("tag", Number(tag.dataset.tag));
-      if (attr) emit("attr", Number(attr.dataset.attr));
+      for (const [attribute, action] of [["pageAdjacent", "adjacent"], ["tag", "tag"], ["attr", "attr"]]) {
+        const node = event.target.closest("button");
+        if (node && attribute in node.dataset) emit(action, Number(node.dataset[attribute]));
+      }
     });
-    bind("findBtn", "click", () => emit("find"));
     document.addEventListener("keydown", (event) => emit("keyDown", event));
     window.addEventListener("beforeunload", (event) => emit("beforeUnload", event));
     setTheme(localStorage.getItem("readerDark") === "1");
@@ -463,21 +490,18 @@
   grid.insertBefore(splitter, scanPane);
 
   const savedWidth = Number(localStorage.getItem("readerLeftPane"));
-  if (savedWidth >= 25 && savedWidth <= 75) {
-    grid.style.setProperty("--left-pane", `${savedWidth}%`);
-  }
-
-  const resizeTo = (clientX) => {
-    const bounds = grid.getBoundingClientRect();
-    const percent = Math.min(75, Math.max(25, ((clientX - bounds.left) / bounds.width) * 100));
-    grid.style.setProperty("--left-pane", `${percent}%`);
-    splitter.setAttribute("aria-valuenow", String(Math.round(percent)));
-    return percent;
-  };
-
   let dragging = false;
-  let currentWidth = savedWidth || 54;
-  splitter.setAttribute("aria-valuenow", String(Math.round(currentWidth)));
+  let currentWidth;
+  const setWidth = percent => {
+    currentWidth = Math.min(75, Math.max(25, percent));
+    grid.style.setProperty("--left-pane", `${currentWidth}%`);
+    splitter.setAttribute("aria-valuenow", String(Math.round(currentWidth)));
+  };
+  setWidth(savedWidth >= 25 && savedWidth <= 75 ? savedWidth : 54);
+  const resizeTo = clientX => {
+    const bounds = grid.getBoundingClientRect();
+    setWidth((clientX - bounds.left) / bounds.width * 100);
+  };
 
   splitter.addEventListener("pointerdown", (event) => {
     if (matchMedia("(max-width: 850px)").matches) return;
@@ -485,12 +509,12 @@
     splitter.classList.add("dragging");
     body.classList.add("resizing");
     splitter.setPointerCapture?.(event.pointerId);
-    currentWidth = resizeTo(event.clientX);
+    resizeTo(event.clientX);
     event.preventDefault();
   });
 
   splitter.addEventListener("pointermove", (event) => {
-    if (dragging) currentWidth = resizeTo(event.clientX);
+    if (dragging) resizeTo(event.clientX);
   });
 
   const stopResize = () => {
@@ -504,84 +528,77 @@
   splitter.addEventListener("pointerup", stopResize);
   splitter.addEventListener("pointercancel", stopResize);
   splitter.addEventListener("dblclick", () => {
-    currentWidth = 54;
-    grid.style.setProperty("--left-pane", "54%");
-    splitter.setAttribute("aria-valuenow", "54");
+    setWidth(54);
     localStorage.removeItem("readerLeftPane");
   });
 
   splitter.addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    if (event.key === "Home") currentWidth = 25;
-    else if (event.key === "End") currentWidth = 75;
-    else {
-      const step = event.shiftKey ? 5 : 2;
-      currentWidth = Math.min(75, Math.max(25, currentWidth + (event.key === "ArrowRight" ? step : -step)));
-    }
-    grid.style.setProperty("--left-pane", `${currentWidth}%`);
-    splitter.setAttribute("aria-valuenow", String(Math.round(currentWidth)));
+    const step = (event.shiftKey ? 5 : 2) * (event.key === "ArrowRight" ? 1 : -1);
+    setWidth(event.key === "Home" ? 25 : event.key === "End" ? 75 : currentWidth + step);
     localStorage.setItem("readerLeftPane", currentWidth.toFixed(2));
   });
 
+  const chromeNodes = [document.querySelector(".site-header"), document.querySelector(".page-footer")];
+  const chromeHeights = (fallback = 0) => ({
+    header: Math.round(chromeNodes[0]?.getBoundingClientRect().height || fallback),
+    footer: Math.round(chromeNodes[1]?.getBoundingClientRect().height || 0)
+  });
   const syncChromeMetrics = () => {
-    const headerHeight = document.querySelector(".site-header")?.getBoundingClientRect().height || 64;
-    const footerHeight = document.querySelector(".page-footer")?.getBoundingClientRect().height || 0;
-    root.style.setProperty("--app-header-height", `${Math.round(headerHeight)}px`);
-    root.style.setProperty("--app-footer-height", `${Math.round(footerHeight)}px`);
+    for (const [name, height] of Object.entries(chromeHeights(64))) root.style.setProperty(`--app-${name}-height`, `${height}px`);
     window.dispatchEvent(new Event("reader-chrome-resize"));
   };
   const chromeResizeObserver = new ResizeObserver(syncChromeMetrics);
-  chromeResizeObserver.observe(document.querySelector(".site-header"));
-  const pageFooter = document.querySelector(".page-footer");
-  if (pageFooter) chromeResizeObserver.observe(pageFooter);
+  chromeNodes.filter(Boolean).forEach(node => chromeResizeObserver.observe(node));
   syncChromeMetrics();
+
+  async function toggleSourceFind(replace = true, toggleIfVisible = true) {
+    if (!sourceEditor) return;
+    const visible = sourceEditor.getDomNode()?.querySelector(".find-widget")?.classList.contains("visible");
+    if (visible && toggleIfVisible) return sourceEditor.trigger("reader", "closeFindWidget");
+    // Request clipboard access only on first opening, directly from the user gesture.
+    const clipboardText = !visible && navigator.clipboard?.readText?.().catch(() => null);
+    if (!visible) sourceEditor.focus();
+    await sourceEditor.getAction(replace ? "editor.action.startFindReplaceAction" : "actions.find")?.run();
+    const text = await clipboardText;
+    if (text) sourceEditor.getContribution("editor.contrib.findController")?.setSearchString(text.replace(/\r\n?/g, "\n"));
+  }
+
+  function editSource(text, range, origin) {
+    sourceEditor.pushUndoStop();
+    sourceEditor.executeEdits(origin, [{ range, text, forceMoveMarkers: true }]);
+    sourceEditor.pushUndoStop();
+  }
 
   window.ReaderUI = {
     init, notify, setDirty, setHistoryButtons, renderVolumes, renderToc, renderNavigation, renderTools,
-    setMode, setToc, setPdf, applyVisualTheme, showVisual, initMonaco, setEditorScale,
+    setMode, setWorkspaceMode, setToc, setPdf, applyVisualTheme, showVisual, initMonaco, setEditorScale,
     getSource: () => sourceModel?.getValue() || "",
     setSource: (text, preserveUndo = false) => {
       text = String(text ?? "");
       if (!sourceModel || sourceModel.getValue() === text) return;
       if (!preserveUndo) return sourceModel.setValue(text);
-      sourceEditor.pushUndoStop();
-      sourceEditor.executeEdits("reader.visual", [{ range: sourceModel.getFullModelRange(), text, forceMoveMarkers: true }]);
-      sourceEditor.pushUndoStop();
+      editSource(text, sourceModel.getFullModelRange(), "reader.visual");
     },
     getSourceSelection: () => {
       const selection = sourceEditor?.getSelection();
       return selection ? { start: sourceModel.getOffsetAt(selection.getStartPosition()), end: sourceModel.getOffsetAt(selection.getEndPosition()) } : { start: 0, end: 0 };
     },
     setSourceSelection: (start, end = start) => sourceEditor.setSelection(monacoApi.Selection.fromPositions(sourceModel.getPositionAt(start), sourceModel.getPositionAt(end))),
-    replaceSourceRange: (text, start, end) => {
-      sourceEditor.pushUndoStop();
-      sourceEditor.executeEdits("reader.edit", [{ range: monacoApi.Range.fromPositions(sourceModel.getPositionAt(start), sourceModel.getPositionAt(end)), text, forceMoveMarkers: true }]);
-      sourceEditor.pushUndoStop();
-    },
+    replaceSourceRange: (text, start, end) => editSource(text,
+      monacoApi.Range.fromPositions(sourceModel.getPositionAt(start), sourceModel.getPositionAt(end)), "reader.edit"),
     focusSource: () => sourceEditor?.focus(),
-    sourceScroll: () => ({ top: sourceEditor?.getScrollTop() || 0, left: sourceEditor?.getScrollLeft() || 0 }),
     setSourceScroll: ({ top = 0, left = 0 }) => sourceEditor?.setScrollPosition({ scrollTop: top, scrollLeft: left }),
     setSourceEditable: (editable) => sourceEditor?.updateOptions({ readOnly: !editable }),
     canUndo: () => Boolean(sourceModel?.canUndo()),
     canRedo: () => Boolean(sourceModel?.canRedo()),
     undoSource: () => sourceEditor?.trigger("reader", "undo"),
     redoSource: () => sourceEditor?.trigger("reader", "redo"),
-    toggleFind: (replace = true) => {
-      if (!sourceEditor) return;
-      const findWidget = sourceEditor.getDomNode()?.querySelector(".find-widget");
-      if (findWidget?.classList.contains("visible")) {
-        sourceEditor.trigger("reader", "closeFindWidget");
-        return;
-      }
-      sourceEditor.focus();
-      sourceEditor.getAction(replace ? "editor.action.startFindReplaceAction" : "actions.find")?.run();
-    },
+    toggleFind: toggleSourceFind,
     hasSourceTextFocus: () => Boolean(sourceEditor?.hasTextFocus()),
-    getVisualDocument: () => visualFrame.contentDocument,
-    selectedVolume: () => byId("volumeSelect").value
+    getVisualDocument: () => visualFrame.contentDocument
   };
-})();
 
 /* 编辑工具面板：单一状态源管理停靠、浮动、拉伸和缩放。 */
 (() => {
@@ -601,12 +618,6 @@
   let editorScale = clampScale(saved._editorScale);
   let lastScaleTarget = "editor";
 
-  const element = (tag, className, text = "") => {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text) node.textContent = text;
-    return node;
-  };
   const snapTop = element("div", "fp-snap fp-snap-top");
   const snapBottom = element("div", "fp-snap fp-snap-bottom");
   document.body.append(snapTop, snapBottom);
@@ -629,10 +640,6 @@
   const measured = Math.round(panel.offsetHeight);
   if (measured) state.naturalH = measured;
 
-  const chromeHeights = () => ({
-    header: Math.round(document.querySelector(".site-header")?.getBoundingClientRect().height || 0),
-    footer: Math.round(document.querySelector(".page-footer")?.getBoundingClientRect().height || 0)
-  });
   const minHeight = () => Math.ceil((header.getBoundingClientRect().height || 27) + CONTROL_HEIGHT * state.scale);
   const heightLimit = () => {
     const { header: top, footer } = chromeHeights();
@@ -693,12 +700,10 @@
   function applyPanel() {
     const parent = panel.parentElement;
     panel.classList.remove("dock-editor-top", "dock-editor-bottom", "dock-window-top", "dock-window-bottom", "floating");
-    parent.classList.remove("bar-fixed", "bar-bottom");
     panel.classList.add(state.dock === "floating" ? "floating" : `dock-${state.dock}`);
     parent.classList.toggle("bar-bottom", state.dock === "editor-bottom");
     parent.classList.toggle("bar-fixed", state.dock.startsWith("window-") || state.dock === "floating");
     panel.style.left = panel.style.top = panel.style.right = panel.style.bottom = panel.style.width = "";
-    if (state.dock === "floating") Object.assign(panel.style, { left: `${state.x}px`, top: `${state.y}px`, width: `${state.w}px` });
     const fixed = state.dock.startsWith("window-") || state.dock === "floating";
     let h = fixed ? state.h ?? state.naturalH : state.h;
     if (h != null) {
@@ -717,11 +722,14 @@
     requestAnimationFrame(updateWindowDockLayout);
   }
 
+  function floatPanel() {
+    if (state.dock === "floating") return;
+    const rect = panel.getBoundingClientRect();
+    Object.assign(state, { dock: "floating", x: rect.left, y: rect.top, w: rect.width, h: state.h ?? Math.round(rect.height) });
+  }
+
   function dock(target) {
-    if (target === "floating" && state.dock !== "floating") {
-      const rect = panel.getBoundingClientRect();
-      Object.assign(state, { x: rect.left, y: rect.top, w: rect.width, h: state.h ?? Math.round(rect.height) });
-    }
+    if (target === "floating") floatPanel();
     state.dock = target;
     applyPanel();
     save();
@@ -741,35 +749,30 @@
     window.addEventListener("pointercancel", clean, { once: true });
   }
 
-  function bindDrag() {
-    header.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      if (event.target.closest(".fp-actions, .fp-handle, button")) return;
-      event.preventDefault();
-      const rect = panel.getBoundingClientRect();
-      if (state.dock !== "floating") {
-        Object.assign(state, { dock: "floating", x: rect.left, y: rect.top, w: rect.width, h: state.h ?? Math.round(rect.height) });
-        applyPanel();
-      }
-      const offsetX = event.clientX - state.x, offsetY = event.clientY - state.y;
-      let snap = null;
-      const move = (ev) => {
-        const { header: top, footer } = chromeHeights();
-        state.x = Math.min(innerWidth - 36, Math.max(36 - panel.offsetWidth, ev.clientX - offsetX));
-        state.y = Math.min(innerHeight - footer - 28, Math.max(top, ev.clientY - offsetY));
-        Object.assign(panel.style, { left: `${state.x}px`, top: `${state.y}px` });
-        snap = ev.clientY < top + SNAP + 6 ? "top" : ev.clientY > innerHeight - footer - SNAP - 6 ? "bottom" : null;
-        snapTop.classList.toggle("active", snap === "top");
-        snapBottom.classList.toggle("active", snap === "bottom");
-      };
-      trackPointer(move, () => {
-        snapTop.classList.remove("active");
-        snapBottom.classList.remove("active");
-        if (snap) dock(`window-${snap}`);
-        else save();
-      });
+  header.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest(".fp-actions, .fp-handle, button")) return;
+    event.preventDefault();
+    floatPanel();
+    applyPanel();
+    const offsetX = event.clientX - state.x, offsetY = event.clientY - state.y;
+    let snap = null;
+    const move = (ev) => {
+      const { header: top, footer } = chromeHeights();
+      state.x = Math.min(innerWidth - 36, Math.max(36 - panel.offsetWidth, ev.clientX - offsetX));
+      state.y = Math.min(innerHeight - footer - 28, Math.max(top, ev.clientY - offsetY));
+      Object.assign(panel.style, { left: `${state.x}px`, top: `${state.y}px` });
+      snap = ev.clientY < top + SNAP + 6 ? "top" : ev.clientY > innerHeight - footer - SNAP - 6 ? "bottom" : null;
+      snapTop.classList.toggle("active", snap === "top");
+      snapBottom.classList.toggle("active", snap === "bottom");
+    };
+    trackPointer(move, () => {
+      snapTop.classList.remove("active");
+      snapBottom.classList.remove("active");
+      if (snap) dock(`window-${snap}`);
+      else save();
     });
-  }
+  });
 
   function bindResize(handle, dir) {
     handle.addEventListener("pointerdown", (event) => {
@@ -801,11 +804,10 @@
 
   function setScale(target, value) {
     const scale = Math.round(clampScale(value) * 100) / 100;
-    if (target === "editor") {
-      editorScale = scale;
-    } else {
-      state.scale = scale;
-      updateScaleControls("tag");
+    if (target === "editor") editorScale = scale;
+    else state.scale = scale;
+    updateScaleControls(target);
+    if (target !== "editor") {
       if (state.h != null) {
         const required = Math.ceil((header.offsetHeight || 27) + content.scrollHeight + panel.offsetHeight - panel.clientHeight);
         state.h = Math.min(Math.max(state.h, required, minHeight()), heightLimit());
@@ -813,20 +815,21 @@
       }
       updateWindowDockLayout();
     }
-    updateScaleControls(target);
     save();
   }
 
   const changeScale = (target, delta) => setScale(target, (target === "editor" ? editorScale : state.scale) + delta);
   function commitScaleInput(input) {
-    const match = input.value.trim().match(/^(\d+(?:\.\d+)?)\s*%?$/);
-    const percent = match ? Number(match[1]) : NaN;
-    if (!Number.isFinite(percent) || percent < MIN_SCALE * 100 || percent > MAX_SCALE * 100) {
-      updateScaleControls(input.dataset.scaleInput);
-      window.ReaderUI?.notify("缩放比例请输入 80%–160%", true);
-      return;
-    }
-    setScale(input.dataset.scaleInput, percent / 100);
+    const target = input.dataset.scaleInput;
+    const scale = scalePercent(input, MIN_SCALE * 100, MAX_SCALE * 100, () => updateScaleControls(target));
+    if (scale != null) setScale(target, scale);
+  }
+
+  function panelButton(label, tip, className, data) {
+    const node = button(label, tip, { className });
+    node.setAttribute("aria-label", tip);
+    Object.assign(node.dataset, data);
+    return node;
   }
 
   function makeScaleActions(target, label) {
@@ -834,33 +837,21 @@
     group.dataset.scaleTarget = target;
     group.setAttribute("role", "group");
     group.setAttribute("aria-label", `${label}缩放`);
-    group.append(element("span", "fp-scale-label", target === "editor" ? "编辑" : "标签"));
-    for (const [name, mark] of [["smaller", "−"], ["larger", "＋"]]) {
-      const button = element("button", "fp-scale-control", mark);
-      button.type = "button";
-      button.dataset.scaleAction = name;
-      button.title = `${name === "smaller" ? "缩小" : "放大"}${label}（Ctrl+${name === "smaller" ? "−" : "＋"}）`;
-      button.setAttribute("aria-label", button.title);
-      group.append(button);
-      if (name === "smaller") {
-        const input = element("input", "fp-scale-input");
-        Object.assign(input, { type: "text", inputMode: "decimal", maxLength: 5, value: "100%", title: `${label}缩放比例：输入 80%–160% 后按回车；双击恢复 100%` });
-        input.dataset.scaleInput = target;
-        input.setAttribute("aria-label", `${label}缩放比例`);
-        group.append(input);
-      }
-    }
+    const input = element("input", "fp-scale-input", "", {
+      type: "text", inputMode: "decimal", maxLength: 5, value: "100%",
+      title: `${label}缩放比例：输入 80%–160% 后按回车；双击恢复 100%`
+    });
+    input.dataset.scaleInput = target;
+    input.setAttribute("aria-label", `${label}缩放比例`);
+    group.append(element("span", "fp-scale-label", target === "editor" ? "编辑" : "标签"),
+      panelButton("−", `缩小${label}（Ctrl+−）`, "fp-scale-control", { scaleAction: "smaller" }), input,
+      panelButton("＋", `放大${label}（Ctrl+＋）`, "fp-scale-control", { scaleAction: "larger" }));
     return group;
   }
 
   actions.append(makeScaleActions("editor", "编辑框"), makeScaleActions("tag", "标签按钮"));
   for (const [dockName, label, tip] of DOCK_DEFS) {
-    const button = element("button", "fp-dock", label);
-    button.type = "button";
-    button.dataset.dock = dockName;
-    button.title = tip;
-    button.setAttribute("aria-label", tip);
-    actions.append(button);
+    actions.append(panelButton(label, tip, "fp-dock", { dock: dockName }));
   }
   for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
     const handle = element("div", `fp-handle fp-handle-${dir}`);
@@ -869,7 +860,6 @@
     bindResize(handle, dir);
   }
 
-  bindDrag();
   actions.addEventListener("pointerdown", (event) => {
     const group = event.target.closest("[data-scale-target]");
     if (!group) return;
@@ -888,11 +878,7 @@
   });
   for (const input of actions.querySelectorAll("[data-scale-input]")) {
     input.addEventListener("focus", () => input.select());
-    input.addEventListener("change", () => commitScaleInput(input));
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") { event.preventDefault(); commitScaleInput(input); input.select(); }
-      else if (event.key === "Escape") { event.preventDefault(); updateScaleControls(input.dataset.scaleInput); input.blur(); }
-    });
+    bindScaleInput(input, () => commitScaleInput(input), () => updateScaleControls(input.dataset.scaleInput));
     input.addEventListener("dblclick", () => { setScale(input.dataset.scaleInput, 1); input.select(); });
   }
   header.addEventListener("dblclick", (event) => {
@@ -902,32 +888,24 @@
     save();
   });
 
-  const mainScaleTarget = event => {
-    const target = event.target.closest?.('.float-panel[data-panel="tagBar"]') ? "tag" : event.target.closest?.("#sourcePane, #monacoEditor, #visualEditor") ? "editor" : null;
-    if (target) lastScaleTarget = target;
-    return target;
-  };
-
   function bindScaleShortcuts(doc, fixedTarget = null) {
-    doc.addEventListener("wheel", (event) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
-      const target = fixedTarget || mainScaleTarget(event);
+    const scaleShortcut = event => {
+      const wheel = event.type === "wheel";
+      if (!(event.ctrlKey || event.metaKey) || (!wheel && event.altKey)) return;
+      const direction = wheel ? (event.deltaY < 0 ? 1 : -1)
+        : ["Equal", "NumpadAdd"].includes(event.code) || event.key === "+" ? 1
+          : ["Minus", "NumpadSubtract"].includes(event.code) || event.key === "-" ? -1 : 0;
+      if (!direction) return;
+      const target = fixedTarget || (event.target.closest?.('.float-panel[data-panel="tagBar"]') ? "tag"
+        : event.target.closest?.("#sourcePane, #monacoEditor, #visualEditor") ? "editor" : wheel ? null : lastScaleTarget);
       if (!target) return;
       lastScaleTarget = target;
       event.preventDefault();
-      changeScale(target, event.deltaY < 0 ? .1 : -.1);
-    }, { capture: true, passive: false });
-    doc.addEventListener("keydown", (event) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      const direction = ["Equal", "NumpadAdd"].includes(event.code) || event.key === "+" ? 1
-        : ["Minus", "NumpadSubtract"].includes(event.code) || event.key === "-" ? -1 : 0;
-      if (!direction) return;
-      const target = fixedTarget || mainScaleTarget(event) || lastScaleTarget;
-      lastScaleTarget = target;
-      event.preventDefault();
-      event.stopPropagation();
+      if (!wheel) event.stopPropagation();
       changeScale(target, direction * .1);
-    }, true);
+    };
+    doc.addEventListener("wheel", scaleShortcut, { capture: true, passive: false });
+    doc.addEventListener("keydown", scaleShortcut, true);
   }
 
   updateScaleControls("editor");
@@ -941,4 +919,5 @@
     updateWindowDockLayout();
   });
   updateWindowDockLayout();
+})();
 })();

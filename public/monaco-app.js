@@ -3,6 +3,81 @@ let editor, monaco, previewTimer = 0, openRevision = 0, closing = false;
 const PREVIEW_DELAY = 200, TAG_PANEL_KEY = 'mewMonacoTagPanel.v1';
 const $ = id => document.getElementById(id);
 const state = { path: "", docs: new Map(), checkingTree: false, cssText: "", treeText: "" };
+const editorScale = () => Math.min(1.6, Math.max(.8,
+  Number.parseFloat(document.documentElement.style.getPropertyValue('--editor-scale')) || 1));
+const applyEditorScale = (scale = editorScale()) => editor?.updateOptions({
+  fontSize: 14 * scale, lineHeight: Math.round(21 * scale)
+});
+window.addEventListener('mew-editor-scale-change', event => applyEditorScale(event.detail));
+let saveAllChordTimer = 0, saveAllChordPending = false;
+
+function handleSaveAllChord(event) {
+  if (event.isComposing) return;
+  const key = event.key.toLowerCase();
+  if (saveAllChordPending) {
+    if (['control', 'meta', 'shift', 'alt'].includes(key)) return;
+    clearTimeout(saveAllChordTimer);
+    saveAllChordPending = false;
+    if (key !== 's' || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    saveAll();
+    return;
+  }
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || key !== 'k') return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  saveAllChordPending = true;
+  clearTimeout(saveAllChordTimer);
+  saveAllChordTimer = setTimeout(() => { saveAllChordPending = false; }, 2000);
+}
+const readerSession = (() => {
+  const value = new URLSearchParams(location.search).get('readerSession') || '';
+  return /^[\w-]{1,128}$/.test(value) ? value : '';
+})();
+let readerChannel = null;
+
+function channelFor(session, receive) {
+  const name = `mew-reader-${session}`;
+  if ('BroadcastChannel' in window) {
+    const channel = new BroadcastChannel(name);
+    channel.onmessage = event => receive(event.data);
+    return channel;
+  }
+  const key = `__${name}`;
+  const listener = event => {
+    if (event.key !== key || !event.newValue) return;
+    try { receive(JSON.parse(event.newValue).message); } catch { /* ignore malformed peer data */ }
+  };
+  window.addEventListener('storage', listener);
+  return {
+    postMessage(message) { localStorage.setItem(key, JSON.stringify({ nonce: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, message })); },
+    close() { window.removeEventListener('storage', listener); }
+  };
+}
+
+function announceEditorPage() {
+  if (!readerChannel || !state.path) return;
+  readerChannel.postMessage({ source: 'editor', type: 'editor-page', path: state.path, dirty: Boolean(doc()?.dirty) });
+}
+
+function startReaderSync() {
+  if (!readerSession) return;
+  readerChannel = channelFor(readerSession, message => {
+    if (!message || message.source !== 'reader') return;
+    if (message.type === 'reader-page' && message.path) {
+      if (message.path === state.path) return announceEditorPage();
+      openFile(message.path);
+    } else if (message.type === 'reader-ready') announceEditorPage();
+    else if (message.type === 'reader-detached') {
+      readerChannel?.close();
+      readerChannel = null;
+      note('阅读器已恢复合窗；本编辑器继续独立运行');
+    }
+  });
+  readerChannel.postMessage({ source: 'editor', type: 'editor-ready' });
+  document.title = 'MEW Monaco Editor · 阅读器联控';
+}
 const tags = [
   { id: "b", label: "B", shortcut: "b", open: "<b>", close: "</b>", title: "Alt+B / b" },
   { id: "i", label: "I", shortcut: "i", open: "<i>", close: "</i>", title: "Alt+I / i" },
@@ -260,6 +335,7 @@ function openFileWindow() {
   if (!state.path) return note("Open a file first");
   const url = new URL(location.href);
   url.searchParams.set("file", state.path);
+  url.searchParams.delete("readerSession");
   window.open(url, "_blank");
 }
 async function save() {
@@ -668,6 +744,7 @@ function markDirty() {
   $('tagPrevFileBtn').disabled = !d;
   $('tagNextFileBtn').disabled = !d;
   renderTabs();
+  announceEditorPage();
 }
 function renderTabs() {
   const tabs = $('tabs');
@@ -838,9 +915,10 @@ function setDark(on) {
 function initialize(api) {
   monaco = api;
   registerHtmlStyleColorProvider(monaco);
+  const scale = editorScale();
   editor = monaco.editor.create($('monacoEditor'), {
     model: null, automaticLayout: true, fontFamily: 'Consolas, "Cascadia Mono", monospace',
-    fontSize: 14, lineHeight: 21, tabSize: 2, wordWrap: 'on', minimap: { enabled: false },
+    fontSize: 14 * scale, lineHeight: Math.round(21 * scale), tabSize: 2, wordWrap: 'on', minimap: { enabled: false },
     find: { addExtraSpaceOnTop: false },
     // 0.55.1 occurrence requests can reject on rapid model switches.
     occurrencesHighlight: 'off', scrollBeyondLastLine: false, padding: { top: 14, bottom: 14 }
@@ -861,6 +939,7 @@ function initialize(api) {
       if (tag) editTag(tag); else insertAttr(attrs.find(attr => attr.id === 'BR'));
     }
   }, true);
+  document.addEventListener('keydown', handleSaveAllChord, true);
   document.addEventListener('keydown', event => {
     if (!event.defaultPrevented && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault(); if (event.shiftKey) saveAll(); else save();
@@ -896,10 +975,12 @@ function initialize(api) {
     $('gitConfigBtn').onclick = () => { location.href = '../git-editor.html'; };
   }
   setDark(localStorage.getItem('mewDark') === '1');
+  startReaderSync();
   refreshTree(); connectFileEvents(); checkCssUpdate();
   const file = new URLSearchParams(location.search).get('file');
   if (file) openFile(file);
   window.addEventListener('beforeunload', event => {
+    readerChannel?.postMessage({ source: 'editor', type: 'editor-closed', path: state.path });
     if ([...state.docs.values()].some(d => d.dirty)) { event.preventDefault(); event.returnValue = ''; }
   });
   window.mewWorkbench = { editor, documents: state.docs, openFile };

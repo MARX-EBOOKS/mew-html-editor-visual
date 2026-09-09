@@ -1,8 +1,8 @@
 {
   "brightness": 100,
-  "paper": "#ffffff",
-  "ink": "#000000",
+  "paper": "#f4edd8",
+  "ink": "#2b2925",
   "invert": false,
   "horizontal": false,
-  "scale": "1"
+  "scale": "1.5"
 }

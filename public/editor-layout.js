@@ -2,12 +2,14 @@
   const key = 'mew-editor-layout-v1';
   const root = document.documentElement;
   const main = document.querySelector('main');
-  const defaults = { tree: 220, preview: 340, scale: 1, treeOpen: true, previewOpen: true };
+  const editorScaleInput = document.getElementById('editorScaleInput');
+  const defaults = { tree: 220, preview: 340, scale: 1, editorScale: 1, treeOpen: true, previewOpen: true };
   const closeAt = 24;
+  let appliedEditorScale;
   let saved;
   try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
   const layout = { ...defaults };
-  for (const name of ['tree', 'preview', 'scale']) {
+  for (const name of ['tree', 'preview', 'scale', 'editorScale']) {
     if (Number.isFinite(saved?.[name])) layout[name] = saved[name];
   }
   for (const name of ['treeOpen', 'previewOpen']) {
@@ -22,6 +24,7 @@
   };
   function render() {
     layout.scale = clamp(layout.scale, .8, 1.6);
+    layout.editorScale = clamp(layout.editorScale, .8, 1.6);
     for (const name of ['tree', 'preview']) {
       const [min, max] = limits(name);
       layout[name] = clamp(layout[name], min, max);
@@ -43,6 +46,16 @@
     document.getElementById('toolbarReset').textContent = `${Math.round(layout.scale * 100)}%`;
     document.getElementById('toolbarSmaller').disabled = layout.scale <= .8;
     document.getElementById('toolbarLarger').disabled = layout.scale >= 1.6;
+    if (editorScaleInput) {
+      root.style.setProperty('--editor-scale', layout.editorScale);
+      editorScaleInput.value = `${Math.round(layout.editorScale * 100)}%`;
+      document.getElementById('editorScaleSmaller').disabled = layout.editorScale <= .8;
+      document.getElementById('editorScaleLarger').disabled = layout.editorScale >= 1.6;
+      if (appliedEditorScale !== layout.editorScale) {
+        appliedEditorScale = layout.editorScale;
+        window.dispatchEvent(new CustomEvent('mew-editor-scale-change', { detail: layout.editorScale }));
+      }
+    }
     // Existing floating-toolbar bounds must follow changes in pane size too.
     const panel = document.getElementById('tagPanel');
     if (panel.classList.contains('floating')) {
@@ -50,6 +63,10 @@
       panel.style.left = `${clamp(panel.offsetLeft, 8, Math.max(8, pane.clientWidth - panel.offsetWidth - 8))}px`;
       panel.style.top = `${clamp(panel.offsetTop, 8, Math.max(8, pane.clientHeight - panel.offsetHeight - 8))}px`;
     }
+  }
+  function setEditorScale(value) {
+    layout.editorScale = Math.round(clamp(value, .8, 1.6) * 100) / 100;
+    render(); persist();
   }
   function setPaneOpen(name, open) {
     layout[`${name}Open`] = open;
@@ -62,6 +79,39 @@
       layout.scale = delta ? Math.round((layout.scale + delta) * 10) / 10 : 1;
       render(); persist();
     });
+  }
+  if (editorScaleInput) {
+    for (const [id, delta] of [['editorScaleSmaller', -.1], ['editorScaleLarger', .1]]) {
+      document.getElementById(id).addEventListener('click', () => setEditorScale(layout.editorScale + delta));
+    }
+    const commitEditorScale = () => {
+      const match = editorScaleInput.value.trim().match(/^(\d+(?:\.\d+)?)\s*%?$/);
+      const percent = match ? Number(match[1]) : NaN;
+      if (Number.isFinite(percent) && percent >= 80 && percent <= 160) setEditorScale(percent / 100);
+      else render();
+    };
+    editorScaleInput.addEventListener('focus', () => editorScaleInput.select());
+    editorScaleInput.addEventListener('change', commitEditorScale);
+    editorScaleInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); commitEditorScale(); editorScaleInput.select(); }
+      else if (event.key === 'Escape') { event.preventDefault(); render(); editorScaleInput.blur(); }
+    });
+    editorScaleInput.addEventListener('dblclick', () => { setEditorScale(1); editorScaleInput.select(); });
+    const scaleShortcut = event => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const wheel = event.type === 'wheel';
+      if (wheel && !event.target.closest?.('#monacoEditor')) return;
+      if (!wheel && !event.target.closest?.('#monacoEditor, .editorScaleActions')) return;
+      const direction = wheel ? (event.deltaY < 0 ? 1 : event.deltaY > 0 ? -1 : 0)
+        : ['Equal', 'NumpadAdd'].includes(event.code) || event.key === '+' ? 1
+          : ['Minus', 'NumpadSubtract'].includes(event.code) || event.key === '-' ? -1 : 0;
+      if (!direction) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setEditorScale(layout.editorScale + direction * .1);
+    };
+    document.addEventListener('wheel', scaleShortcut, { capture: true, passive: false });
+    document.addEventListener('keydown', scaleShortcut, true);
   }
   for (const name of ['tree', 'preview']) {
     const splitter = document.getElementById(`${name}Splitter`);

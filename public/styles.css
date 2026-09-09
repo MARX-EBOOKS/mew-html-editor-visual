@@ -41,6 +41,9 @@ dialog::backdrop { background: #0006; }
 .tagPanelActions { margin-left: auto; display: inline-flex; gap: 3px; }
 .tagPanelActions button { min-height: 20px; padding: 1px 6px; font-size: 11px; }
 .tagPanelActions button.active { border-color: #8aa4cf; background: var(--hover); color: var(--ink); }
+.editorScaleActions { display: inline-flex; align-items: center; gap: 3px; margin-right: 3px; }
+.editorScaleActions .scaleLabel { color: var(--muted); font-size: 11px; }
+#editorScaleInput { width: 48px; min-height: 20px; padding: 1px 3px; text-align: center; font-size: 11px; font-variant-numeric: tabular-nums; }
 .tagPanel.dock-bottom { order: 20; border-top: 1px solid var(--line); }
 .tagPanel.dock-bottom .bar { border-bottom: 0; }
 .tagPanel.floating { position: absolute; display: flex; flex-direction: column; width: min(620px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow: hidden; border: 1px solid var(--line); border-radius: 7px; box-shadow: 0 8px 24px #0003; }
@@ -68,11 +71,13 @@ dialog::backdrop { background: #0006; }
 iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
 /* Editor chrome uses the existing light and dark palette. */
 body { display: flex; flex-direction: column; overflow: hidden; }
-header { height: auto; min-height: 46px; flex: none; flex-wrap: wrap; gap: 8px; padding: 7px 12px; }
-header > strong { font-size: 14px; }
+header { height: auto; min-height: 34px; flex: none; flex-wrap: wrap; gap: 6px; padding: 3px 10px; }
+header > strong { font-size: 13px; }
 #fileName { max-width: 240px; }
 .topActions { flex-wrap: wrap; }
 button, .menu summary { min-height: 28px; }
+header button, header .menu summary { min-height: 24px; padding: 2px 7px; font-size: 12px; }
+header label { font-size: 12px; }
 button:focus-visible, summary:focus-visible, input:focus-visible { outline: 2px solid var(--tag); outline-offset: 2px; }
 .menuPanel { top: 100%; margin-top: 4px; z-index: 30; }
 main { flex: 1; height: auto; min-height: 0; overflow: auto; grid-template-columns: var(--tree-track, var(--tree-width, 220px)) var(--tree-splitter-track, 6px) minmax(320px, 1fr) var(--preview-splitter-track, 6px) var(--preview-track, var(--preview-width, 340px)); }
@@ -101,6 +106,7 @@ body.resizing iframe { pointer-events: none; }
 .tagPanelGrip { min-height: 32px; touch-action: none; }
 .tagPanelActions { flex-wrap: wrap; justify-content: flex-end; }
 .tagPanelActions button { min-height: 24px; }
+#editorScaleInput { min-height: 24px; }
 .tagPanel .bar { padding: 8px; max-height: none; overflow-x: hidden; overflow-y: visible; }
 .tagPanel.floating .bar { min-height: 0; max-height: none; overflow-y: auto; }
 #tagBar { gap: calc(5px * var(--toolbar-scale, 1)); }

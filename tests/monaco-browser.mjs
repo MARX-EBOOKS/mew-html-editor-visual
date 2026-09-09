@@ -33,6 +33,15 @@ try {
   assert.equal(await page.locator('#preview').isHidden(), true, 'no blank iframe covers the empty preview pane');
   await page.goto('http://127.0.0.1:41874/?file=a.html');
   await page.waitForFunction(() => window.mewWorkbench?.editor.getModel());
+  const editorScaleInput = page.locator('#editorScaleInput');
+  await editorScaleInput.fill('120'); await editorScaleInput.press('Enter');
+  assert.equal(await page.evaluate(() => mewWorkbench.editor.getOption(monaco.editor.EditorOption.fontSize)), 16.8, 'editor zoom input changes Monaco font size');
+  await page.locator('#monacoEditor').hover(); await page.keyboard.down('Control'); await page.mouse.wheel(0, -100); await page.keyboard.up('Control');
+  assert.equal(await editorScaleInput.inputValue(), '130%', 'Ctrl+wheel over index editor changes editor zoom');
+  await page.evaluate(() => mewWorkbench.editor.focus()); await page.keyboard.press('Control+-');
+  assert.equal(await editorScaleInput.inputValue(), '120%', 'Ctrl+- changes index editor zoom');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('mew-editor-layout-v1')).editorScale), 1.2, 'index editor zoom is persisted with layout');
+  await editorScaleInput.fill('100'); await editorScaleInput.press('Enter');
   assert.equal(await page.locator('#preview').isVisible(), true, 'opening a file displays the preview iframe');
   const value = () => page.evaluate(() => mewWorkbench.editor.getValue());
   await page.waitForFunction(() => document.querySelector('#fileName').textContent === 'a.html');
@@ -82,6 +91,16 @@ try {
   await page.keyboard.press('Control+s');
   await page.waitForFunction(() => document.querySelector('#fileName').textContent === 'a.html');
   assert.match(await readFile(path.join(fixture, 'a.html'), 'utf8'), /<b>Alpha<\/b>/);
+  await page.evaluate(() => mewWorkbench.openFile('b.html'));
+  await page.waitForFunction(() => mewWorkbench.editor.getModel()?.uri.path === '/b.html');
+  await page.evaluate(() => mewWorkbench.editor.executeEdits('save-all-chord', [{ range: mewWorkbench.editor.getModel().getFullModelRange(), text: '<p>Beta saved by chord</p>' }]));
+  await page.evaluate(() => mewWorkbench.openFile('a.html'));
+  await page.waitForFunction(() => mewWorkbench.editor.getModel()?.uri.path === '/a.html');
+  await page.evaluate(() => mewWorkbench.editor.executeEdits('save-all-chord', [{ range: new monaco.Range(1, 1, 1, 1), text: '<!-- saved by chord -->' }]));
+  await page.keyboard.press('Control+k'); await page.keyboard.press('s');
+  await page.waitForFunction(() => [...mewWorkbench.documents.values()].every(document => !document.dirty));
+  assert.match(await readFile(path.join(fixture, 'a.html'), 'utf8'), /saved by chord/);
+  assert.match(await readFile(path.join(fixture, 'b.html'), 'utf8'), /saved by chord/);
   const findLayout = () => page.evaluate(() => {
     const rect = document.querySelector('.editorWrap').getBoundingClientRect();
     return { top: rect.top, height: rect.height, firstLine: mewWorkbench.editor.getTopForLineNumber(1) };
