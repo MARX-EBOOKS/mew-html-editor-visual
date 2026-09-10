@@ -27,27 +27,21 @@ aside { display: flex; flex-direction: column; gap: 8px; padding: 10px; backgrou
 dialog { max-width: min(560px, 90vw); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--panel); }
 dialog p { overflow-wrap: anywhere; }
 dialog::backdrop { background: #0006; }
+.fileDialogDirectory { color: var(--muted); font-size: 13px; }
+.fileDialogDirectory code { color: var(--ink); }
+.fileNameField { display: grid; gap: 6px; color: var(--ink); }
+.fileNameField input { width: min(420px, 75vw); }
+.dialogError { min-height: 1.25em; margin: 8px 0; color: #c62828; font-size: 13px; }
+body.dark .dialogError { color: #ff8a80; }
+.dialogActions { display: flex; justify-content: flex-end; gap: 8px; }
 .indent { margin-left: 14px; border-left: 1px solid var(--line); padding-left: 4px; }
 .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editorPane, .previewPane { display: flex; flex-direction: column; }
 .editorPane { position: relative; overflow: hidden; }
 .bar, .findbar { display: flex; align-items: center; gap: 5px; padding: 4px 6px; border-bottom: 1px solid var(--line); background: var(--panel); min-height: 30px; }
 .bar { flex-wrap: wrap; }
-#tagBar { display: inline-flex; width: 100%; min-width: 0; flex-wrap: wrap; gap: 4px; }
-.tagPanel { flex: none; z-index: 5; background: var(--panel); border-color: var(--line); }
-.tagPanelGrip { min-height: 25px; display: flex; align-items: center; gap: 8px; padding: 2px 5px 2px 8px; border-bottom: 1px solid var(--line); background: var(--soft); cursor: grab; user-select: none; }
-.tagPanelGrip:active { cursor: grabbing; }
-.tagPanelGrip strong { font-size: 12px; color: var(--muted); }
-.tagPanelActions { margin-left: auto; display: inline-flex; gap: 3px; }
-.tagPanelActions button { min-height: 20px; padding: 1px 6px; font-size: 11px; }
-.tagPanelActions button.active { border-color: #8aa4cf; background: var(--hover); color: var(--ink); }
-.editorScaleActions { display: inline-flex; align-items: center; gap: 3px; margin-right: 3px; }
-.editorScaleActions .scaleLabel { color: var(--muted); font-size: 11px; }
-#editorScaleInput { width: 48px; min-height: 20px; padding: 1px 3px; text-align: center; font-size: 11px; font-variant-numeric: tabular-nums; }
-.tagPanel.dock-bottom { order: 20; border-top: 1px solid var(--line); }
-.tagPanel.dock-bottom .bar { border-bottom: 0; }
-.tagPanel.floating { position: absolute; display: flex; flex-direction: column; width: min(620px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow: hidden; border: 1px solid var(--line); border-radius: 7px; box-shadow: 0 8px 24px #0003; }
-.tagPanel.floating .bar { border-bottom: 0; }
+#tagBar { width: 100%; }
+.editorPane.bar-bottom > .float-panel { order: 20; }
 .findbar input { flex: 1; }
 .tag { font-weight: 600; min-width: 28px; padding: 3px 6px; font-size: 12px; }
 .tabs { display: flex; gap: 3px; overflow-x: auto; padding: 3px 6px 0; border-bottom: 1px solid var(--line); background: var(--panel); min-height: 25px; }
@@ -80,7 +74,7 @@ header button, header .menu summary { min-height: 24px; padding: 2px 7px; font-s
 header label { font-size: 12px; }
 button:focus-visible, summary:focus-visible, input:focus-visible { outline: 2px solid var(--tag); outline-offset: 2px; }
 .menuPanel { top: 100%; margin-top: 4px; z-index: 30; }
-main { flex: 1; height: auto; min-height: 0; overflow: auto; grid-template-columns: var(--tree-track, var(--tree-width, 220px)) var(--tree-splitter-track, 6px) minmax(320px, 1fr) var(--preview-splitter-track, 6px) var(--preview-track, var(--preview-width, 340px)); }
+main { flex: 1; height: auto; min-height: 0; margin-top: var(--window-dock-top, 0px); margin-bottom: var(--window-dock-bottom, 0px); overflow: auto; grid-template-columns: var(--tree-track, var(--tree-width, 220px)) var(--tree-splitter-track, 6px) minmax(320px, 1fr) var(--preview-splitter-track, 6px) var(--preview-track, var(--preview-width, 340px)); }
 html.tree-pane-closed main { --tree-track: 0px; --tree-splitter-track: 0px; }
 html.preview-pane-closed main { --preview-track: 0px; --preview-splitter-track: 0px; }
 #explorerPane { grid-column: 1; }
@@ -103,14 +97,6 @@ body.resizing iframe { pointer-events: none; }
 .tab { flex: none; max-width: 220px; padding: 7px 10px; font-size: 12px; border-radius: 0; border-top: 2px solid transparent; }
 .tab.active { border-top-color: var(--tag); }
 .tabClose { min-height: 22px; min-width: 22px; }
-.tagPanelGrip { min-height: 32px; touch-action: none; }
-.tagPanelActions { flex-wrap: wrap; justify-content: flex-end; }
-.tagPanelActions button { min-height: 24px; }
-#editorScaleInput { min-height: 24px; }
-.tagPanel .bar { padding: 8px; max-height: none; overflow-x: hidden; overflow-y: visible; }
-.tagPanel.floating .bar { min-height: 0; max-height: none; overflow-y: auto; }
-#tagBar { gap: calc(5px * var(--toolbar-scale, 1)); }
-#tagBar .tag { font-size: calc(12px * var(--toolbar-scale, 1)); min-height: calc(28px * var(--toolbar-scale, 1)); min-width: calc(32px * var(--toolbar-scale, 1)); padding: calc(4px * var(--toolbar-scale, 1)) calc(8px * var(--toolbar-scale, 1)); }
 #tagBar .tagFileNav { font-family: inherit; font-weight: 600; white-space: nowrap; }
 #tagBar .spacer { width: 6px; }
 .findbar { flex: none; flex-wrap: wrap; padding: 7px 8px; gap: 6px; }

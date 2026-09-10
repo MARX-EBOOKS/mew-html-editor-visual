@@ -1,108 +1,12 @@
 (() => {
   "use strict";
-  const tags = [
-    { id: "b", label: "B", shortcut: "b", open: "<b>", close: "</b>", title: "Alt+B / b" },
-    { id: "i", label: "I", shortcut: "i", open: "<i>", close: "</i>", title: "Alt+I / i" },
-    { id: "em", label: "EM", shortcut: "em", open: "<em>", close: "</em>", title: "Insert emphasis" },
-    { id: "q", label: "Q", shortcut: "q", open: "<blockquote>", close: "</blockquote>", title: "Alt+Q / q" },
-    { id: "a", label: "A", shortcut: "a", open: "<a href=\"\" id=\"\">", close: "</a>", title: "Alt+A / a" },
-    { id: "x", label: "AID", shortcut: "x", open: "<a id=\"\">", close: "</a>", title: "Alt+X / x" },
-    { id: "l", label: "HREF", shortcut: "l", open: "<a href=\"\">", close: "</a>", title: "Alt+L / l" },
-    { id: "f", label: "FN", shortcut: "f", open: "<sup><a href=\"\" id=\"\">", close: "</a></sup>", title: "Alt+F / f" },
-    { id: "r", label: "R", shortcut: "r", open: "<p align=\"right\">", close: "</p>", title: "Alt+R / r" },
-    { id: "c", label: "C", shortcut: "c", open: "<p align=\"center\">", close: "</p>", title: "Alt+C / c" },
-    { id: "ltgt", label: "&lt;&gt;", shortcut: "&lt;&gt;", open: "&lt;", close: "&gt;", title: "Insert angle bracket" },
-    ...Array.from({ length: 6 }, (_, index) => {
-      const shortcut = String(index + 1), id = `h${shortcut}`;
-      return { id, label: id.toUpperCase(), shortcut, open: `<${id}>`, close: `</${id}>`, title: `Alt+${shortcut} / ${shortcut}` };
-    }),
-    { id: "p", label: "P", shortcut: "p", open: "<p>", close: "</p>", title: "Alt+P / p" },
-    { id: "div", label: "DIV", shortcut: "d", open: "<div>", close: "</div>", title: "Alt+D / d" },
-    { id: "span", label: "SPAN", shortcut: "s", open: "<span>", close: "</span>", title: "Alt+S / s" },
-    { id: "aside", label: "ASIDE", shortcut: "aside", open: "<aside>", close: "</aside>", title: "Aside" },
-    { id: "sup", label: "SUP", shortcut: "sup", open: "<sup>", close: "</sup>", title: "Insert Superscript" },
-    { id: "sub", label: "SUB", shortcut: "sub", open: "<sub>", close: "</sub>", title: "Insert Subscript" }
-  ];
-  const tagMap = new Map(tags.filter((tag) => tag.shortcut).map((tag) => [tag.shortcut.toLowerCase(), tag]));
-  const attrs = [
-    { id: "idAttr", label: "ID=", text: " id=\"\"", cursorOffset: 5, title: "Insert id attribute" },
-    { id: "classAttr", label: "CLASS=", text: " class=\"\"", cursorOffset: 8, title: "Insert class attribute" },
-    { id: "styleAttr", label: "STYLE=", text: " style=\"\"", cursorOffset: 8, title: "Insert style attribute" },
-    { id: "hrs", label: "HRS", text: "<hr style=\"width: 20%;\">", cursorOffset: 22, title: "Insert short hardline" },
-    { id: "noIndentAttr", label: "NO INDENT", text: " style=\"text-indent: 0;\"", cursorOffset: 23, title: "Insert no-indent style attribute" },
-    { id: "HR", label: "HR", text: "<hr>", cursorOffset: 3, title: "Insert hardline" },
-    { id: "BR", label: "BR", text: "<br>", cursorOffset: 3, title: "Insert change line" }
-  ];
-  const blockTagNames = new Set(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6"]);
+  const core = window.MewEditorCore;
+  if (!core) throw new Error("MewEditorCore 未载入");
+  const tagPanel = window.MewTagPanel;
+  if (!tagPanel) throw new Error("MewTagPanel 未载入");
+  const { DocumentModel, createChannel } = core;
+  const { tags, attrs, tagMap, blockTagNames, buildTagEdit } = tagPanel;
   const blockSelector = [...blockTagNames].join(",");
-  const blockTagIds = new Set(["p", "r", "c", "h1", "h2", "h3", "h4", "h5", "h6", "div"]);
-  const voidTagNames = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
-  const rawTagNames = new Set(["script", "style", "textarea", "title"]);
-  const tagPattern = /<!--[\s\S]*?-->|<\/?[A-Za-z][\w:-]*\b(?:[^>"']|"[^"]*"|'[^']*')*>/g;
-  class DocumentModel {
-    constructor({ text = "", mtime = null, editable = true, read, write } = {}) {
-      this.content = text;
-      this.savedContent = text;
-      this.mtime = mtime;
-      this.editable = editable;
-      this.revision = 0;
-      this.read = read;
-      this.write = write;
-      this.pending = Promise.resolve();
-    }
-
-    get dirty() { return this.content !== this.savedContent; }
-
-    textFromEditor(text) {
-      // Textareas normalize CRLF and CR to LF. Keep the original bytes when
-      // the editor still represents the current or saved source.
-      const normalize = value => value.replace(/\r\n?/g, "\n");
-      for (const source of [this.content, this.savedContent]) {
-        if (normalize(source) === normalize(text)) return source;
-      }
-      return text;
-    }
-
-    update(text) {
-      if (text !== this.content) this.revision += 1;
-      this.content = text;
-    }
-
-    enqueue(operation) {
-      const task = this.pending.then(operation);
-      this.pending = task.catch(() => {});
-      return task;
-    }
-
-    async saveUntilClean() {
-      while (this.dirty) {
-        await this.enqueue(async () => {
-          if (!this.dirty) return;
-          if (!this.editable) throw new Error("Document is read-only");
-          const text = this.content;
-          const result = await this.write({ text, mtime: this.mtime });
-          this.savedContent = text;
-          this.mtime = result.mtime;
-        });
-      }
-    }
-
-    refresh() {
-      return this.enqueue(async () => {
-        const data = await this.read();
-        const result = data.text === this.savedContent ? "unchanged"
-          : data.text === this.content ? "saved" : "updated";
-        if (result === "updated") {
-          if (this.dirty) return "conflict";
-          this.update(data.text);
-        }
-        this.savedContent = data.text;
-        this.mtime = data.mtime;
-        return result;
-      });
-    }
-  }
-
 
   const ui = window.ReaderUI;
   if (!ui) throw new Error("ReaderUI 未载入");
@@ -125,25 +29,6 @@
   let pairedWindow = null;
   let locateRevision = 0;
   const editorPathCache = new Map();
-
-  function channelFor(session, receive) {
-    const name = `mew-reader-${session}`;
-    if ("BroadcastChannel" in window) {
-      const channel = new BroadcastChannel(name);
-      channel.onmessage = (event) => receive(event.data);
-      return channel;
-    }
-    const key = `__${name}`;
-    const listener = (event) => {
-      if (event.key !== key || !event.newValue) return;
-      try { receive(JSON.parse(event.newValue).message); } catch { /* ignore malformed peer data */ }
-    };
-    window.addEventListener("storage", listener);
-    return {
-      postMessage(message) { localStorage.setItem(key, JSON.stringify({ nonce: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, message })); },
-      close() { window.removeEventListener("storage", listener); }
-    };
-  }
 
   async function api(url, options) {
     const response = await fetch(url, options);
@@ -191,7 +76,7 @@
 
   function openSyncChannel() {
     syncChannel?.close();
-    syncChannel = state.syncSession ? channelFor(state.syncSession, receiveSyncMessage) : null;
+    syncChannel = state.syncSession ? createChannel(state.syncSession, receiveSyncMessage) : null;
     syncChannel?.postMessage({ source: "reader", type: "reader-ready" });
   }
 
@@ -200,9 +85,7 @@
   }
 
   async function ensureEditorRuntime() {
-    if (typeof require !== "function") throw new Error("Monaco 加载器未载入");
-    require.config({ paths: { vs: "/monaco/min/vs" } });
-    const monaco = await new Promise((resolve, reject) => require(["vs/editor/editor.main"], resolve, reject));
+    const monaco = await core.loadMonaco();
     ui.initMonaco(monaco);
     ui.renderTools(tags, attrs);
     updateHistoryButtons();
@@ -577,135 +460,6 @@
     const name = element.tagName.toLowerCase();
     const align = (element.getAttribute("align") || "").toLowerCase();
     return { name, kind: name === "p" && align ? `p:${align}` : name, block: blockTagNames.has(name) };
-  }
-
-  function buildTagEdit(text, start, end, tag) {
-    const elements = tagPairs(text);
-    const selected = text.slice(start, end);
-    const name = /^<([A-Za-z][\w:-]*)\b/.exec(tag.open)?.[1].toLowerCase();
-    const simple = name && tag.close.toLowerCase() === `</${name}>`;
-    const complete = start < end && isCompleteSelection(text, elements, start, end);
-    const exact = complete && elements.find((element) => element.start === start && element.end === end);
-
-    // 完整选中时操作外层；否则只操作包住选区的最内层。
-    if (complete) {
-      // 错配闭合标签：以前面的开始标签为准。点击同类标签删除，
-      // 点击其他标签则直接替换整个外层，而不是再包一层。
-      if (exact && exact.closeName && exact.closeName !== exact.name) {
-        if (name === exact.name) return changeWrapper(text, exact, start, end);
-        return changeWrapper(text, exact, start, end, tag);
-      }
-      if (exact && blockTagNames.has(exact.name) && blockTagIds.has(tag.id)) {
-        if (blockId(exact) === tag.id) return changeWrapper(text, exact, start, end);
-        if (tag.id !== "div") return changeWrapper(text, exact, start, end, tag);
-      }
-      if (exact && exact.name === name && simple) return changeWrapper(text, exact, start, end);
-      if (tag.close && selected.startsWith(tag.open) && selected.endsWith(tag.close)) {
-        const inner = selected.slice(tag.open.length, -tag.close.length);
-        return { start, end, text: inner, selectStart: 0, selectEnd: inner.length };
-      }
-      return wrapEdit(start, end, selected, tag, true);
-    }
-
-    const block = blockTagIds.has(tag.id) && innermost(elements.filter((element) => blockTagNames.has(element.name)), start, end);
-    if (block) return changeWrapper(text, block, start, end, blockId(block) === tag.id ? undefined : tag);
-
-    const same = simple && innermost(elements.filter((element) => element.name === name), start, end);
-    if (same) return changeWrapper(text, same, start, end);
-
-    const before = start - tag.open.length;
-    const after = end + tag.close.length;
-    if (tag.close && before >= 0 && text.slice(before, start) === tag.open && text.slice(end, after) === tag.close) {
-      return { start: before, end: after, text: selected, selectStart: 0, selectEnd: selected.length };
-    }
-    return wrapEdit(start, end, selected, tag, false);
-  }
-
-  function changeWrapper(text, element, start, end, tag) {
-    const open = tag?.open || "", close = tag?.close || "";
-    const inner = text.slice(element.openEnd, element.closeStart);
-    const whole = start === element.start && end === element.end;
-    const inOpeningTag = start === end && element.start < start && start < element.openEnd;
-    const from = whole || inOpeningTag ? 0 : start - element.openEnd;
-    const to = whole ? inner.length : inOpeningTag ? 0 : end - element.openEnd;
-    return {
-      start: element.start,
-      end: element.end,
-      text: open + inner + close,
-      selectStart: open.length + from,
-      selectEnd: open.length + to
-    };
-  }
-
-  function wrapEdit(start, end, selected, tag, keepSelection) {
-    const text = tag.open + selected + tag.close;
-    const emptyAttribute = tag.open.indexOf('=""');
-    const cursor = emptyAttribute >= 0 ? emptyAttribute + 2 : selected ? text.length : tag.open.length;
-    return {
-      start, end, text,
-      selectStart: keepSelection ? tag.open.length : cursor,
-      selectEnd: keepSelection ? tag.open.length + selected.length : cursor
-    };
-  }
-
-  function innermost(elements, start, end) {
-    return elements
-      .filter((element) => (start === end && element.start < start && start < element.openEnd) ||
-        (element.openEnd <= start && end <= element.closeStart))
-      .reduce((inner, element) => !inner || element.end - element.start < inner.end - inner.start ? element : inner, undefined);
-  }
-
-  function isCompleteSelection(text, elements, start, end) {
-    // Each opening token has one pair: index it once instead of rescanning per sibling.
-    const byStart = new Map(elements.map(element => [element.start, element]));
-    let cursor = start, found = false;
-    while (cursor < end) {
-      if (/\s/.test(text[cursor])) { cursor += 1; continue; }
-      const outer = byStart.get(cursor);
-      if (!outer || outer.end > end) return false;
-      found = true;
-      cursor = outer.end;
-    }
-    return found;
-  }
-
-  function tagPairs(text) {
-    const stack = [], pairs = [];
-    let rawName;
-    tagPattern.lastIndex = 0;
-    for (let match; (match = tagPattern.exec(text));) {
-      const token = match[0];
-      if (token.startsWith("<!--")) continue;
-      const name = token.match(/^<\/?([A-Za-z][\w:-]*)/i)[1].toLowerCase();
-      const closing = /^<\//.test(token);
-
-      if (rawName && !(closing && name === rawName)) continue;
-      if (closing) {
-        const open = stack.at(-1);
-        const crossed = stack.findLastIndex((item) => item.name === name);
-        if (open && (open.name === name || crossed < 0)) {
-          // 正常闭合或没有同名开始标签的错配闭合，都与栈顶配对。
-          stack.pop();
-          pairs.push({ name: open.name, closeName: name, start: open.start, openEnd: open.end, closeStart: match.index, end: tagPattern.lastIndex, open: open.token });
-          if (name === rawName) rawName = undefined;
-        } else if (crossed >= 0) {
-          // 同名开始标签在栈内时，保留交叉标签恢复逻辑。
-          stack.length = crossed;
-        }
-      } else if (voidTagNames.has(name) || /\/\s*>$/.test(token)) {
-        pairs.push({ name, start: match.index, openEnd: tagPattern.lastIndex, closeStart: tagPattern.lastIndex, end: tagPattern.lastIndex, open: token });
-      } else {
-        stack.push({ name, start: match.index, end: tagPattern.lastIndex, token });
-        if (rawTagNames.has(name)) rawName = name;
-      }
-    }
-    return pairs;
-  }
-
-  function blockId(element) {
-    if (element.name !== "p") return element.name;
-    const align = element.open.match(/\balign\s*=\s*["']?(center|right)/i)?.[1]?.toLowerCase();
-    return align === "center" ? "c" : align === "right" ? "r" : "p";
   }
 
   function selectVisualNodes(first, last, doc, contents = false) {

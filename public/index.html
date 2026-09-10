@@ -7,6 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2224%22 font-size=%2224%22>✎</text></svg>">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="monaco-workbench.css">
+  <link rel="stylesheet" href="tag-panel.css">
 </head>
 <body>
   <header>
@@ -15,7 +16,9 @@
     <details id="fileMenu" class="menu">
       <summary>File</summary>
       <div class="menuPanel">
+      <button id="newFileBtn" title="Create a file beside the active file (Ctrl+N)">新建文件…</button>
       <button id="saveBtn" title="Save current file">Save</button>
+      <button id="saveAsBtn" title="Save the current content beside the active file (Ctrl+Shift+S)">另存为…</button>
       <button id="saveAllBtn" title="Save all open files (Ctrl+K S)">Save all</button>
       <button id="submitChangeBtn" hidden title="Create a pull/merge request from staged changes">提交 PR/MR</button>
       <button id="gitConfigBtn" hidden title="Change Git provider or repository">切换仓库</button>
@@ -32,8 +35,8 @@
       <button id="prevFileBtn" title="切换到文件夹中的上一个文件">← 上一文件</button>
       <button id="nextFileBtn" title="切换到文件夹中的下一个文件">下一文件 →</button>
       <button id="newWinBtn" title="Open current file in a new editor window">New window</button>
-      <button id="closeSavedBtn" title="Close all saved windows">Close saved</button>
-      <button id="closeAllBtn" title="Close all open windows">Close all</button>
+      <button id="closeSavedBtn" title="Close all saved windows (Ctrl+K U)">Close saved</button>
+      <button id="closeAllBtn" title="Close all open windows (Ctrl+K W)">Close all</button>
       <button id="fullBtn" title="Toggle fullscreen">Fullscreen</button>
     </span>
   </header>
@@ -52,26 +55,7 @@
     <div class="paneSplitter" id="treeSplitter" role="separator" tabindex="0" aria-label="调整文件树宽度" aria-orientation="vertical" aria-controls="explorerPane" title="拖动调整文件树宽度；方向键微调；双击恢复"></div>
     <section class="editorPane">
       <div id="tabs" class="tabs" aria-label="Open files"></div>
-      <div id="tagPanel" class="tagPanel dock-top">
-        <div id="tagPanelGrip" class="tagPanelGrip" title="拖动标签栏悬浮">
-          <strong id="tagPanelTitle">标签</strong>
-          <span class="tagPanelActions">
-            <span class="editorScaleActions" role="group" aria-label="编辑框缩放">
-              <span class="scaleLabel">编辑</span>
-              <button type="button" id="editorScaleSmaller" title="缩小编辑框（Ctrl+−）" aria-label="缩小编辑框">−</button>
-              <input id="editorScaleInput" type="text" inputmode="decimal" maxlength="5" value="100%" aria-label="编辑框缩放比例" title="编辑框缩放比例：输入 80%–160% 后按回车；双击恢复 100%">
-              <button type="button" id="editorScaleLarger" title="放大编辑框（Ctrl+＋）" aria-label="放大编辑框">＋</button>
-            </span>
-            <button type="button" id="toolbarSmaller" title="缩小标签按钮" aria-label="缩小标签按钮">−</button>
-            <button type="button" id="toolbarReset" title="恢复默认按钮尺寸">100%</button>
-            <button type="button" id="toolbarLarger" title="放大标签按钮" aria-label="放大标签按钮">＋</button>
-            <button type="button" data-tag-dock="top" title="停靠在编辑区上方">上</button>
-            <button type="button" data-tag-dock="bottom" title="停靠在编辑区下方">下</button>
-            <button type="button" data-tag-dock="floating" title="悬浮在编辑区内">悬浮</button>
-          </span>
-        </div>
-        <div class="bar"><span id="tagBar"></span></div>
-      </div>
+      <div id="tagBar" class="tag-bar"></div>
       <div class="editorWrap"><div id="monacoEditor" aria-label="HTML 源码编辑器"></div></div>
     </section>
     <div class="paneSplitter" id="previewSplitter" role="separator" tabindex="0" aria-label="调整预览宽度" aria-orientation="vertical" aria-controls="previewPane" title="拖动调整预览宽度；方向键微调；双击恢复"></div>
@@ -93,9 +77,25 @@
       <button value="cancel">取消</button>
     </form>
   </dialog>
+  <dialog id="fileDialog" aria-labelledby="fileDialogTitle">
+    <form id="fileDialogForm">
+      <h2 id="fileDialogTitle">新建文件</h2>
+      <p class="fileDialogDirectory">保存位置：<code id="fileDialogDirectory"></code></p>
+      <label class="fileNameField">文件名
+        <input id="fileNameInput" name="fileName" autocomplete="off" spellcheck="false" required>
+      </label>
+      <p id="fileDialogError" class="dialogError" role="alert"></p>
+      <div class="dialogActions">
+        <button id="fileDialogSubmit" type="submit">创建</button>
+        <button type="button" data-cancel>取消</button>
+      </div>
+    </form>
+  </dialog>
   <script src="git-platform.js"></script>
   <script src="/monaco/min/vs/loader.js"></script>
-  <script src="monaco-app.js"></script>
-  <script src="editor-layout.js"></script>
+  <script src="editor-core.js"></script>
+  <script src="tag-panel.js"></script>
+  <script src="ui.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

@@ -9,46 +9,7 @@
 .page-footer{height:48px;display:flex;align-items:center;justify-content:center;gap:30px;background:#2d2925;color:#fff}.page-footer button{background:#423d38;color:#fff;border-color:#625b54}.toc-backdrop{position:fixed;inset:64px 0 48px;z-index:8;border:0;border-radius:0;background:#0007;opacity:0;pointer-events:none}.toc-drawer{position:fixed;z-index:9;top:64px;bottom:48px;right:0;width:min(440px,90vw);background:var(--panel);box-shadow:-8px 0 30px #0003;transform:translateX(105%);transition:.2s}.toc-open .toc-backdrop{opacity:1;pointer-events:auto}.toc-open .toc-drawer{transform:none}.toc-header{height:54px;display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--line)}#tocList{height:calc(100% - 54px);overflow:auto;margin:0;padding:8px 12px;list-style:none}#tocList a{display:flex;gap:8px;padding:7px 8px 7px calc(8px + (var(--level) - 1)*16px);border-radius:5px;color:inherit;text-decoration:none}#tocList a:hover,#tocList a.active{background:#eadbd6;color:var(--red)}#tocList span{min-width:34px;color:var(--muted)}
 body.dark{--bg:#171717;--panel:#242424;--ink:#eee;--muted:#aaa;--line:#444;--soft:#2c2c2c;--code:#1e1e1e}
 @media(max-width:850px){.site-header{height:auto;min-height:64px;flex-wrap:wrap}.context{order:3;width:100%}.brand{display:none}.actions{flex-wrap:wrap}.reader-grid{height:calc(100% - 156px - var(--window-dock-top) - var(--window-dock-bottom));display:block;overflow:auto}.text-pane{height:70vh}.scan-pane{height:60vh}.toc-drawer{top:108px}.toc-backdrop{top:108px}}
-/* ===== 可停靠/可浮动/可拉伸编辑按钮框 ===== */
-.float-panel{--fp-scale:1;--fp-font:calc(12px * var(--fp-scale));--fp-gap:calc(4px * var(--fp-scale));--fp-pad-x:calc(7px * var(--fp-scale));--fp-header-height:27px;--fp-control-height:calc(28px * var(--fp-scale));--fp-min-control-height:16px;--fp-content-min-height:28px;position:relative;display:flex;flex-direction:column;min-width:0;min-height:calc(var(--fp-header-height) + var(--fp-content-min-height));background:var(--panel)}
-.float-panel>.tag-bar{flex:1 1 auto;min-height:0;border-bottom:0;overflow-x:auto;overflow-y:hidden;align-content:safe center;align-items:center}
-.float-panel.auto-height>.tag-bar{flex:0 0 auto;overflow-x:hidden;overflow-y:hidden}
-.float-panel>.tag-bar{gap:var(--fp-gap);padding:0 var(--fp-pad-x)}
-.float-panel>.tag-bar button{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;height:var(--fp-control-height);min-height:var(--fp-min-control-height);font-size:var(--fp-font);padding:0 var(--fp-pad-x)}
-.float-panel>.tag-bar button:active:not(:disabled){transform:none}
-.fp-header{display:flex;align-items:center;gap:8px;padding:3px 8px;background:var(--soft);border-bottom:1px solid var(--line);cursor:grab;user-select:none;-webkit-user-select:none;font-size:12px;color:var(--ink);flex:0 0 auto}
-.fp-header:active{cursor:grabbing}
-.fp-grip{color:var(--muted);font-weight:700}
-.fp-title{font-weight:600;color:var(--muted);white-space:nowrap}
-.fp-actions,.fp-scale-actions{display:flex;align-items:center;min-width:0;gap:3px}.fp-actions{margin-left:auto;overflow-x:auto;overflow-y:hidden}.fp-scale-actions{flex:none;margin-right:3px}.fp-scale-label{color:var(--muted);font-size:11px;white-space:nowrap}.fp-dock,.fp-scale-control,.fp-scale-input{flex:none;height:22px;min-height:22px;font-size:11px;line-height:1.4;padding:2px 7px;border-radius:5px;background:var(--panel);border:1px solid var(--line);color:var(--ink)}.fp-scale-control{cursor:pointer}.fp-scale-input{width:47px;padding-inline:3px;text-align:center;font-variant-numeric:tabular-nums}
-.fp-dock:hover,.fp-scale-control:hover,.fp-scale-input:hover,.fp-scale-input:focus{border-color:var(--red);color:var(--red)}
-.fp-dock.active{background:var(--red);border-color:var(--red);color:#fff}
-
-.float-panel.dock-editor-top{border-bottom:1px solid var(--line)}
-.float-panel.dock-editor-bottom{border-top:1px solid var(--line)}
-.float-panel.dock-window-top{position:fixed;left:0;right:0;z-index:60;border-bottom:1px solid var(--line);box-shadow:0 4px 16px #0003}
-.float-panel.dock-window-bottom{position:fixed;left:0;right:0;z-index:60;border-top:1px solid var(--line);box-shadow:0 -4px 16px #0003}
-.float-panel.floating{position:fixed;z-index:60;border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 30px #0005;min-width:220px}
-
-.fp-handle{position:absolute;z-index:5;display:none;touch-action:none}
-.float-panel.floating .fp-handle{display:block}
-.float-panel.dock-editor-top .fp-handle-s,.float-panel.dock-editor-bottom .fp-handle-n,
-.float-panel.dock-window-top .fp-handle-s,.float-panel.dock-window-bottom .fp-handle-n{display:block}
-.fp-handle-n{top:-4px;left:0;right:0;height:8px;cursor:ns-resize}
-.fp-handle-s{bottom:-4px;left:0;right:0;height:8px;cursor:ns-resize}
-.fp-handle-w{top:0;bottom:0;left:-4px;width:8px;cursor:ew-resize}
-.fp-handle-e{top:0;bottom:0;right:-4px;width:8px;cursor:ew-resize}
-.fp-handle-nw{top:-4px;left:-4px;width:14px;height:14px;cursor:nwse-resize}
-.fp-handle-ne{top:-4px;right:-4px;width:14px;height:14px;cursor:nesw-resize}
-.fp-handle-sw{bottom:-4px;left:-4px;width:14px;height:14px;cursor:nesw-resize}
-.fp-handle-se{right:-4px;bottom:-4px;width:14px;height:14px;cursor:nwse-resize}
-
-.fp-snap{position:fixed;left:8px;right:8px;z-index:59;border:2px dashed var(--red);border-radius:8px;background:#9d2b2422;display:none;pointer-events:none}
-.fp-snap-top{top:var(--app-header-height);height:56px}
-.fp-snap-bottom{bottom:var(--app-footer-height);height:56px}
-.fp-snap.active{display:block}
-
-body.panel-dragging{user-select:none;-webkit-user-select:none;cursor:grabbing}
+/* 编辑按钮框的共用外观与交互在 tag-panel.css / tag-panel.js。 */
 
 /* 面板停靠时按停靠方位调整父容器网格 */
 .text-pane.bar-fixed{grid-template-rows:1fr}
