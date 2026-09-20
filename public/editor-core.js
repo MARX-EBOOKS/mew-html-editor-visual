@@ -84,6 +84,86 @@
   }
 
   const registeredColorProviders = new WeakSet();
+  const vscodeHtmlThemeRules = dark => {
+    const colors = dark ? {
+      delimiter: "808080", tag: "7EE787", attribute: "79C0FF", string: "A5D6FF", comment: "8B949E"
+    } : {
+      delimiter: "800000", tag: "116329", attribute: "0550AE", string: "0A3069", comment: "6E7781"
+    };
+    return [
+      { token: "delimiter.html", foreground: colors.delimiter },
+      { token: "tag.html", foreground: colors.tag },
+      { token: "attribute.name.html", foreground: colors.attribute },
+      { token: "attribute.value.html", foreground: colors.string },
+      { token: "comment.html", foreground: colors.comment },
+      { token: "comment.content.html", foreground: colors.comment }
+    ];
+  };
+
+  const vscodeEditorThemeColors = dark => dark ? {
+    "focusBorder": "#3994BCB3",
+    "input.background": "#191A1B", "input.border": "#333536", "input.foreground": "#BFBFBF", "input.placeholderForeground": "#555555",
+    "scrollbar.shadow": "#191B1D4D", "scrollbarSlider.background": "#A8A9AA85", "scrollbarSlider.hoverBackground": "#A8A9AA90", "scrollbarSlider.activeBackground": "#A8A9AA9C",
+    "editor.background": "#121314", "editor.foreground": "#BBBEBF", "editorCursor.foreground": "#BBBEBF",
+    "editorLineNumber.foreground": "#858889", "editorLineNumber.activeForeground": "#BBBEBF",
+    "editor.selectionBackground": "#276782DD", "editor.inactiveSelectionBackground": "#27678260", "editor.selectionHighlightBackground": "#27678260",
+    "editor.wordHighlightBackground": "#27678250", "editor.wordHighlightStrongBackground": "#27678280",
+    "editor.findMatchBackground": "#27678290", "editor.findMatchHighlightBackground": "#27678280", "editor.findRangeHighlightBackground": "#FFFFFF13",
+    "editor.hoverHighlightBackground": "#FFFFFF13", "editor.lineHighlightBackground": "#242526", "editor.rangeHighlightBackground": "#FFFFFF13",
+    "editorLink.activeForeground": "#3A94BC", "editorWhitespace.foreground": "#8C8C8C4D",
+    "editorIndentGuide.background1": "#8384854D", "editorIndentGuide.activeBackground1": "#838485", "editorRuler.foreground": "#848484", "editorCodeLens.foreground": "#8C8C8C",
+    "editorBracketMatch.background": "#3994BC55", "editorBracketMatch.border": "#2A2B2C",
+    "editorWidget.background": "#202122", "editorWidget.border": "#2A2B2C", "editorWidget.foreground": "#BFBFBF",
+    "editorSuggestWidget.background": "#202122", "editorSuggestWidget.border": "#2A2B2C", "editorSuggestWidget.foreground": "#BFBFBF",
+    "editorSuggestWidget.highlightForeground": "#BFBFBF", "editorSuggestWidget.selectedBackground": "#FFFFFF26", "editorSuggestWidget.focusOutline": "#3994BCB3",
+    "editorHoverWidget.background": "#202122", "editorHoverWidget.border": "#2A2B2C", "editorGutter.background": "#121314",
+    "editorOverviewRuler.border": "#2A2B2C", "editorOverviewRuler.findMatchForeground": "#3A94BC99"
+  } : {
+    "focusBorder": "#0069CC",
+    "input.background": "#FFFFFF", "input.border": "#D8D8D866", "input.foreground": "#202020", "input.placeholderForeground": "#999999",
+    "scrollbar.shadow": "#00000000", "scrollbarSlider.background": "#646464C0", "scrollbarSlider.hoverBackground": "#646464D0", "scrollbarSlider.activeBackground": "#646464E0",
+    "editor.background": "#FFFFFF", "editor.foreground": "#202020", "editorCursor.foreground": "#202020",
+    "editorLineNumber.foreground": "#606060", "editorLineNumber.activeForeground": "#202020",
+    "editor.selectionBackground": "#0069CC40", "editor.inactiveSelectionBackground": "#0069CC1A", "editor.selectionHighlightBackground": "#0069CC15",
+    "editor.wordHighlightBackground": "#0069CC26", "editor.wordHighlightStrongBackground": "#0069CC26",
+    "editor.findMatchBackground": "#0069CC40", "editor.findMatchHighlightBackground": "#0069CC1A", "editor.findRangeHighlightBackground": "#00000015",
+    "editor.hoverHighlightBackground": "#00000015", "editor.lineHighlightBackground": "#EAEAEA40", "editor.rangeHighlightBackground": "#00000015",
+    "editorLink.activeForeground": "#0069CC", "editorWhitespace.foreground": "#60606040",
+    "editorIndentGuide.background1": "#F7F7F740", "editorIndentGuide.activeBackground1": "#EEEEEE", "editorRuler.foreground": "#F7F7F7", "editorCodeLens.foreground": "#606060",
+    "editorBracketMatch.background": "#0069CC40", "editorBracketMatch.border": "#F0F1F2",
+    "editorWidget.background": "#FAFAFD", "editorWidget.border": "#E4E5E6", "editorWidget.foreground": "#202020",
+    "editorSuggestWidget.background": "#FAFAFD", "editorSuggestWidget.border": "#E4E5E6", "editorSuggestWidget.foreground": "#202020",
+    "editorSuggestWidget.highlightForeground": "#0069CC", "editorSuggestWidget.selectedBackground": "#00000025", "editorSuggestWidget.selectedForeground": "#202020", "editorSuggestWidget.selectedIconForeground": "#202020", "editorSuggestWidget.focusOutline": "#0069CC",
+    "editorHoverWidget.background": "#FAFAFD", "editorHoverWidget.border": "#E4E5E6", "editorGutter.background": "#FFFFFF",
+    "editorOverviewRuler.border": "#F0F1F2", "editorOverviewRuler.findMatchForeground": "#0069CC99"
+  };
+  // 两个入口共用默认配置；仅在确有页面差异时填写下面的覆盖项。
+  const monacoOptions = {
+    model: null, automaticLayout: true, fontFamily: 'Consolas, "Cascadia Mono", monospace',
+    fontSize: 14, lineHeight: 21, tabSize: 2, wordWrap: "on", minimap: { enabled: false },
+    find: { addExtraSpaceOnTop: false },
+    // Monaco 0.55.1 在快速切换模型时可能取消 occurrence 请求并报错。
+    occurrencesHighlight: "off", scrollBeyondLastLine: false, padding: { top: 14, bottom: 14 },
+    colorDecorators: true, defaultColorDecorators: "never",
+    renderLineHighlight: "gutter", renderLineHighlightOnlyWhenFocus: true
+  };
+  const indexMonacoOptions = {};
+  const readerMonacoOptions = {};
+  const registeredThemes = new WeakSet();
+
+  function setMonacoTheme(api, dark) {
+    if (!registeredThemes.has(api)) {
+      for (const isDark of [false, true]) {
+        api.editor.defineTheme(isDark ? "mew-dark" : "mew-light", {
+          base: isDark ? "vs-dark" : "vs", inherit: true,
+          rules: vscodeHtmlThemeRules(isDark), colors: vscodeEditorThemeColors(isDark)
+        });
+      }
+      registeredThemes.add(api);
+    }
+    api.editor.setTheme(dark ? "mew-dark" : "mew-light");
+  }
+
   function registerHtmlStyleColorProvider(api) {
     if (registeredColorProviders.has(api)) return;
     registeredColorProviders.add(api);
@@ -135,10 +215,16 @@
   }
 
   class MonacoController {
-    constructor(api, host, options = {}) {
+    constructor(api, host, { page = "index", scale = 1, dark = false, ...options } = {}) {
       this.api = api;
       registerHtmlStyleColorProvider(api);
-      this.editor = api.editor.create(host, options);
+      setMonacoTheme(api, dark);
+      const config = { ...monacoOptions, ...(page === "reader" ? readerMonacoOptions : indexMonacoOptions), ...options };
+      this.fontSize = config.fontSize;
+      this.lineHeight = config.lineHeight;
+      this.editor = api.editor.create(host, {
+        ...config, fontSize: this.fontSize * scale, lineHeight: Math.round(this.lineHeight * scale)
+      });
     }
 
     createModel({ text = "", language = "html", uri, onChange } = {}) {
@@ -153,12 +239,28 @@
     focus() { this.editor.focus(); }
     hasTextFocus() { return this.editor.hasTextFocus(); }
     setEditable(editable) { this.editor.updateOptions({ readOnly: !editable }); }
-    setScale(scale, lineHeight = 21) {
-      this.editor.updateOptions({ fontSize: 14 * scale, lineHeight: Math.round(lineHeight * scale) });
+    setScale(scale) {
+      this.editor.updateOptions({ fontSize: this.fontSize * scale, lineHeight: Math.round(this.lineHeight * scale) });
     }
     selection() {
       const selection = this.editor.getSelection(), model = this.model;
       return selection && model ? { start: model.getOffsetAt(selection.getStartPosition()), end: model.getOffsetAt(selection.getEndPosition()) } : { start: 0, end: 0 };
+    }
+    selections() {
+      return (this.editor.getSelections() || []).map(selection => ({
+        start: this.model.getOffsetAt(selection.getStartPosition()),
+        end: this.model.getOffsetAt(selection.getEndPosition())
+      }));
+    }
+    replaceRanges(edits, selections, origin) {
+      const model = this.model;
+      this.editor.pushUndoStop();
+      this.editor.executeEdits(origin, edits.map(edit => ({
+        range: this.api.Range.fromPositions(model.getPositionAt(edit.start), model.getPositionAt(edit.end)),
+        text: edit.text, forceMoveMarkers: true
+      })), () => selections.map(selection => this.api.Selection.fromPositions(
+        model.getPositionAt(selection.start), model.getPositionAt(selection.end))));
+      this.editor.pushUndoStop();
     }
     setSelection(start, end = start) {
       this.editor.setSelection(this.api.Selection.fromPositions(this.model.getPositionAt(start), this.model.getPositionAt(end)));
@@ -237,5 +339,5 @@
     return new Promise((resolve, reject) => require(["vs/editor/editor.main"], resolve, reject));
   }
 
-  window.MewEditorCore = { DocumentModel, MonacoController, createChannel, languageForPath, loadMonaco };
+  window.MewEditorCore = { DocumentModel, MonacoController, createChannel, languageForPath, loadMonaco, setMonacoTheme };
 })();

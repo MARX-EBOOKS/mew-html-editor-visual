@@ -9,22 +9,21 @@
   const body = document.body;
   const grid = document.querySelector(".reader-grid");
   const scanPane = document.querySelector(".scan-pane");
-  const monacoHost = byId("monacoEditor");
   const visualFrame = byId("visualEditor");
   const pdfFrame = byId("pdfFrame");
   const listeners = {};
   let initialized = false;
-  let monacoApi = null, source = null;
   let editorScale = 1;
   let statusTimer = null;
   let pendingPdfOptions = null;
   let pdfRuntimePromise = null, pdfViewer = null, pdfLinkService = null, pdfLoadingTask = null;
   let pdfUrl = "", pdfPageLabels = null, scrollMode = null, pdfWriteTimer = null, pdfRevision = 0;
   let pdfShortcutActive = false;
+  let pdfContextPageNumber = null;
   const PDF_SETTINGS_KEY = "readerPdfSettings.v1";
   const PDF_DEFAULTS = { brightness: 100, paper: "#ffffff", ink: "#000000", invert: false, horizontal: false, scale: "page-width" };
   let pdfSettings = { ...PDF_DEFAULTS };
-  const PDF_DIRECT_HTML = `<svg aria-hidden="true" width="0" height="0"><filter id="scanColorFilter" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR id="filterR" type="table" tableValues="0 1"/><feFuncG id="filterG" type="table" tableValues="0 1"/><feFuncB id="filterB" type="table" tableValues="0 1"/></feComponentTransfer></filter></svg><div class="pdf-tools"><div class="pdf-group"><button id="direction" type="button">左右翻页</button><button id="settings" type="button">显示设置</button></div><div class="pdf-group pdf-zoom"><button id="zoomOut" type="button" aria-label="缩小 PDF" title="缩小 PDF（Ctrl+−）">−</button><input id="zoomValue" type="text" inputmode="decimal" maxlength="8" value="页宽" aria-label="PDF 缩放比例" title="输入 25%–1000% 并按回车；输入“页宽”恢复适合页宽；PDF 区域支持 Ctrl+滚轮及 Ctrl+＋/−"><button id="zoomIn" type="button" aria-label="放大 PDF" title="放大 PDF（Ctrl+＋）">＋</button></div><button id="full" type="button">全屏</button></div><div id="stage"><div id="viewer" class="pdfViewer"></div><p id="missing">正在载入 PDF…</p></div><dialog id="settingsDialog"><form method="dialog"><header><strong>扫描件显示设置</strong><button value="close">×</button></header><label>亮度 <output id="brightnessValue"></output><input id="brightness" type="range" min="50" max="160"></label><label>背景色 <input id="paper" type="color"></label><label>文字色 <input id="ink" type="color"></label><label class="toggle"><input id="invert" type="checkbox">反色</label><footer><button id="reset" type="button">恢复默认</button><button value="close">完成</button></footer></form></dialog>`;
+  const PDF_DIRECT_HTML = `<svg aria-hidden="true" width="0" height="0"><filter id="scanColorFilter" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR id="filterR" type="table" tableValues="0 1"/><feFuncG id="filterG" type="table" tableValues="0 1"/><feFuncB id="filterB" type="table" tableValues="0 1"/></feComponentTransfer></filter></svg><div class="pdf-tools"><div class="pdf-group"><button id="direction" type="button">左右翻页</button><button id="settings" type="button">显示设置</button></div><div class="pdf-tools-end"><div class="pdf-group pdf-zoom"><button id="zoomOut" type="button" aria-label="缩小 PDF" title="缩小 PDF（Ctrl+−）">−</button><input id="zoomValue" type="text" inputmode="decimal" maxlength="8" value="页宽" aria-label="PDF 缩放比例" title="输入 25%–1000% 并按回车；输入“页宽”恢复适合页宽；PDF 区域支持 Ctrl+滚轮及 Ctrl+＋/−"><button id="zoomIn" type="button" aria-label="放大 PDF" title="放大 PDF（Ctrl+＋）">＋</button></div></div></div><div id="stage"><div id="viewer" class="pdfViewer"></div><p id="missing">正在载入 PDF…</p></div><dialog id="settingsDialog"><form method="dialog"><header><strong>扫描件显示设置</strong><button value="close">×</button></header><label>亮度 <output id="brightnessValue"></output><input id="brightness" type="range" min="50" max="160"></label><label>背景色 <input id="paper" type="color"></label><label>文字色 <input id="ink" type="color"></label><label class="toggle"><input id="invert" type="checkbox">反色</label><footer><button id="reset" type="button">恢复默认</button><button value="close">完成</button></footer></form></dialog>`;
 
   function emit(name, ...args) {
     return listeners[name]?.(...args);
@@ -33,6 +32,91 @@
   function bind(id, event, handler) {
     byId(id)?.addEventListener(event, handler);
   }
+
+  function setupHeaderActions() {
+    const header = document.querySelector('.site-header');
+    const actions = header.querySelector('.actions');
+    const menu = header.querySelector('.topActions');
+    const panel = menu.querySelector('.menuPanel');
+    const navigation = element('div', 'reader-navigation');
+    navigation.append(byId('volumeSelect'), actions.querySelector('.action-group-page'));
+    navigation.hidden = true;
+    header.append(navigation);
+    const nodes = [...actions.children];
+    const slots = nodes.map(node => {
+      const slot = document.createComment('toolbar action');
+      node.before(slot);
+      return slot;
+    });
+    let scheduled = false;
+    const observer = new MutationObserver(schedule);
+    function schedule() {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        observer.disconnect();
+        const focus = document.activeElement;
+        const pdfTools = pdfFrame.querySelector('.pdf-tools');
+        if (pdfTools && navigation.parentElement !== pdfTools) {
+          pdfTools.append(navigation);
+          navigation.hidden = false;
+        }
+        nodes.forEach((node, index) => slots[index].after(node));
+        header.classList.remove('header-compact');
+        const fits = () => actions.scrollWidth <= actions.clientWidth + 1 &&
+          Math.max(...[...header.children].map(node => node.getBoundingClientRect().right)) <=
+            header.getBoundingClientRect().right - parseFloat(getComputedStyle(header).paddingRight) + 1;
+        if (!fits()) header.classList.add('header-compact');
+        for (const node of [...nodes].reverse()) {
+          if (node.parentElement !== actions) continue;
+          if (fits()) break;
+          panel.prepend(node);
+        }
+        if (focus instanceof HTMLElement && focus !== document.activeElement) {
+          (panel.contains(focus) && !menu.open ? menu.querySelector('summary') : focus).focus({ preventScroll: true });
+        }
+        observer.observe(header, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden'] });
+      });
+    }
+    menu.addEventListener('click', event => {
+      if (event.target.closest('button')) menu.open = false;
+    });
+    menu.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { menu.open = false; menu.querySelector('summary').focus(); }
+    });
+    document.addEventListener('pointerdown', event => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+    new ResizeObserver(schedule).observe(header);
+    const pdfToolsResize = new ResizeObserver(entries => {
+      for (const { target } of entries) {
+        target.classList.remove('compact-navigation');
+        target.classList.toggle('compact-navigation', target.scrollWidth > target.clientWidth);
+        pdfFrame.style.setProperty('--pdf-toolbar-height', `${target.getBoundingClientRect().height}px`);
+      }
+    });
+    const watchPdfTools = () => {
+      const toolbar = pdfFrame.querySelector('.pdf-tools');
+      if (toolbar) { pdfToolsResize.observe(toolbar); schedule(); }
+    };
+    new MutationObserver(watchPdfTools).observe(pdfFrame, { childList: true });
+    watchPdfTools();
+    window.addEventListener('reader-toolbar-layout', schedule);
+    document.fonts.ready.then(schedule);
+    schedule();
+  }
+  setupHeaderActions();
+  bind("full", "click", () => {
+    (document.fullscreenElement ? document.exitFullscreen() : root.requestFullscreen())
+      .catch(error => notify(error.message, true));
+  });
+  document.addEventListener("fullscreenchange", () => {
+    const fullscreen = Boolean(document.fullscreenElement);
+    byId("full").textContent = fullscreen ? "退出全屏" : "全屏";
+    byId("full").setAttribute("aria-pressed", String(fullscreen));
+    requestAnimationFrame(() => pdfViewer?.update());
+  });
 
   function setToc(open) {
     root.classList.toggle("toc-open", open);
@@ -44,48 +128,13 @@
     localStorage.setItem("readerDark", dark ? "1" : "0");
     const button = byId("darkBtn");
     if (button) button.textContent = dark ? "浅色" : "深色";
-    if (monacoApi) monacoApi.editor.setTheme(dark ? "reader-dark" : "reader-light");
+    emit("theme", dark);
     applyVisualTheme();
-  }
-
-  function initMonaco(api) {
-    if (source) return source.editor;
-    monacoApi = api;
-    const themes = [
-      ["reader-light", "vs", { bg: "#fbfcfe", ink: "#27231f", selection: "#add6ff80", muted: "#716b64", panel: "#ffffff", line: "#d9d2c8" }],
-      ["reader-dark", "vs-dark", { bg: "#1e1e1e", ink: "#eeeeee", selection: "#264f78", muted: "#aaaaaa", panel: "#242424", line: "#444444" }]
-    ];
-    for (const [name, base, color] of themes) {
-      monacoApi.editor.defineTheme(name, {
-        base, inherit: true, rules: [],
-        colors: {
-          "editor.background": color.bg, "editor.foreground": color.ink,
-          "editor.selectionBackground": color.selection, "editorLineNumber.foreground": color.muted,
-          "editorWidget.background": color.panel, "editorWidget.border": color.line,
-          "input.background": color.panel, "input.foreground": color.ink,
-          "editorCursor.foreground": color.ink
-        }
-      });
-    }
-    source = new MewEditorCore.MonacoController(monacoApi, monacoHost, {
-      model: null, automaticLayout: true, fontFamily: 'Consolas, "Cascadia Mono", monospace',
-      fontSize: 14 * editorScale, lineHeight: Math.round(22 * editorScale), tabSize: 2, wordWrap: "on", minimap: { enabled: false },
-      find: { addExtraSpaceOnTop: false }, occurrencesHighlight: "off", scrollBeyondLastLine: false,
-      padding: { top: 14, bottom: 14 }, readOnly: true,
-      colorDecorators: true, defaultColorDecorators: "never"
-    });
-    source.setModel(source.createModel({ text: "", language: "html", uri: monacoApi.Uri.parse("mew-reader:///page.html"), onChange: () => emit("sourceInput") }));
-    source.editor.onDidChangeCursorSelection(() => emit("historyChanged"));
-    source.editor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyF, () => toggleSourceFind(false, false));
-    source.editor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyH, () => toggleSourceFind(true, false));
-    setTheme(body.classList.contains("dark"));
-    window.readerMonaco = { editor: source.editor, model: source.model };
-    return source.editor;
   }
 
   function setEditorScale(value) {
     editorScale = Math.min(1.6, Math.max(.8, Number(value) || 1));
-    source?.setScale(editorScale, 22);
+    emit("editorScale", editorScale);
     const doc = visualFrame?.contentDocument;
     if (doc?.documentElement) doc.documentElement.style.zoom = editorScale;
     return editorScale;
@@ -96,9 +145,9 @@
     if (!doc?.body) return;
     const dark = body.classList.contains("dark");
     doc.documentElement.style.colorScheme = dark ? "dark" : "light";
-    doc.documentElement.style.setProperty("--reader-bg", dark ? "#1e1e1e" : "#ffffff");
-    doc.documentElement.style.setProperty("--reader-ink", dark ? "#d4d4d4" : "#251f1b");
-    doc.documentElement.style.setProperty("--reader-link", dark ? "#4fc1ff" : "#8f2923");
+    doc.documentElement.style.setProperty("--reader-bg", dark ? "#121314" : "#ffffff");
+    doc.documentElement.style.setProperty("--reader-ink", dark ? "#bbbebf" : "#202020");
+    doc.documentElement.style.setProperty("--reader-link", dark ? "#48a0c7" : "#0069cc");
     doc.documentElement.style.zoom = editorScale;
   }
 
@@ -128,6 +177,7 @@
       ? (readerOnly ? "打开或重新聚焦联控编辑器窗口" : "用独立窗口打开编辑器，并把本窗口切换为纯阅读器")
       : "当前阅读器配置没有可用的本地编辑目录";
     splitter.hidden = readerOnly;
+    window.dispatchEvent(new Event("reader-toolbar-layout"));
     requestAnimationFrame(() => {
       pdfViewer?.update();
       syncChromeMetrics();
@@ -329,13 +379,99 @@
     return matches?.reduce((best, page) => Math.abs(page - current) < Math.abs(best - current) ? page : best, matches[0]) || null;
   }
   function showPendingPdfPage() { const page = pdfPageNumberForLabel(pendingPdfOptions?.pageLabel); if (page) pdfViewer.currentPageNumber = page; }
+
+  function imageObject(page, id) {
+    if (typeof id !== "string") return null;
+    const objects = id.startsWith("g_") ? page.commonObjs : page.objs;
+    return objects.has(id) ? objects.get(id) : null;
+  }
+
+  function resolvedImage(page, image) {
+    if (typeof image === "string") return imageObject(page, image);
+    return typeof image?.data === "string" ? imageObject(page, image.data) : image;
+  }
+
+  async function originalPdfPageImage(pageNumber) {
+    const page = await pdfViewer?.pdfDocument?.getPage(pageNumber);
+    if (!page) throw new Error("PDF 页面尚未载入");
+    const operators = await page.getOperatorList();
+    const { OPS } = globalThis.pdfjsLib;
+    const candidates = [];
+    for (let index = 0; index < operators.fnArray.length; index += 1) {
+      const operation = operators.fnArray[index];
+      const args = operators.argsArray[index];
+      let image = null;
+      if (operation === OPS.paintInlineImageXObject || operation === OPS.paintImageMaskXObject) image = args[0];
+      else if (operation === OPS.paintImageXObject || operation === OPS.paintImageXObjectRepeat) image = args[0];
+      image = resolvedImage(page, image);
+      if (!image?.width || !image?.height || (!image.bitmap && !image.data)) continue;
+      candidates.push(image);
+    }
+    if (!candidates.length) throw new Error("当前 PDF 页没有可复制的扫描底图");
+    return candidates.reduce((largest, image) => image.width * image.height > largest.width * largest.height ? image : largest);
+  }
+
+  function pdfImagePng(image) {
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (image.bitmap) context.drawImage(image.bitmap, 0, 0);
+    else {
+      const pixels = context.createImageData(image.width, image.height);
+      const target = pixels.data;
+      const { ImageKind } = globalThis.pdfjsLib;
+      if (image.kind === ImageKind.RGBA_32BPP) target.set(image.data);
+      else if (image.kind === ImageKind.RGB_24BPP) {
+        for (let source = 0, dest = 0; source < image.data.length; source += 3, dest += 4) {
+          target[dest] = image.data[source]; target[dest + 1] = image.data[source + 1];
+          target[dest + 2] = image.data[source + 2]; target[dest + 3] = 255;
+        }
+      } else if (image.kind === ImageKind.GRAYSCALE_1BPP) {
+        const rowBytes = Math.ceil(image.width / 8);
+        for (let y = 0; y < image.height; y += 1) for (let x = 0; x < image.width; x += 1) {
+          const bit = image.data[y * rowBytes + (x >> 3)] >> (7 - (x & 7)) & 1;
+          const value = (bit ^ Boolean(image.inverseDecode)) ? 255 : 0;
+          const dest = (y * image.width + x) * 4;
+          target[dest] = target[dest + 1] = target[dest + 2] = value; target[dest + 3] = 255;
+        }
+      } else throw new Error("当前扫描底图的像素格式不受支持");
+      context.putImageData(pixels, 0, 0);
+    }
+    return new Promise((resolve, reject) => canvas.toBlob(
+      blob => blob ? resolve({ blob, width: image.width, height: image.height }) : reject(new Error("扫描底图 PNG 编码失败")),
+      "image/png"
+    ));
+  }
+
+  function copyOriginalPdfImage(event) {
+    const pageNumber = pdfContextPageNumber;
+    pdfContextPageNumber = null;
+    if (!pageNumber) return;
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+      notify("当前浏览器不支持把 PDF 原底图写入剪贴板", true);
+      return;
+    }
+    event.preventDefault();
+    const result = originalPdfPageImage(pageNumber).then(pdfImagePng);
+    navigator.clipboard.write([new ClipboardItem({ "image/png": result.then(value => value.blob) })])
+      .then(async () => {
+        const { width, height } = await result;
+        notify(`已复制 PDF 原底图（${width} × ${height}）`);
+      })
+      .catch(error => notify(`复制 PDF 原底图失败：${error.message}`, true));
+  }
+
   async function ensurePdfRuntime() {
     if (pdfRuntimePromise) return pdfRuntimePromise;
     pdfRuntimePromise = (async () => {
       const pdfjs = await import("/vendor/pdfjs/build/pdf.mjs"); globalThis.pdfjsLib = pdfjs;
       const viewerModule = await import("/vendor/pdfjs/web/pdf_viewer.mjs"); pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/build/pdf.worker.mjs";
       const eventBus = new viewerModule.EventBus(); pdfLinkService = new viewerModule.PDFLinkService({ eventBus });
-      pdfViewer = new viewerModule.PDFViewer({ container: frameId("stage"), viewer: frameId("viewer"), eventBus, linkService: pdfLinkService, imageResourcesPath: "/vendor/pdfjs/web/images/" });
+      pdfViewer = new viewerModule.PDFViewer({
+        container: frameId("stage"), viewer: frameId("viewer"), eventBus, linkService: pdfLinkService,
+        imageResourcesPath: "/vendor/pdfjs/web/images/", imagesRightClickMinSize: 1
+      });
       pdfLinkService.setViewer(pdfViewer); scrollMode = viewerModule.ScrollMode;
       eventBus.on("pagesinit", () => { pdfViewer.setPageLabels(pdfPageLabels); pdfViewer.currentScaleValue = pdfSettings.scale; applyPdfSettings(); showPendingPdfPage(); setPdfStatus(); });
       eventBus.on("pagechanging", ({ pageNumber, pageLabel }) => { if (pageNumber != null) emit("pdfPageChange", { pageNumber, pageLabel }); });
@@ -369,9 +505,21 @@
   }
   function initPdfFrame() {
     pdfFrame.innerHTML = PDF_DIRECT_HTML;
-    document.addEventListener("pointerdown", (event) => { pdfShortcutActive = pdfFrame.contains(event.target); }, true);
+    window.dispatchEvent(new Event("reader-toolbar-layout"));
+    pdfFrame.addEventListener("contextmenu", event => {
+      const page = event.target.closest?.(".pdfViewer .page");
+      pdfContextPageNumber = event.target instanceof HTMLCanvasElement && page ? Number(page.dataset.pageNumber) : null;
+    }, true);
+    document.addEventListener("copy", copyOriginalPdfImage, true);
+    document.addEventListener("pointerdown", (event) => {
+      pdfShortcutActive = pdfFrame.contains(event.target);
+      if (event.button !== 2) pdfContextPageNumber = null;
+    }, true);
     document.addEventListener("wheel", handlePdfScaleShortcut, { capture: true, passive: false });
-    document.addEventListener("keydown", handlePdfScaleShortcut, true);
+    document.addEventListener("keydown", event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") pdfContextPageNumber = null;
+      handlePdfScaleShortcut(event);
+    }, true);
     (async () => {
       let saved = {};
       try { saved = JSON.parse(localStorage.getItem(PDF_SETTINGS_KEY) || "{}"); } catch { localStorage.removeItem(PDF_SETTINGS_KEY); }
@@ -385,8 +533,7 @@
       frameId("zoomIn").onclick = () => changePdfScale(1); frameId("zoomOut").onclick = () => changePdfScale(-1);
       bindScaleInput(frameId("zoomValue"), applyPdfScaleInput, showPdfScaleValue);
       frameId("zoomValue").ondblclick = () => { if (pdfViewer) pdfViewer.currentScaleValue = "page-width"; };
-      frameId("direction").onclick = () => changePdfSettings({ horizontal: !pdfSettings.horizontal }); frameId("settings").onclick = () => frameId("settingsDialog").showModal(); frameId("brightness").oninput = (event) => changePdfSettings({ brightness: event.target.value }); frameId("paper").oninput = (event) => changePdfSettings({ paper: event.target.value }); frameId("ink").oninput = (event) => changePdfSettings({ ink: event.target.value }); frameId("invert").onchange = (event) => changePdfSettings({ invert: event.target.checked }); frameId("reset").onclick = () => changePdfSettings(PDF_DEFAULTS); frameId("full").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : pdfFrame.requestFullscreen()).catch((error) => notify(error.message, true));
-      document.addEventListener("fullscreenchange", () => { frameId("full").textContent = document.fullscreenElement ? "退出全屏" : "全屏"; requestAnimationFrame(() => pdfViewer?.update()); });
+      frameId("direction").onclick = () => changePdfSettings({ horizontal: !pdfSettings.horizontal }); frameId("settings").onclick = () => frameId("settingsDialog").showModal(); frameId("brightness").oninput = (event) => changePdfSettings({ brightness: event.target.value }); frameId("paper").oninput = (event) => changePdfSettings({ paper: event.target.value }); frameId("ink").oninput = (event) => changePdfSettings({ ink: event.target.value }); frameId("invert").onchange = (event) => changePdfSettings({ invert: event.target.checked }); frameId("reset").onclick = () => changePdfSettings(PDF_DEFAULTS);
       if (pendingPdfOptions) setPdf(pendingPdfOptions);
     })().catch((error) => notify(error.message, true));
   }
@@ -503,27 +650,10 @@
   chromeNodes.filter(Boolean).forEach(node => chromeResizeObserver.observe(node));
   syncChromeMetrics();
 
-  async function toggleSourceFind(replace = true, toggleIfVisible = true) {
-    return source?.toggleFind({ replace, toggleIfVisible, readClipboard: true });
-  }
-
   window.ReaderUI = {
     init, notify, setDirty, setHistoryButtons, renderVolumes, renderToc, renderNavigation, renderTools,
-    setMode, setWorkspaceMode, setToc, setPdf, applyVisualTheme, showVisual, initMonaco, setEditorScale,
-    getSource: () => source?.getValue() || "",
-    setSource: (text, preserveUndo = false) => source?.setValue(text, preserveUndo, "reader.visual"),
-    getSourceSelection: () => source?.selection() || { start: 0, end: 0 },
-    setSourceSelection: (start, end = start) => source?.setSelection(start, end),
-    replaceSourceRange: (text, start, end) => source?.replaceRange(text, start, end, start, start, "reader.edit"),
-    focusSource: () => source?.focus(),
-    setSourceScroll: ({ top = 0, left = 0 }) => source?.editor.setScrollPosition({ scrollTop: top, scrollLeft: left }),
-    setSourceEditable: (editable) => source?.setEditable(editable),
-    canUndo: () => source?.canUndo() || false,
-    canRedo: () => source?.canRedo() || false,
-    undoSource: () => source?.undo(),
-    redoSource: () => source?.redo(),
-    toggleFind: toggleSourceFind,
-    hasSourceTextFocus: () => Boolean(source?.hasTextFocus()),
+    setMode, setWorkspaceMode, setToc, setPdf, applyVisualTheme, showVisual, setEditorScale,
+    byId, editorScale: () => editorScale, isDark: () => body.classList.contains("dark"),
     getVisualDocument: () => visualFrame.contentDocument
   };
 

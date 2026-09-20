@@ -4,14 +4,18 @@
   if (!core) throw new Error("MewEditorCore 未载入");
   const tagPanel = window.MewTagPanel;
   if (!tagPanel) throw new Error("MewTagPanel 未载入");
-  const { DocumentModel, createChannel } = core;
-  const { tags, attrs, tagMap, blockTagNames, buildTagEdit } = tagPanel;
+  const { DocumentModel, MonacoController, createChannel } = core;
+  let monaco = null, source = null, tagEditor = null;
+  const { tags, attrs, tagMap, blockTagNames } = tagPanel;
   const blockSelector = [...blockTagNames].join(",");
 
   const ui = window.ReaderUI;
   if (!ui) throw new Error("ReaderUI 未载入");
+  const { byId, notify } = ui;
 
   const initialParams = new URLSearchParams(location.search);
+  const LAST_VOLUME_KEY = "readerLastVolume";
+  const LAST_PAGE_KEY = "readerLastPage";
   const requestedSession = /^[\w-]{1,128}$/.test(initialParams.get("sync") || "") ? initialParams.get("sync") : "";
 
   const state = {
@@ -25,9 +29,13 @@
     navigationRevision: 0,
     pendingPdfNavigation: null
   };
+  let currentPdfPage = null;
+  let directoryRefreshTimer;
+  let directoryRefreshRevision = 0;
   let syncChannel = null;
   let pairedWindow = null;
   let locateRevision = 0;
+  let combineRequest = null;
   const editorPathCache = new Map();
 
   async function api(url, options) {
@@ -56,18 +64,25 @@
         source: "reader", type: "reader-page", volume, page, path: editorPath
       });
     } catch (error) {
-      ui.notify(`当前页无法在独立编辑器中打开：${error.message}`, true);
+      notify(`当前页无法在独立编辑器中打开：${error.message}`, true);
     }
   }
 
   async function receiveSyncMessage(message) {
     if (!message || message.source !== "editor" || state.workspaceMode !== "reader") return;
+    if (combineRequest) {
+      if (message.requestId === combineRequest.id) {
+        if (message.type === "editor-combined") combineRequest.resolve();
+        else if (message.type === "editor-combine-failed") combineRequest.reject(new Error(message.error));
+      }
+      return;
+    }
     if (message.type === "editor-ready") return announceReaderPage();
     if (message.type !== "editor-page" || !message.path) return;
     const revision = ++locateRevision;
     try {
       const target = await api(`/api/reader/locate?path=${encodeURIComponent(message.path)}`);
-      if (revision !== locateRevision) return;
+      if (revision !== locateRevision || combineRequest) return;
       if (target.volume !== state.volume || target.page !== state.page) await navigate(target.volume, target.page);
     } catch {
       // Ordinary files may remain open in index.html without moving the PDF.
@@ -84,9 +99,34 @@
     return (crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`).replace(/[^\w-]/g, "");
   }
 
+  function initMonaco(api) {
+    if (source) return source.editor;
+    monaco = api;
+    source = new MonacoController(monaco, byId("monacoEditor"), {
+      page: "reader", scale: ui.editorScale(), dark: ui.isDark(), readOnly: true
+    });
+    source.setModel(source.createModel({ text: "", language: "html", uri: monaco.Uri.parse("mew-reader:///page.html"), onChange: () => updateWorkingCopy(source.getValue()) }));
+    tagEditor = new tagPanel.TagEditor(source);
+    source.editor.onDidChangeCursorSelection(updateHistoryButtons);
+    source.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => toggleFind(false, false));
+    source.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => toggleFind(true, false));
+    const findOptionCommands = new Map([
+      ["c", "toggleFindCaseSensitive"], ["w", "toggleFindWholeWord"],
+      ["r", "toggleFindRegex"], ["p", "togglePreserveCase"]
+    ]);
+    for (const [shortcut, command] of findOptionCommands) {
+      source.editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode[`Key${shortcut.toUpperCase()}`], () => {
+        const findVisible = source.editor.getDomNode()?.querySelector(".find-widget")?.classList.contains("visible");
+        if (findVisible) source.editor.trigger("reader.find", command);
+        else if (tagMap.has(shortcut)) editTag(tagMap.get(shortcut));
+      });
+    }
+    window.readerMonaco = { editor: source.editor, model: source.model };
+    return source.editor;
+  }
+
   async function ensureEditorRuntime() {
-    const monaco = await core.loadMonaco();
-    ui.initMonaco(monaco);
+    initMonaco(await core.loadMonaco());
     ui.renderTools(tags, attrs);
     updateHistoryButtons();
   }
@@ -100,11 +140,11 @@
   }
 
   function updateHistoryButtons() {
-    ui.setHistoryButtons(ui.canUndo(), ui.canRedo());
+    ui.setHistoryButtons(source?.canUndo() || false, source?.canRedo() || false);
   }
 
   function currentSource() {
-    if (state.mode !== "visual") return state.document.textFromEditor(ui.getSource());
+    if (state.mode !== "visual") return state.document.textFromEditor(source?.getValue() || "");
     const live = ui.getVisualDocument();
     if (!live?.body) return state.document.content;
     const parsed = new DOMParser().parseFromString(state.document.content, "text/html");
@@ -117,13 +157,13 @@
     return `${doctype}\n${parsed.documentElement.outerHTML}`;
   }
 
-  function updateWorkingCopy(source = currentSource()) {
-    source = state.document.textFromEditor(source);
-    state.document.update(source);
-    if (state.mode === "visual") ui.setSource(source, true);
+  function updateWorkingCopy(text = currentSource()) {
+    text = state.document.textFromEditor(text);
+    state.document.update(text);
+    if (state.mode === "visual") source.setValue(text, true, "reader.visual");
     markDirty();
     updateHistoryButtons();
-    return source;
+    return text;
   }
 
   function restoreHistory(method, action) {
@@ -131,22 +171,22 @@
     const scroll = state.mode === "visual"
       ? { top: visual?.scrollingElement?.scrollTop || 0, left: visual?.scrollingElement?.scrollLeft || 0 }
       : null;
-    ui[`${method}Source`]();
-    updateWorkingCopy(ui.getSource());
+    source?.[method]();
+    updateWorkingCopy(source?.getValue() || "");
     if (state.mode === "visual") renderVisual(scroll);
-    else ui.focusSource();
-    ui.notify(`已${action}`);
+    else source?.focus();
+    notify(`已${action}`);
   }
 
   const undo = () => restoreHistory("undo", "撤销");
   const redo = () => restoreHistory("redo", "重做");
 
-  function injectEditorDocument(source) {
+  function injectEditorDocument(text) {
     const base = `<base href="/api/reader/resource/${encodeURIComponent(state.volume)}/">`;
     const style = '<style data-reader-editor>html{background:var(--reader-bg,#fff)}body{max-width:760px;margin:0 auto;padding:40px 48px 80px;background:var(--reader-bg,#fff);color:var(--reader-ink,#251f1b);caret-color:currentColor;font:18px/1.75 Georgia,"Noto Serif SC","SimSun",serif;outline:none}img{max-width:100%;height:auto}a{color:var(--reader-link,#8f2923)}.reader-ctrl-link a[href]{text-decoration:underline;cursor:pointer}body:focus{box-shadow:inset 0 0 0 2px #9d2b2430}</style>';
-    if (/<head\b[^>]*>/i.test(source)) return source.replace(/<head\b[^>]*>/i, (head) => `${head}${base}${style}`);
-    if (/<html\b[^>]*>/i.test(source)) return source.replace(/<html\b[^>]*>/i, (html) => `${html}<head>${base}${style}</head>`);
-    return `<!doctype html><html><head>${base}${style}</head><body>${source}</body></html>`;
+    if (/<head\b[^>]*>/i.test(text)) return text.replace(/<head\b[^>]*>/i, (head) => `${head}${base}${style}`);
+    if (/<html\b[^>]*>/i.test(text)) return text.replace(/<html\b[^>]*>/i, (html) => `${html}<head>${base}${style}</head>`);
+    return `<!doctype html><html><head>${base}${style}</head><body>${text}</body></html>`;
   }
 
   function renderVisual(scroll = null) {
@@ -160,9 +200,9 @@
     state.mode = next;
     ui.setMode(next);
     if (next === "source") {
-      ui.setSource(state.document.content);
-      if (resetSourceScroll) ui.setSourceScroll({ top: 0, left: 0 });
-      ui.focusSource();
+      source.setValue(state.document.content);
+      if (resetSourceScroll) source.editor.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
+      source?.focus();
     } else {
       renderVisual();
     }
@@ -257,11 +297,13 @@
       const volumeChanged = state.volume !== volume.id;
       state.volume = volume.id;
       state.page = page;
+      localStorage.setItem(LAST_VOLUME_KEY, state.volume);
+      localStorage.setItem(LAST_PAGE_KEY, String(state.page));
       if (editorPath) editorPathCache.set(`${volume.id}:${page}`, editorPath);
       state.document = document;
       if (!readerOnly) {
-        ui.setSourceEditable(document.editable);
-        ui.setSource(document.content);
+        source.setEditable(document.editable);
+        source.setValue(document.content);
         markDirty();
         setMode(state.mode, { resetSourceScroll: true });
       } else syncUrl();
@@ -271,15 +313,16 @@
       // PDF 发起的翻页已经处于正确的物理页，不反向驱动 PDF。
       // 左侧网页发起导航时才定位 PDF；UI 会在重复标签中选择离当前物理页最近的一项。
       if (!pdfOrigin) {
+        currentPdfPage = { volume: volume.id, pageLabel: String(page) };
         ui.setPdf({ url: volume.pdfUrl, pageLabel: String(page) })
-          .catch((error) => ui.notify(`PDF 载入失败：${error.message}`, true));
+          .catch((error) => notify(`PDF 载入失败：${error.message}`, true));
       }
-      if (page !== requestedPage) ui.notify(`第 ${requestedPage} 页暂无网页文件，已${readerOnly ? "定位" : "显示"}上一可用页 ${page}`);
-      else if (!readerOnly && !document.editable) ui.notify("远程页面：只读");
+      if (page !== requestedPage) notify(`第 ${requestedPage} 页暂无网页文件，已${readerOnly ? "定位" : "显示"}上一可用页 ${page}`);
+      else if (!readerOnly && !document.editable) notify("远程页面：只读");
       if (readerOnly) announceReaderPage();
       return true;
     } catch (error) {
-      if (revision === state.navigationRevision) ui.notify(error.message, true);
+      if (revision === state.navigationRevision) notify(error.message, true);
       return false;
     }
   }
@@ -292,7 +335,7 @@
     try {
       await document.saveUntilClean();
       if (document === state.document) markDirty();
-      ui.notify("已保存");
+      notify("已保存");
       const pending = followPdf && document === state.document && !document.dirty
         ? state.pendingPdfNavigation : null;
       if (pending) {
@@ -303,7 +346,7 @@
       }
       return true;
     } catch (error) {
-      ui.notify(`保存失败：${error.message}`, true);
+      notify(`保存失败：${error.message}`, true);
       return false;
     }
   }
@@ -341,18 +384,19 @@
       return true;
     } catch (error) {
       popup.close();
-      ui.notify(`无法打开独立编辑器：${error.message}`, true);
+      notify(`无法打开独立编辑器：${error.message}`, true);
       return false;
     }
   }
 
   async function enterSplitView() {
-    if (!state.config?.editorAvailable) return ui.notify("当前阅读器配置没有可用的本地编辑目录", true);
+    if (combineRequest) return;
+    if (!state.config?.editorAvailable) return notify("当前阅读器配置没有可用的本地编辑目录", true);
     if (!state.syncSession) state.syncSession = newSession();
     const popup = pairedWindow && !pairedWindow.closed
       ? pairedWindow
       : openEditorWindow();
-    if (!popup) return ui.notify("浏览器阻止了编辑器窗口，请允许此站点打开弹出窗口", true);
+    if (!popup) return notify("浏览器阻止了编辑器窗口，请允许此站点打开弹出窗口", true);
     if (state.workspaceMode === "reader") return openPairedEditor(popup);
     if (state.document.dirty && !(await save({ followPdf: false }))) {
       popup.close();
@@ -372,10 +416,34 @@
     return true;
   }
 
-  function restoreCombinedView() {
-    syncChannel?.postMessage({ source: "reader", type: "reader-detached" });
+  async function restoreCombinedView() {
+    if (combineRequest || state.workspaceMode !== "reader") return;
+    // Splitting reloads the reader and loses its WindowProxy. Reacquire the
+    // named window; a blank window means the original editor is already gone.
+    if (!pairedWindow && state.syncSession) {
+      pairedWindow = openEditorWindow();
+      if (pairedWindow?.location.href === "about:blank") pairedWindow.close();
+    }
+    if (state.syncSession && !pairedWindow?.closed) {
+      notify("正在保存独立编辑器的全部文件并关闭窗口…");
+      let timer;
+      try {
+        await new Promise((resolve, reject) => {
+          combineRequest = { id: newSession(), resolve, reject };
+          timer = setTimeout(() => reject(new Error("独立编辑器未确认关闭，请检查该窗口后重试")), 60000);
+          syncChannel?.postMessage({ source: "reader", type: "reader-combine", requestId: combineRequest.id });
+        });
+      } catch (error) {
+        notify(`未合窗：${error.message}`, true);
+        return;
+      } finally {
+        clearTimeout(timer);
+        combineRequest = null;
+      }
+    }
     syncChannel?.close();
     syncChannel = null;
+    pairedWindow = null;
     state.syncSession = "";
     state.workspaceMode = "combined";
     ui.setWorkspaceMode("combined", state.config?.editorAvailable);
@@ -391,16 +459,16 @@
     try {
       const result = await current.refresh();
       if (current !== state.document) return;
-      if (result === "conflict") ui.notify("文件已在外部修改；本地未保存内容已保留，请保存副本后重新载入", true);
+      if (result === "conflict") notify("文件已在外部修改；本地未保存内容已保留，请保存副本后重新载入", true);
       else if (result === "updated") {
-        ui.setSource(current.content);
+        source.setValue(current.content);
         if (state.mode === "visual") renderVisual();
         markDirty();
         updateHistoryButtons();
-        ui.notify("已从本地文件刷新");
+        notify("已从本地文件刷新");
       } else if (result === "saved") markDirty();
     } catch (error) {
-      ui.notify(`本地文件刷新失败：${error.message}`, true);
+      notify(`本地文件刷新失败：${error.message}`, true);
     } finally { refreshing = false; }
   }
 
@@ -414,8 +482,8 @@
       const target = doc.getElementById(id) || doc.getElementsByName(id)[0];
       if (target) {
         target.scrollIntoView({ block: "center", inline: "nearest" });
-        ui.notify(`已跳转到 ${href}`);
-      } else ui.notify(`未找到锚点：${href}`);
+        notify(`已跳转到 ${href}`);
+      } else notify(`未找到锚点：${href}`);
       return;
     }
     window.open(new URL(href, doc.baseURI).href, "_blank", "noopener");
@@ -514,32 +582,30 @@
   }
 
   function insertSourceTag(tag) {
-    const { start, end } = ui.getSourceSelection();
-    const source = ui.getSource();
-    const operation = buildTagEdit(source, start, end, tag);
+    const { start, end } = source.selection();
+    const text = source.getValue();
+    const operation = tagEditor.applyTag(tag);
     const removed = operation.text.length < operation.end - operation.start;
-    const wrapped = tag.open + source.slice(start, end) + tag.close;
+    const wrapped = tag.open + text.slice(start, end) + tag.close;
     const replaced = !removed && operation.text !== wrapped;
-    applySourceEdit(operation.text, operation.start, operation.end,
-      operation.start + operation.selectStart, operation.start + operation.selectEnd);
     return removed ? "已移除" : replaced ? "已替换" : "已插入";
   }
 
   function applySourceEdit(text, start, end, selectStart, selectEnd = selectStart) {
-    ui.replaceSourceRange(text, start, end, "select");
-    ui.setSourceSelection(selectStart, selectEnd);
-    ui.focusSource();
+    source.replaceRange(text, start, end, start, start, "reader.edit");
+    source.setSelection(selectStart, selectEnd);
+    source?.focus();
   }
 
   function editTag(tag) {
     const action = state.mode === "visual" ? insertVisual(tag) : insertSourceTag(tag);
-    if (action) ui.notify(`${action} ${tag.label}`);
+    if (action) notify(`${action} ${tag.label}`);
   }
 
-  function toggleFind() {
+  function toggleFind(replace = true, toggleIfVisible = true) {
     if (state.mode !== "source") setMode("source");
-    ui.focusSource();
-    ui.toggleFind(true);
+    source?.focus();
+    return source?.toggleFind({ replace, toggleIfVisible, readClipboard: true });
   }
 
   function adjacent(direction) {
@@ -555,7 +621,7 @@
     const commandAction = command && state.workspaceMode !== "reader" && (
       key === "s" ? save
         : (key === "f" || key === "h") && state.mode !== "source" ? toggleFind
-          : !formField && !ui.hasSourceTextFocus() && (key === "z" || key === "y")
+          : !formField && !source?.hasTextFocus() && (key === "z" || key === "y")
             ? (key === "y" || event.shiftKey ? redo : undo) : null);
     if (commandAction) {
       event.preventDefault();
@@ -580,17 +646,18 @@
 
   async function init() {
     ui.init({
+      theme: dark => { if (monaco) core.setMonacoTheme(monaco, dark); },
+      editorScale: value => source?.setScale(value),
       mode: () => setMode(), save, undo, redo, volume: changeVolume,
       splitView: enterSplitView, combinedView: restoreCombinedView,
       page: (page) => navigate(state.volume, page), adjacent,
       tag: (index) => editTag(tags[index]),
       attr: (index) => {
-        if (state.mode === "visual") return ui.notify("属性按钮请在源代码模式使用");
-        const attr = attrs[index], { start, end } = ui.getSourceSelection();
-        const selected = ui.getSource().slice(start, end);
+        if (state.mode === "visual") return notify("属性按钮请在源代码模式使用");
+        const attr = attrs[index], { start, end } = source.selection();
+        const selected = source.getValue().slice(start, end);
         applySourceEdit(attr.text + selected, start, end, start + (attr.cursorOffset ?? attr.text.length + selected.length));
       },
-      sourceInput: () => updateWorkingCopy(ui.getSource()),
       visualInput: () => updateWorkingCopy(),
       visualDoubleClick: trimVisualWordSelection,
       visualClick: openVisualLink,
@@ -598,6 +665,7 @@
         updateWorkingCopy();
         const volume = currentVolume();
         if (!volume) return;
+        currentPdfPage = { volume: volume.id, pageNumber, pageLabel };
         const prefix = String(pageLabel ?? "").match(/^(\d+)/)?.[1];
         if (!prefix) return;
         const page = Number(prefix);
@@ -607,14 +675,13 @@
             page,
             pdfOrigin: { pageNumber, pageLabel }
           };
-          ui.notify("网页有未保存修改；保存后将切换到当前 PDF 页");
+          notify("网页有未保存修改；保存后将切换到当前 PDF 页");
           return;
         }
         state.pendingPdfNavigation = null;
         navigate(volume.id, page, false, { pageNumber, pageLabel });
       },
       find: toggleFind,
-      historyChanged: updateHistoryButtons,
       keyDown: handleKeyDown,
       beforeUnload: (event) => {
         if (state.workspaceMode === "reader" || !state.document.dirty) return;
@@ -630,21 +697,63 @@
       if (state.workspaceMode === "reader" && !state.syncSession) state.syncSession = newSession();
       ui.setWorkspaceMode(state.workspaceMode, state.config.editorAvailable);
       if (state.workspaceMode === "reader") openSyncChannel();
-      const firstVolume = state.config.volumes.find((item) => item.id === initialParams.get("volume")) || state.config.volumes[0];
+      const rememberedVolume = localStorage.getItem(LAST_VOLUME_KEY);
+      const rememberedPage = Number(localStorage.getItem(LAST_PAGE_KEY));
+      const initialVolume = initialParams.get("volume") || rememberedVolume;
+      const firstVolume = state.config.volumes.find((item) => item.id === initialVolume) || state.config.volumes[0];
       if (!firstVolume) throw new Error("配置中没有找到包含 HTML 页面的卷册");
       ui.renderVolumes(state.config.volumes, firstVolume.id);
-      await navigate(firstVolume.id, Number(initialParams.get("page")) || firstVolume.pages[0], true);
+      const initialPage = Number(initialParams.get("page")) ||
+        (firstVolume.id === rememberedVolume && Number.isFinite(rememberedPage) && rememberedPage > 0 ? rememberedPage : firstVolume.pages[0]);
+      await navigate(firstVolume.id, initialPage, true);
     } catch (error) {
       ui.renderNavigation({
         chapterTitle: "载入失败", chapterPage: null, pageContext: "", pageTotal: "", pageIndex: "",
         page: "", volume: "", hasPrevious: false, hasNext: false, editable: false
       });
-      ui.notify(error.message, true);
+      notify(error.message, true);
     }
   }
 
+  async function refreshDirectory() {
+    const revision = ++directoryRefreshRevision;
+    const config = await api("/api/reader/config");
+    if (revision !== directoryRefreshRevision || !state.config) return;
+    state.config = config;
+    editorPathCache.clear();
+    ui.renderVolumes(config.volumes, state.volume);
+    renderNavigation();
+    const origin = currentPdfPage;
+    if (!origin || origin.volume !== state.volume) return;
+    const prefix = String(origin.pageLabel ?? "").match(/^(\d+)/)?.[1];
+    if (!prefix) return;
+    const requested = Number(prefix);
+    const page = currentVolume()?.pages.filter(page => page <= requested).at(-1);
+    if (page === state.page) return;
+    updateWorkingCopy();
+    if (state.document.dirty) {
+      state.pendingPdfNavigation = { volume: state.volume, page: requested, pdfOrigin: origin };
+      notify("目录已变化；网页有未保存修改，保存后将匹配当前 PDF 页");
+      return;
+    }
+    if (page == null) {
+      notify("当前 PDF 页及之前没有可用的网页文件", true);
+      return;
+    }
+    await navigate(state.volume, requested, false, origin);
+  }
+
+  const directoryEvents = new EventSource("/api/events");
+  directoryEvents.onmessage = event => {
+    const change = JSON.parse(event.data);
+    if (change.event === "change" || change.event === "rename") refreshLocalFile();
+    if (change.event !== "rename" && change.event !== "ready") return;
+    clearTimeout(directoryRefreshTimer);
+    directoryRefreshTimer = setTimeout(() => refreshDirectory().catch(error => notify(error.message, true)), 120);
+  };
+  window.addEventListener("pagehide", () => directoryEvents.close());
+
   window.addEventListener("focus", refreshLocalFile);
   document.addEventListener("visibilitychange", refreshLocalFile);
-  setInterval(refreshLocalFile, 2000);
   init();
 })();
