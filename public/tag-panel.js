@@ -11,7 +11,7 @@
     { id: "f", label: "FN", shortcut: "f", open: "<sup><a href=\"\" id=\"\">", close: "</a></sup>", title: "Alt+F / f" },
     { id: "r", label: "R", shortcut: "r", open: "<p align=\"right\">", close: "</p>", title: "Alt+R / r" },
     { id: "c", label: "C", shortcut: "c", open: "<p align=\"center\">", close: "</p>", title: "Alt+C / c" },
-    { id: "ltgt", label: "&lt;&gt;", shortcut: "&lt;&gt;", open: "&lt;", close: "&gt;", title: "Insert angle bracket" },
+    { id: "ltgt", label: "&lt;&gt;", open: "&lt;", close: "&gt;", title: "Insert angle bracket" },
     ...Array.from({ length: 6 }, (_, index) => {
       const shortcut = String(index + 1), id = `h${shortcut}`;
       return { id, label: id.toUpperCase(), shortcut, open: `<${id}>`, close: `</${id}>`, title: `Alt+${shortcut} / ${shortcut}` };
@@ -22,19 +22,31 @@
     { id: "aside", label: "ASIDE", shortcut: "aside", open: "<aside>", close: "</aside>", title: "Aside" },
     { id: "sup", label: "SUP", shortcut: "sup", open: "<sup>", close: "</sup>", title: "Insert Superscript" },
     { id: "sub", label: "SUB", shortcut: "sub", open: "<sub>", close: "</sub>", title: "Insert Subscript" },
-    { id: "u", label: "U", open: "<u>", close: "</u>", title: "Insert Underline" }
+    { id: "u", label: "U", open: "<u>", shortcut: "u", close: "</u>", title: "Insert Underline" }
   ];
   const attrs = [
     { id: "idAttr", label: "ID=", text: " id=\"\"", cursorOffset: 5, title: "Insert id attribute" },
     { id: "classAttr", label: "CLASS=", text: " class=\"\"", cursorOffset: 8, title: "Insert class attribute" },
     { id: "styleAttr", label: "STYLE=", text: " style=\"\"", cursorOffset: 8, title: "Insert style attribute" },
-    { id: "hrs", label: "HRS", text: "<hr style=\"width: 20%;\">", cursorOffset: 22, title: "Insert short hardline" },
-    { id: "noIndentAttr", label: "NO INDENT", text: " style=\"text-indent: 0;\"", cursorOffset: 23, title: "Insert no-indent style attribute" },
+    { id: "hrs", label: "HRS", shortcut: 'h', text: "<hr style=\"width: 20%;\">", cursorOffset: 22, title: "Insert short hardline" },
+    { id: "noIndentAttr", label: "NO INDENT", shortcut: '0', text: " style=\"text-indent: 0;\"", cursorOffset: 23, title: "Insert no-indent style attribute" },
     { id: "HR", label: "HR", text: "<hr>", cursorOffset: 3, title: "Insert hardline" },
-    { id: "BR", label: "BR", text: "<br>", cursorOffset: 3, title: "Insert change line" },
+    { id: "BR", label: "BR", shortcut: 'enter', text: "<br>", cursorOffset: 3, title: "Insert change line" },
     { id: "SUPdSUB", label: "SUP/SUB", text: "<sup></sup>/<sub></sub>", cursorOffset: 5, title: "Insert division" }
   ];
-  const tagMap = new Map(tags.filter(tag => tag.shortcut).map(tag => [tag.shortcut.toLowerCase(), tag]));
+  const tagMap = new Map([
+    ...tags
+      .filter(tag => tag.shortcut)
+      .map(tag => [tag.shortcut.toLowerCase(), tag]),
+    ...attrs
+      .filter(attr => attr.shortcut)
+      .map(attr => [attr.shortcut.toLowerCase(), attr])
+  ]);
+  function tagForKeyEvent(event) {
+    // Leave Alt+numpad available for Windows character-code input.
+    if (event.altKey && (event.location === 3 || event.code?.startsWith("Numpad"))) return;
+    return tagMap.get(event.key.toLowerCase());
+  }
   const blockTagNames = new Set(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6"]);
   const blockTagIds = new Set(["p", "r", "c", "h1", "h2", "h3", "h4", "h5", "h6", "div"]);
   const inlineTagIds = new Set(["i", "b", "u", "em", "span"])
@@ -131,7 +143,7 @@
         const inOpening = start === end && start < wrapper.openEnd;
         if (inlineInsert) {
           open = text.slice(start, wrapper.openEnd) + tag.open;
-          close = tag.open + text.slice(wrapper.closeStart, byStart.get(start).end);
+          close = tag.close + text.slice(wrapper.closeStart, byStart.get(start).end);
         }
         return { start: wrapper.start, end: wrapper.end, text: open + inner + close,
           selectStart: open.length + (exact || inOpening ? 0 : start - wrapper.openEnd),
@@ -395,7 +407,7 @@
     const bindShortcuts = (targetDocument, fixedTarget = null) => {
       const shortcut = event => {
         if (!event.isComposing && event.ctrlKey && event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyM") {
-          event.preventDefault(); event.stopPropagation(); setVisible(true); return;
+          event.preventDefault(); event.stopPropagation(); setVisible(panel.hidden); return;
         }
         const wheel = event.type === "wheel";
         if (!(event.ctrlKey || event.metaKey) || (!wheel && event.altKey)) return;
@@ -423,8 +435,8 @@
     window.addEventListener("mew-tag-panel-reset", () => { editorScale = 1; Object.assign(state, { dock: "editor-top", x: 60, y: 96, w: 520, scale: 1 }); updateScale("editor"); apply(); save(); });
     const toggle = document.getElementById("tagPanelToggle");
     if (toggle) {
-      toggle.title = "打开标签编辑框（Ctrl+Alt+T）";
-      toggle.setAttribute("aria-keyshortcuts", "Control+Alt+T");
+      toggle.title = panel.hidden ? "打开标签编辑框（Ctrl+Alt+M）" : "隐藏标签编辑框（Ctrl+Alt+M）";
+      toggle.setAttribute("aria-keyshortcuts", "Control+Alt+M");
     }
     const setVisible = visible => {
       panel.hidden = !visible;
@@ -439,5 +451,5 @@
     toggle?.addEventListener("click", () => setVisible(panel.hidden));
     return { panel, setDock, setScale, setVisible, state };
   }
-  window.MewTagPanel = { mount, tags, attrs, tagMap, blockTagNames, TagEditor };
+  window.MewTagPanel = { mount, tags, attrs, tagMap, tagForKeyEvent, blockTagNames, TagEditor };
 })();

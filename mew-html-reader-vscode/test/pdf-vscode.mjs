@@ -13,9 +13,17 @@ const dev = path.join(fixture, "extension");
 await mkdir(dev);
 for (const file of ["package.json", "reader-core.cjs", "reader-pdf.css", "pdf-source.mjs", "pdf-worker.mjs"]) await copyFile(path.join(root, file), path.join(dev, file));
 for (const dir of ["vendor", "media"]) await symlink(path.join(root, dir), path.join(dev, dir), "junction");
+const testManifest = JSON.parse(await readFile(path.join(dev, 'package.json'), 'utf8'));
+testManifest.contributes.keybindings.push({ key: 'f8', command: 'mewTest.reload' }, { key: 'f9', command: 'mewTest.restartHost' });
+await writeFile(path.join(dev, 'package.json'), JSON.stringify(testManifest));
 let extension = await readFile(path.join(root, "extension.cjs"), "utf8");
 extension = extension.replace('function activate(context) {', `function activate(context) {
-  setTimeout(() => vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(${JSON.stringify(path.resolve(process.argv[2]))}), 'mewReader.pdf'), 800);`);
+  context.subscriptions.push(vscode.commands.registerCommand('mewTest.reload', () => vscode.commands.executeCommand('workbench.action.reloadWindow')));
+  context.subscriptions.push(vscode.commands.registerCommand('mewTest.restartHost', () => vscode.commands.executeCommand('workbench.action.restartExtensionHost')));
+  if (!context.globalState.get('test.opened')) {
+    context.globalState.update('test.opened', true);
+    setTimeout(() => vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(${JSON.stringify(path.resolve(process.argv[2]))}), 'mewReader.pdf').then(() => ${process.env.PDF_AUX ? "vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow')" : 'undefined'}), 800);
+  }`);
 extension = extension.replace('pageLabel: "1"', 'pageLabel: "300"');
 await writeFile(path.join(dev, "extension.cjs"), extension);
 let script = await readFile(path.join(root, process.env.PDF_BASELINE ? "test/artifacts/reader-pdf-before.js" : "reader-pdf.js"), "utf8");
@@ -23,8 +31,8 @@ script = script.replace("const eventBus = new pdfview.EventBus();", `const event
   window.__renders = [];
   eventBus.on('pagerendered', e => window.__renders.push({ page: e.pageNumber, ms: performance.now(), error: e.error?.message }));`);
 script += "\nwindow.__reader = { get viewer() { return viewer; }, get worker() { return config.pdfWorker?.port; }, loadPdf, get pending() { return pending; } };";
-script = script.replace('const vscode = acquireVsCodeApi();', 'window.__timings = { script: performance.now() }; const vscode = acquireVsCodeApi();')
-  .replace('async function loadPdf(message) {', 'async function loadPdf(message) { window.__timings.load = performance.now();')
+script = script.replace('const vscode = acquireVsCodeApi();', 'window.__generation = Math.random(); window.__timings = { script: performance.now() }; const vscode = acquireVsCodeApi();')
+  .replace('async function loadPdf(message) {', 'async function loadPdf(message) { window.__handshakes = (window.__handshakes || 0) + 1; window.__timings.load = performance.now();')
   .replace('loadingTask = config.pdfjs.getDocument({', 'window.__timings.source = performance.now(); loadingTask = config.pdfjs.getDocument({')
   .replace('const document = await loadingTask.promise;', 'const document = await loadingTask.promise; window.__timings.document = performance.now();')
   .replace('vscode.postMessage({ type: "ready", document: stored.document });', 'window.__timings.ready = performance.now(); vscode.postMessage({ type: "ready", document: stored.document });');
@@ -41,15 +49,15 @@ const app = await _electron.launch({ executablePath: process.env.VSCODE_EXE || "
     `--user-data-dir=${path.join(fixture, 'user')}`, `--extensions-dir=${path.join(fixture, 'extensions')}`, `--extensionDevelopmentPath=${dev}`],
   timeout: 60000 });
 try {
-  const win = await app.firstWindow();
+  let win = await app.firstWindow();
   win.on('console', message => { if (/fake worker|ICCBased|wasm|Worker|fetch/i.test(message.text())) console.log(message.type(), message.text()); });
   let frame;
   const deadline = Date.now() + 60000;
   while (Date.now() < deadline) {
     frame = win.frames().find(f => f.url().includes("vscode-webview") && !f.url().includes("fake.html"));
     // The HTML itself is in an inner iframe, under the webview preload frame.
-    for (const candidate of win.frames()) {
-      if (await candidate.evaluate(() => !!window.__reader).catch(() => false)) { frame = candidate; break; }
+    for (const page of app.windows()) for (const candidate of page.frames()) {
+      if (await candidate.evaluate(() => !!window.__reader).catch(() => false)) { win = page; frame = candidate; break; }
     }
     if (frame && await frame.evaluate(() => !!window.__reader).catch(() => false)) break;
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -76,6 +84,25 @@ try {
     assert.ok(result.loadedPages < 20);
   }
   console.log(JSON.stringify({ file: process.argv[2], mode: process.env.PDF_BASELINE ? "before" : "after", ...result, fixture }));
+  if (await frame.locator('#copyImage').count()) {
+    await frame.locator('#copyImage').click();
+    await frame.waitForFunction(() => !document.querySelector('#copyImage').disabled);
+    assert.equal(await frame.locator('#copyImage').textContent(), '已复制');
+    const size = await app.evaluate(({ clipboard }) => clipboard.readImage().getSize());
+    assert.ok(size.width > 0 && size.height > 0);
+    console.log(JSON.stringify({ clipboardImage: size }));
+    const original = await app.evaluate(({ clipboard }) => clipboard.readImage().toPNG().toString('base64'));
+    await frame.locator('#zoom').fill('50%'); await frame.locator('#zoom').press('Enter');
+    await frame.locator('#settings').click();
+    await frame.locator('#invert').check();
+    await frame.locator('#settingsDialog button[aria-label="关闭"]').click();
+    await frame.locator('#copyImage').click();
+    await frame.waitForFunction(() => !document.querySelector('#copyImage').disabled);
+    assert.equal(await frame.locator('#copyImage').textContent(), '已复制');
+    assert.equal(await app.evaluate(({ clipboard }) => clipboard.readImage().toPNG().toString('base64')), original,
+      'embedded image pixels are unchanged by zoom and display inversion');
+    await frame.locator('#zoom').fill('页宽'); await frame.locator('#zoom').press('Enter');
+  }
   await win.screenshot({ path: path.join(root, "test", "artifacts", `vscode-${path.basename(process.argv[2])}-${process.env.PDF_BASELINE ? 'before' : 'after'}.png`) });
   const start = Date.now();
   await frame.locator("#next").click();
@@ -90,11 +117,35 @@ try {
   assert.equal(await frame.evaluate(() => window.__reader.viewer.pdfDocument === window.__oldDocument), true);
   await frame.locator("#zoom").fill("100%"); await frame.locator("#zoom").press("Enter");
   await frame.waitForFunction(() => window.__reader.viewer.currentScale === 1);
+  assert.equal(await frame.locator("#zoom").inputValue(), "100%", "PDF.js scale 1 is displayed as 100%");
   await frame.locator("#direction").click();
   await frame.waitForFunction(() => window.__reader.viewer.scrollMode === 1);
   await frame.locator('#settings').click();
   await frame.locator('#invert').check();
   assert.equal(await frame.locator('#invert').isChecked(), true);
   await frame.locator('#settingsDialog button[aria-label="关闭"]').click();
+  await frame.locator('#next').click();
+  await frame.waitForFunction(() => document.querySelector('#pageNumber').value === '301');
+  const restored = frame;
+  const previousHost = await restored.evaluate(() => ({ count: window.__handshakes, generation: window.__generation }));
+  await win.keyboard.press('F9');
+  const hostStart = Date.now();
+  let hostRestored;
+  while (Date.now() - hostStart < 30000) {
+    for (const candidate of win.frames()) {
+      const ready = await candidate.evaluate(() => ({ count: window.__handshakes || 0, generation: window.__generation,
+        rendered: !!window.__reader?.viewer?.pdfDocument && window.__renders.some(e => e.page === window.__reader.viewer.currentPageNumber) })).catch(() => null);
+      if (ready?.rendered && (candidate !== restored || ready.generation !== previousHost.generation || ready.count > previousHost.count)) { hostRestored = candidate; break; }
+    }
+    if (hostRestored) break;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  if (!hostRestored) for (const candidate of win.frames()) console.log(await candidate.evaluate(() => ({ url: location.href, status: document.querySelector('#status')?.textContent, handshakes: window.__handshakes, timings: window.__timings, generation: window.__generation, previousHost: null })).catch(() => null));
+  assert.ok(hostRestored, 'PDF reconnects after Restart Extension Host without reopening');
+  assert.equal(await hostRestored.locator('#invert').isChecked(), true);
+  assert.equal(await hostRestored.locator('#pageNumber').inputValue(), '301');
+  assert.equal(await hostRestored.locator('#zoom').inputValue(), '100%');
+  assert.equal(await hostRestored.evaluate(() => window.__reader.viewer.scrollMode), 1);
+  console.log(JSON.stringify({ auxiliary: !!process.env.PDF_AUX, restartExtensionHostMs: Date.now() - hostStart }));
   await writeFile(path.join(root, 'test', 'artifacts', `vscode-${path.basename(process.argv[2])}-${process.env.PDF_BASELINE ? 'before' : 'after'}.json`), JSON.stringify(result, null, 2));
 } finally { await app.close(); }

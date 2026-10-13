@@ -2,25 +2,18 @@ import http from "node:http";
 import { createReadStream, existsSync, watch } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import readerCore from "./mew-html-reader-vscode/reader-core.cjs";
+
+const { CONFIG_NAMES, normalizedVolumes, pageFromName, isInside } = readerCore;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC = path.join(HERE, "public");
+const PUBLIC = path.join(HERE, process.argv.includes("--legacy") ? "public_legacy" : "public");
 const MONACO = existsSync(path.join(HERE, "monaco", "min", "vs", "loader.js"))
-  ? path.join(HERE, "monaco") : path.join(HERE, "node_modules", "monaco-editor");
+  ? path.join(HERE, "monaco")
+  : path.join(HERE, "node_modules", "monaco-editor");
+const PDFJS = path.join(HERE, "node_modules", "pdfjs-dist");
 const SETTINGS_FILE = path.join(HERE, "reader.settings.json");
-const CONFIG_FILE = path.resolve(valueOf(["-c", "--config"]) || process.env.CONFIG || path.join(HERE, "reader.config.mjs"));
-const PORT = Number(valueOf(["-p", "--port"]) || process.env.PORT || 49100);
-const MIME = {
-  ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-  ".pdf": "application/pdf", ".wasm": "application/wasm",
-  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-  ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"
-};
-let library;
-const changeClients = new Set();
-const changeTimers = new Map();
 
 function valueOf(names) {
   const args = process.argv.slice(2);
@@ -32,6 +25,44 @@ function valueOf(names) {
   }
   return "";
 }
+
+function findDefaultConfig() {
+  const explicit = valueOf(["-c", "--config"]) || process.env.CONFIG;
+  if (explicit) return path.resolve(explicit);
+
+  let directory = process.cwd();
+  while (true) {
+    for (const name of CONFIG_NAMES) {
+      const candidate = path.join(directory, name);
+      if (existsSync(candidate)) return candidate;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+
+  return [
+    path.join(HERE, ".mew-reader.json"),
+    path.join(HERE, "../MEW_BRIEF/.mew-reader.json"),
+    path.join(HERE, "../MECW_reconv/.mew-reader.json")
+  ].find(existsSync) || path.join(HERE, ".mew-reader.json");
+}
+
+const CONFIG_FILE = findDefaultConfig();
+const PORT = Number(valueOf(["-p", "--port"]) || process.env.PORT || 49100);
+
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".pdf": "application/pdf", ".wasm": "application/wasm",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+  ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"
+};
+
+let library;
+const changeClients = new Set();
+const changeTimers = new Map();
 
 function reply(res, status, value, type = "application/json; charset=utf-8") {
   res.writeHead(status, { "content-type": type, "cache-control": "no-store" });
@@ -45,11 +76,14 @@ async function jsonBody(req) {
 }
 
 function readerSettings(value = {}) {
-  const color = (input, fallback) => /^#[0-9a-f]{6}$/i.test(String(input)) ? String(input).toLowerCase() : fallback;
+  const color = (input, fallback) =>
+    /^#[0-9a-f]{6}$/i.test(String(input)) ? String(input).toLowerCase() : fallback;
   return {
     brightness: Math.max(50, Math.min(160, Number(value.brightness) || 100)),
-    paper: color(value.paper, "#ffffff"), ink: color(value.ink, "#000000"),
-    invert: Boolean(value.invert), horizontal: Boolean(value.horizontal),
+    paper: color(value.paper, "#ffffff"),
+    ink: color(value.ink, "#000000"),
+    invert: Boolean(value.invert),
+    horizontal: Boolean(value.horizontal),
     scale: typeof value.scale === "string" && value.scale.length <= 32 ? value.scale : "page-width"
   };
 }
@@ -66,12 +100,6 @@ function resolveResource(raw, base) {
   return { kind: "file", path: path.resolve(base, value) };
 }
 
-function formatPattern(pattern, page, volume) {
-  return String(pattern)
-    .replace(/\{volume(?::(\d+))?\}/g, (_, width) => String(volume).padStart(Number(width || 0), "0"))
-    .replace(/\{page(?::(\d+))?\}/g, (_, width) => String(page).padStart(Number(width || 0), "0"));
-}
-
 async function exists(target) {
   try { await fs.access(target); return true; } catch { return false; }
 }
@@ -79,96 +107,61 @@ async function exists(target) {
 async function replyFile(req, res, location, type) {
   const stat = await fs.stat(location);
   const range = req.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
-  if (!range) {
-    res.writeHead(200, {
-      "content-type": type,
-      "content-length": stat.size,
-      "accept-ranges": "bytes",
-      "cache-control": "no-store"
-    });
-    if (req.method === "HEAD") return res.end();
-    return createReadStream(location).pipe(res);
-  }
-  let start = range[1] ? Number(range[1]) : 0;
-  let end = range[2] ? Number(range[2]) : stat.size - 1;
-  if (!range[1] && range[2]) start = Math.max(0, stat.size - Number(range[2]));
+  let start = range?.[1] ? Number(range[1]) : 0;
+  let end = range?.[2] ? Number(range[2]) : stat.size - 1;
+  if (range && !range[1] && range[2]) start = Math.max(0, stat.size - Number(range[2]));
   end = Math.min(end, stat.size - 1);
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start > end) {
+  if (range && (start < 0 || start > end)) {
     res.writeHead(416, { "content-range": `bytes */${stat.size}` });
     return res.end();
   }
-  res.writeHead(206, {
-    "content-type": type,
-    "content-length": end - start + 1,
-    "content-range": `bytes ${start}-${end}/${stat.size}`,
-    "accept-ranges": "bytes",
-    "cache-control": "no-store"
+  res.writeHead(range ? 206 : 200, {
+    "content-type": type, "content-length": range ? end - start + 1 : stat.size,
+    ...(range ? { "content-range": `bytes ${start}-${end}/${stat.size}` } : {}),
+    "accept-ranges": "bytes", "cache-control": "no-store"
   });
-  if (req.method === "HEAD") return res.end();
-  return createReadStream(location, { start, end }).pipe(res);
+  return req.method === "HEAD" ? res.end() : createReadStream(location, range ? { start, end } : undefined).pipe(res);
 }
 
-function pageFromName(name, volume) {
-  const escaped = String(volume).padStart(2, "0");
-  const regular = name.match(new RegExp(`^ME${escaped}-(\\d+)\\.html?$`, "i"));
-  if (regular) return Number(regular[1]);
-  if (Number(volume) >= 261 && Number(volume) <= 263) {
-    const split = name.match(new RegExp(`^ME26-${Number(volume) - 260}(\\d{3})\\.html?$`, "i"));
-    if (split) return Number(split[1]);
+async function scanPageFiles(pageDir, pattern, explicitPages = []) {
+  const pageFiles = new Map();
+  if (pageDir.kind === "file" && await exists(pageDir.path)) {
+    const entries = await fs.readdir(pageDir.path, { withFileTypes: true });
+    for (const entry of entries) {
+      const page = pageFromName(entry.name, pattern);
+      if (!entry.isDirectory() && page != null && (!explicitPages.length || explicitPages.includes(page))) {
+        pageFiles.set(page, entry.name);
+      }
+    }
+  } else if (pageDir.kind === "url") {
+    for (const page of explicitPages) pageFiles.set(page, null);
   }
-  return null;
+  return pageFiles;
 }
 
 async function loadLibrary() {
-  const imported = await import(`${pathToFileURL(CONFIG_FILE).href}?t=${Date.now()}`);
-  const config = imported.default || imported;
+  const config = JSON.parse(await fs.readFile(CONFIG_FILE, "utf8"));
   const base = path.dirname(CONFIG_FILE);
-  let htmlRoot = resolveResource(config.htmlRoot, base);
-  const pdfRoot = resolveResource(config.pdfRoot || "../马恩全集德文", base);
-  let editorRoot = config.editorRoot ? resolveResource(config.editorRoot, base) : htmlRoot;
-  if (htmlRoot.kind === "file" && !(await exists(htmlRoot.path)) && config.htmlRoot === "./MEWB") {
-    htmlRoot = resolveResource("../MEWB", base);
-    if (!config.editorRoot) editorRoot = htmlRoot;
-  }
-  const volumeIds = new Set([
-    ...Object.keys(config.inhalt || {}),
-    ...(config.volumes || []).map((volume) => String(volume.id))
-  ]);
   const volumes = [];
 
-  for (const id of [...volumeIds].sort((a, b) => Number(a) - Number(b))) {
-    const override = (config.volumes || []).find((volume) => String(volume.id) === id) || {};
-    const pageDir = resolveResource(override.pages?.directory || `${htmlRoot.path}/${id}`, base);
-    let pages = (override.pages?.list || []).map(Number);
-    if (!pages.length && pageDir.kind === "file" && await exists(pageDir.path)) {
-      const names = await fs.readdir(pageDir.path);
-      pages = names.map((name) => pageFromName(name, id)).filter(Number.isFinite);
-    }
-    pages = [...new Set(pages)].sort((a, b) => a - b);
+  for (const item of normalizedVolumes(config)) {
+    const pageDir = resolveResource(item.directory, base);
+    const pageFiles = await scanPageFiles(pageDir, item.pattern, item.explicitPages);
+    const pages = [...pageFiles.keys()].sort((a, b) => a - b);
     if (!pages.length) continue;
-
-    const toc = (override.toc || config.inhalt?.[id] || []).map((entry) => Array.isArray(entry)
-      ? {
-          title: String(entry[0]).replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "").trim(),
-          level: Number(String(entry[0]).match(/^\s*<h([1-6])/i)?.[1] || 1),
-          page: Number(entry[1])
-        }
-      : { title: entry.title, level: Number(entry.level || 1), page: Number(entry.page) }
-    ).filter((entry) => entry.title && Number.isFinite(entry.page));
-    const pdfName = override.pdf?.file || formatPattern(config.pdfPattern || "mew_band{volume:02}.pdf", 0, id);
-    const pdf = override.pdf?.url
-      ? resolveResource(override.pdf.url, base)
-      : (pdfRoot.kind === "url"
-        ? { kind: "url", path: `${pdfRoot.path}/${pdfName}` }
-        : { kind: "file", path: path.resolve(pdfRoot.path, pdfName) });
     volumes.push({
-      id, title: override.title || `马克思恩格斯全集 第${id}卷`,
-      shortTitle: override.shortTitle || `第${id}卷`, pages, toc, pageDir,
-      pagePattern: override.pages?.pattern || "",
-      pdf
+      ...item,
+      pages,
+      pageDir,
+      pageFiles,
+      pdf: resolveResource(item.pdf, base)
     });
   }
-  library = { config, volumes, editorRoot: editorRoot.kind === "file" && await exists(editorRoot.path) ? editorRoot.path : null };
+
+  const editorSrc = config.editorRoot ? resolveResource(config.editorRoot, base) : { kind: "file", path: base };
+  const editorRoot = editorSrc.kind === "file" && await exists(editorSrc.path) ? path.resolve(editorSrc.path) : null;
+
+  library = { config, volumes, editorRoot };
 }
 
 function getVolume(id) {
@@ -184,22 +177,22 @@ function getPage(volume, raw) {
 }
 
 function pageName(volume, page) {
-  if (volume.pagePattern) return formatPattern(volume.pagePattern, page, volume.id);
-  if (Number(volume.id) >= 261 && Number(volume.id) <= 263) {
-    return `ME26-${Number(volume.id) - 260}${String(page).padStart(3, "0")}.html`;
-  }
-  return `ME${String(volume.id).padStart(2, "0")}-${String(page).padStart(3, "0")}.html`;
+  const name = volume.pageFiles.get(page);
+  if (!name) throw new Error(`第 ${page} 页没有对应文件`);
+  return name;
 }
 
 function pageLocation(volume, page) {
   const name = pageName(volume, page);
-  return volume.pageDir.kind === "url" ? `${volume.pageDir.path}/${name}` : path.join(volume.pageDir.path, name);
+  return volume.pageDir.kind === "url"
+    ? `${volume.pageDir.path}/${name}`
+    : path.join(volume.pageDir.path, name);
 }
 
 function editorPathFor(volume, page) {
   if (!library.editorRoot || volume.pageDir.kind !== "file") return null;
   const location = path.resolve(pageLocation(volume, page));
-  if (location !== library.editorRoot && !location.startsWith(library.editorRoot + path.sep)) return null;
+  if (!isInside(location, library.editorRoot)) return null;
   return path.relative(library.editorRoot, location).replaceAll(path.sep, "/");
 }
 
@@ -207,9 +200,7 @@ function insideEditorRoot(rel = "") {
   if (!library.editorRoot) throw new Error("此阅读器配置没有可用的本地编辑目录");
   const clean = decodeURIComponent(rel).replace(/^[/\\]+/, "");
   const full = path.resolve(library.editorRoot, clean);
-  if (full !== library.editorRoot && !full.startsWith(library.editorRoot + path.sep)) {
-    throw new Error(`Path outside root: ${library.editorRoot}`);
-  }
+  if (!isInside(full, library.editorRoot)) throw new Error(`Path outside root: ${library.editorRoot}`);
   return { full, rel: path.relative(library.editorRoot, full).replaceAll(path.sep, "/") };
 }
 
@@ -218,8 +209,13 @@ async function listEditorDir(rel) {
   const entries = await fs.readdir(full, { withFileTypes: true });
   return entries
     .filter((entry) => !entry.name.startsWith("."))
-    .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name, undefined, { numeric: true }))
-    .map((entry) => ({ name: entry.name, path: path.posix.join(rel || "", entry.name), type: entry.isDirectory() ? "dir" : "file" }));
+    .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory())
+      || a.name.localeCompare(b.name, undefined, { numeric: true }))
+    .map((entry) => ({
+      name: entry.name,
+      path: path.posix.join(rel || "", entry.name),
+      type: entry.isDirectory() ? "dir" : "file"
+    }));
 }
 
 function publishChange(event, filename) {
@@ -260,40 +256,77 @@ function safeCssValue(value) {
   return /^[#\w\s(),.%+-]+$/.test(value) ? value : "#fff";
 }
 
-async function editorApi(req, res, url) {
-  try {
-    if (url.pathname === "/api/tree") {
-      return reply(res, 200, { root: library.editorRoot, entries: await listEditorDir(url.searchParams.get("path") || "") });
-    }
-    if (url.pathname === "/api/events" && req.method === "GET") return openChangeStream(req, res);
-    if (url.pathname === "/api/file") {
-      const { full, rel } = insideEditorRoot(url.searchParams.get("path") || "");
-      const stat = await fs.stat(full);
-      if (!stat.isFile()) return reply(res, 400, { error: "Not a file" });
-      return reply(res, 200, { path: rel, text: await fs.readFile(full, "utf8"), mtime: stat.mtimeMs });
-    }
-    if (url.pathname === "/api/save" && req.method === "POST") {
-      const data = await jsonBody(req);
-      const { full, rel } = insideEditorRoot(data.path || "");
-      const before = await fs.stat(full);
-      if (Number.isFinite(data.mtime) && Math.abs(before.mtimeMs - data.mtime) > 1) {
-        return reply(res, 409, { error: "File changed on disk. Reload before saving.", mtime: before.mtimeMs });
-      }
-      await fs.writeFile(full, String(data.text ?? ""), "utf8");
-      return reply(res, 200, { ok: true, path: rel, mtime: (await fs.stat(full)).mtimeMs });
-    }
-    if (url.pathname.startsWith("/raw/")) {
-      const { full } = insideEditorRoot(url.pathname.slice(5));
-      const extension = path.extname(full).toLowerCase();
-      const data = await fs.readFile(full, extension === ".html" ? "utf8" : undefined);
-      if (extension !== ".html") return reply(res, 200, data, MIME[extension] || "application/octet-stream");
-      const themed = `<style>${await editorCss()}</style><style>body{background:${safeCssValue(url.searchParams.get("bg") || "#fff")};color:${safeCssValue(url.searchParams.get("fg") || "#1d2430")}}</style>${data}`;
-      return reply(res, 200, themed, MIME[extension]);
-    }
-    return reply(res, 404, { error: "未知编辑器接口" });
-  } catch (error) {
-    return reply(res, 400, { error: error.message });
+function validFileTarget(rel) {
+  const target = insideEditorRoot(rel);
+  const name = path.basename(target.full);
+  if (!target.rel || name === "." || name === ".." || /[\\/:*?"<>|\u0000-\u001f]/.test(name) || /[. ]$/.test(name)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) {
+    throw new Error("Invalid file name");
   }
+  return target;
+}
+
+async function editorApi(req, res, url) {
+  if (url.pathname === "/api/tree") {
+    return reply(res, 200, { root: library.editorRoot, entries: await listEditorDir(url.searchParams.get("path") || "") });
+  }
+  if (url.pathname === "/api/events" && req.method === "GET") return openChangeStream(req, res);
+  if (url.pathname === "/api/file") {
+    const { full, rel } = insideEditorRoot(url.searchParams.get("path") || "");
+    const stat = await fs.stat(full);
+    if (!stat.isFile()) return reply(res, 400, { error: "Not a file" });
+    return reply(res, 200, { path: rel, text: await fs.readFile(full, "utf8"), mtime: stat.mtimeMs });
+  }
+  if (url.pathname === "/api/save" && req.method === "POST") {
+    const data = await jsonBody(req);
+    const { full, rel } = insideEditorRoot(data.path || "");
+    const before = await fs.stat(full);
+    if (Number.isFinite(data.mtime) && Math.abs(before.mtimeMs - data.mtime) > 1) {
+      return reply(res, 409, { error: "File changed on disk. Reload before saving.", mtime: before.mtimeMs });
+    }
+    return reply(res, 200, { ok: true, path: rel, mtime: await writeTextFile(full, data.text) });
+  }
+  if (url.pathname === "/api/create" && req.method === "POST") {
+    const data = await jsonBody(req);
+    const { full, rel } = validFileTarget(data.path || "");
+    const parent = await fs.stat(path.dirname(full));
+    if (!parent.isDirectory()) return reply(res, 400, { error: "Target directory does not exist" });
+    let existing = null;
+    try { existing = await fs.stat(full); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+    if (existing && !data.overwrite) {
+      return reply(res, 409, { error: "A file with this name already exists.", code: "FILE_EXISTS", mtime: existing.mtimeMs });
+    }
+    if (existing) {
+      if (!existing.isFile()) return reply(res, 400, { error: "Target is not a file" });
+      if (!Number.isFinite(data.mtime) || Math.abs(existing.mtimeMs - data.mtime) > 1) {
+        return reply(res, 409, { error: "Target file changed before it could be overwritten.", code: "TARGET_CHANGED", mtime: existing.mtimeMs });
+      }
+    }
+    try {
+      await fs.writeFile(full, data.text ?? "", { encoding: "utf8", flag: existing ? "w" : "wx" });
+    } catch (error) {
+      if (existing || error.code !== "EEXIST") throw error;
+      const raced = await fs.stat(full);
+      return reply(res, 409, { error: "A file with this name already exists.", code: "FILE_EXISTS", mtime: raced.mtimeMs });
+    }
+    const st = await fs.stat(full);
+    return reply(res, 201, { ok: true, path: rel, mtime: st.mtimeMs });
+  }
+  if (url.pathname.startsWith("/raw/")) {
+    const { full } = insideEditorRoot(url.pathname.slice(5));
+    const extension = path.extname(full).toLowerCase();
+    const data = await fs.readFile(full, extension === ".html" ? "utf8" : undefined);
+    if (extension !== ".html") return reply(res, 200, data, MIME[extension] || "application/octet-stream");
+    const themed = `<style>${await editorCss()}</style><style>body{background:${safeCssValue(url.searchParams.get("bg") || "#fff")};color:${safeCssValue(url.searchParams.get("fg") || "#1d2430")}}</style>${data}`;
+    return reply(res, 200, themed, MIME[extension]);
+  }
+  return reply(res, 404, { error: "未知编辑器接口" });
+}
+
+async function writeTextFile(location, text) {
+  await fs.writeFile(location, String(text ?? ""), "utf8");
+  return (await fs.stat(location)).mtimeMs;
 }
 
 async function readPage(volume, page) {
@@ -308,123 +341,152 @@ async function readPage(volume, page) {
 }
 
 async function api(req, res, url) {
-  try {
-    const parts = url.pathname.split("/").filter(Boolean);
-    if (url.pathname === "/api/reader/config") {
+  const parts = url.pathname.split("/").filter(Boolean);
+
+  if (url.pathname === "/api/reader/config") {
+    await Promise.all(library.volumes.map(async (volume) => {
+      if (volume.pageDir.kind !== "file") return;
+      const refreshed = await scanPageFiles(volume.pageDir, volume.pattern, volume.explicitPages);
+      volume.pageFiles = refreshed;
+      volume.pages = [...refreshed.keys()].sort((a, b) => a - b);
+    }));
+    return reply(res, 200, {
+      title: library.config.title || "阅读器",
+      configPath: CONFIG_FILE,
+      editorRoot: library.editorRoot,
+      editorAvailable: Boolean(library.editorRoot),
+      volumes: library.volumes.map(({ id, title, shortTitle, pages, toc, pdf, pageLabel }) => ({
+        id, title, shortTitle, pages, toc, pageLabel,
+        pdfUrl: pdf?.kind === "url" ? pdf.path : `/api/reader/pdf/${encodeURIComponent(id)}`
+      }))
+    });
+  }
+
+  if (url.pathname === "/api/reader/locate") {
+    if (!library.editorRoot) return reply(res, 404, { error: "此配置没有本地编辑目录" });
+    const { rel } = insideEditorRoot(url.searchParams.get("path") || "");
+    for (const volume of library.volumes) {
+      const page = volume.pages.find(
+        (candidate) => editorPathFor(volume, candidate)?.toLowerCase() === rel.toLowerCase()
+      );
+      if (page != null) return reply(res, 200, { volume: volume.id, page, path: editorPathFor(volume, page) });
+    }
+    return reply(res, 404, { error: "此文件不属于对照阅读器配置" });
+  }
+
+  if (url.pathname === "/api/reader/settings") {
+    if (req.method === "GET") return reply(res, 200, await loadReaderSettings());
+    if (req.method === "PUT") {
+      const settings = readerSettings(await jsonBody(req));
+      await fs.writeFile(SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+      return reply(res, 200, settings);
+    }
+    return reply(res, 405, { error: "仅支持 GET 或 PUT" });
+  }
+
+  if (parts[2] === "pdf") {
+    const volume = getVolume(decodeURIComponent(parts[3] || ""));
+    if (!volume.pdf || volume.pdf.kind !== "file" || !(await exists(volume.pdf.path))) {
+      return reply(res, 404, "PDF not found", "text/plain; charset=utf-8");
+    }
+    return replyFile(req, res, volume.pdf.path, "application/pdf");
+  }
+
+  if (parts[2] === "page") {
+    const volume = getVolume(decodeURIComponent(parts[3] || ""));
+    const page = getPage(volume, parts[4]);
+    if (req.method === "GET") {
       return reply(res, 200, {
-        editorAvailable: Boolean(library.editorRoot),
-        volumes: library.volumes.map(({ id, title, shortTitle, pages, toc, pdf }) => ({
-          id, title, shortTitle, pages, toc,
-          pdfUrl: pdf?.kind === "url" ? pdf.path : `/api/reader/pdf/${encodeURIComponent(id)}`
-        }))
+        volume: volume.id, page,
+        path: editorPathFor(volume, page),
+        ...(await readPage(volume, page))
       });
     }
-    if (url.pathname === "/api/reader/locate") {
-      const { rel } = insideEditorRoot(url.searchParams.get("path") || "");
-      for (const volume of library.volumes) {
-        const page = volume.pages.find((candidate) => editorPathFor(volume, candidate)?.toLowerCase() === rel.toLowerCase());
-        if (page != null) return reply(res, 200, { volume: volume.id, page, path: editorPathFor(volume, page) });
+    if (req.method === "PUT") {
+      if (volume.pageDir.kind !== "file") return reply(res, 403, { error: "远程页面为只读" });
+      const body = await jsonBody(req);
+      const location = pageLocation(volume, page);
+      const before = await fs.stat(location);
+      if (Number.isFinite(body.mtime) && Math.abs(before.mtimeMs - body.mtime) > 1) {
+        return reply(res, 409, { error: "文件已被其他程序修改，请重新载入" });
       }
-      return reply(res, 404, { error: "此文件不属于对照阅读器配置" });
+      return reply(res, 200, { ok: true, mtime: await writeTextFile(location, body.text) });
     }
-    if (url.pathname === "/api/reader/settings") {
-      if (req.method === "GET") return reply(res, 200, await loadReaderSettings());
-      if (req.method === "PUT") {
-        const settings = readerSettings(await jsonBody(req));
-        await fs.writeFile(SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-        return reply(res, 200, settings);
-      }
-      return reply(res, 405, { error: "仅支持 GET 或 PUT" });
-    }
-    if (parts[2] === "pdf") {
-      const volume = getVolume(decodeURIComponent(parts[3] || ""));
-      if (!volume.pdf || volume.pdf.kind !== "file" || !(await exists(volume.pdf.path))) {
-        return reply(res, 404, "PDF not found", "text/plain; charset=utf-8");
-      }
-      return replyFile(req, res, volume.pdf.path, "application/pdf");
-    }
-    if (parts[2] === "page") {
-      const volume = getVolume(decodeURIComponent(parts[3] || ""));
-      const page = getPage(volume, parts[4]);
-      if (req.method === "GET") {
-        return reply(res, 200, { volume: volume.id, page, path: editorPathFor(volume, page), ...(await readPage(volume, page)) });
-      }
-      if (req.method === "PUT") {
-        if (volume.pageDir.kind !== "file") return reply(res, 403, { error: "远程页面为只读" });
-        const body = await jsonBody(req);
-        const location = pageLocation(volume, page);
-        const before = await fs.stat(location);
-        if (Number.isFinite(body.mtime) && Math.abs(before.mtimeMs - body.mtime) > 1) {
-          return reply(res, 409, { error: "文件已被其他程序修改，请重新载入" });
-        }
-        await fs.writeFile(location, String(body.text ?? ""), "utf8");
-        return reply(res, 200, { ok: true, mtime: (await fs.stat(location)).mtimeMs });
-      }
-    }
-    if (parts[2] === "link") {
-      const volume = getVolume(decodeURIComponent(parts[3] || ""));
-      const page = getPage(volume, parts[4]);
-      const editorPath = editorPathFor(volume, page);
-      if (!editorPath) return reply(res, 404, { error: "此页面不在本地编辑目录中" });
-      return reply(res, 200, { volume: volume.id, page, path: editorPath });
-    }
-    if (parts[2] === "resource") {
-      const volume = getVolume(decodeURIComponent(parts[3] || ""));
-      if (volume.pageDir.kind !== "file") return reply(res, 404, "Not found", "text/plain");
-      const relative = parts.slice(4).map(decodeURIComponent).join("/");
-      const location = path.resolve(volume.pageDir.path, relative);
-      if (location !== volume.pageDir.path && !location.startsWith(volume.pageDir.path + path.sep)) return reply(res, 403, "Forbidden", "text/plain");
-      return reply(res, 200, await fs.readFile(location), MIME[path.extname(location).toLowerCase()] || "application/octet-stream");
-    }
-    return reply(res, 404, { error: "未知接口" });
+  }
+
+  if (parts[2] === "link") {
+    const volume = getVolume(decodeURIComponent(parts[3] || ""));
+    const page = getPage(volume, parts[4]);
+    const editorPath = editorPathFor(volume, page);
+    if (!editorPath) return reply(res, 404, { error: "此页面不在本地编辑目录中" });
+    return reply(res, 200, { volume: volume.id, page, path: editorPath });
+  }
+
+  if (parts[2] === "resource") {
+    const volume = getVolume(decodeURIComponent(parts[3] || ""));
+    if (volume.pageDir.kind !== "file") return reply(res, 404, "Not found", "text/plain");
+    const relative = parts.slice(4).map(decodeURIComponent).join("/");
+    const location = path.resolve(volume.pageDir.path, relative);
+    if (!isInside(location, volume.pageDir.path)) return reply(res, 403, "Forbidden", "text/plain");
+    return reply(res, 200, await fs.readFile(location), MIME[path.extname(location).toLowerCase()] || "application/octet-stream");
+  }
+
+  return reply(res, 404, { error: "未知接口" });
+}
+
+// 三个静态目录共用一套逻辑，只是根目录和前缀不同
+async function serveAsset(res, relative, root) {
+  const full = path.resolve(root, relative);
+  if (!isInside(full, root)) return reply(res, 403, "Forbidden", "text/plain");
+  try {
+    const type = MIME[path.extname(full).toLowerCase()] || (root === PUBLIC ? "text/plain; charset=utf-8" : "application/octet-stream");
+    return reply(res, 200, await fs.readFile(full), type);
+  } catch {
+    return reply(res, 404, "Not found", "text/plain");
+  }
+}
+
+try {
+  await loadLibrary();
+} catch (error) {
+  console.error(`加载配置失败（${CONFIG_FILE}）：${error.message}`);
+  process.exit(1);
+}
+
+if (!library.volumes.length) {
+  console.error(`配置 ${CONFIG_FILE} 没有扫描到任何卷。请检查顶层 htmlRoot、每卷 htmlRoot 与 pagePattern。`);
+  process.exit(1);
+}
+
+const rootWatcher = library.editorRoot
+  ? watch(library.editorRoot, { recursive: true }, publishChange)
+  : null;
+rootWatcher?.on("error", (error) => console.error(`File watcher error: ${error.message}`));
+
+for (const directory of new Set(
+  library.volumes.filter((volume) => volume.pageDir.kind === "file").map((volume) => volume.pageDir.path)
+)) {
+  if (library.editorRoot && isInside(directory, library.editorRoot)) continue;
+  if (!existsSync(directory)) continue;
+  const watcher = watch(directory, () => publishChange("rename", ""));
+  watcher.on("error", (error) => console.error(`File watcher error: ${error.message}`));
+}
+
+http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    if (url.pathname.startsWith("/api/reader/")) return await api(req, res, url);
+    if (url.pathname === "/mewde.css") return reply(res, 200, await editorCss(), MIME[".css"]);
+    if (["/api/tree", "/api/events", "/api/file", "/api/save", "/api/create"].includes(url.pathname)
+      || url.pathname.startsWith("/raw/")) return await editorApi(req, res, url);
+    if (url.pathname.startsWith("/vendor/pdfjs/")) return await serveAsset(res, url.pathname.slice("/vendor/pdfjs/".length), PDFJS);
+    if (url.pathname.startsWith("/monaco/")) return await serveAsset(res, url.pathname.slice("/monaco/".length), MONACO);
+    return await serveAsset(res, `.${url.pathname === "/" ? "/reader.html" : url.pathname}`, PUBLIC);
   } catch (error) {
     return reply(res, 400, { error: error.message });
   }
-}
-
-async function staticFile(res, pathname) {
-  const requested = pathname === "/" ? "/reader.html" : pathname;
-  const full = path.resolve(PUBLIC, `.${requested}`);
-  if (full !== PUBLIC && !full.startsWith(`${PUBLIC}${path.sep}`)) return reply(res, 403, "Forbidden", "text/plain");
-  try {
-    return reply(res, 200, await fs.readFile(full), MIME[path.extname(full).toLowerCase()] || "text/plain; charset=utf-8");
-  } catch {
-    return reply(res, 404, "Not found", "text/plain");
-  }
-}
-
-async function vendorFile(res, pathname) {
-  const relative = pathname.slice("/vendor/pdfjs/".length);
-  const packageRoot = path.join(HERE, "node_modules", "pdfjs-dist");
-  const full = path.resolve(packageRoot, relative);
-  if (full !== packageRoot && !full.startsWith(`${packageRoot}${path.sep}`)) return reply(res, 403, "Forbidden", "text/plain");
-  try {
-    return reply(res, 200, await fs.readFile(full), MIME[path.extname(full).toLowerCase()] || "application/octet-stream");
-  } catch {
-    return reply(res, 404, "Not found", "text/plain");
-  }
-}
-
-async function monacoFile(res, pathname) {
-  const relative = pathname.slice("/monaco/".length);
-  const full = path.resolve(MONACO, relative);
-  if (full !== MONACO && !full.startsWith(`${MONACO}${path.sep}`)) return reply(res, 403, "Forbidden", "text/plain");
-  try {
-    return reply(res, 200, await fs.readFile(full), MIME[path.extname(full).toLowerCase()] || "application/octet-stream");
-  } catch {
-    return reply(res, 404, "Not found", "text/plain");
-  }
-}
-
-await loadLibrary();
-const rootWatcher = library.editorRoot ? watch(library.editorRoot, { recursive: true }, publishChange) : null;
-rootWatcher?.on("error", (error) => console.error(`File watcher error: ${error.message}`));
-http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  if (url.pathname.startsWith("/api/reader/")) return api(req, res, url);
-  if (url.pathname === "/mewde.css") return editorCss().then((css) => reply(res, 200, css, MIME[".css"]));
-  if (["/api/tree", "/api/events", "/api/file", "/api/save"].includes(url.pathname) || url.pathname.startsWith("/raw/")) return editorApi(req, res, url);
-  if (url.pathname.startsWith("/vendor/pdfjs/")) return vendorFile(res, url.pathname);
-  if (url.pathname.startsWith("/monaco/")) return monacoFile(res, url.pathname);
-  return staticFile(res, url.pathname);
-}).listen(PORT, () => console.log(`MEW 对照阅读编辑器：http://localhost:${PORT}（${library.volumes.length} 卷）`));
+}).listen(PORT, () => {
+  console.log(`配置：${CONFIG_FILE}`);
+  console.log(`编辑根：${library.editorRoot || "（无）"}`);
+  console.log(`阅读器：http://localhost:${PORT}（${library.volumes.length} 卷）`);
+});

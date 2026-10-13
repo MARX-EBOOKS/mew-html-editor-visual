@@ -128,8 +128,30 @@
     let renderedText = '';
     let refreshTimer = 0;
     let retryDelay = 1000;
+    let selectedPath = null;
+    let selectedType = null;
 
-    function configure(nextOptions) { options = nextOptions; }
+    function configure(nextOptions) {
+      options = nextOptions;
+      byId('tree').addEventListener('click', event => {
+        if (!event.target.closest('.item')) select('', 'dir');
+      });
+    }
+
+    function select(path, type) {
+      selectedPath = path;
+      selectedType = type;
+      document.querySelectorAll('#tree .item').forEach(row => {
+        const selected = row.dataset.path === path;
+        row.classList.toggle('selected', selected);
+        row.setAttribute('aria-selected', String(selected));
+      });
+    }
+
+    function creationDirectory() {
+      if (selectedPath === null) return options.activePath().split('/').slice(0, -1).join('/');
+      return selectedType === 'dir' ? selectedPath : selectedPath.split('/').slice(0, -1).join('/');
+    }
 
     async function load(rel = '', host = byId('tree'), open = new Set()) {
       const data = await options.read(rel);
@@ -146,7 +168,10 @@
         row.innerHTML = `<span>${entry.type === 'dir' ? '+' : '-'}</span><span class="name">${escapeHtml(entry.name)}</span>`;
         row.tabIndex = 0;
         row.setAttribute('role', 'treeitem');
+        row.classList.toggle('selected', entry.path === selectedPath);
+        row.setAttribute('aria-selected', String(entry.path === selectedPath));
         if (entry.type === 'dir') row.setAttribute('aria-expanded', String(open.has(entry.path)));
+        row.onfocus = () => select(entry.path, entry.type);
         row.onkeydown = event => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
@@ -155,6 +180,7 @@
         };
         row.onclick = event => {
           event.stopPropagation();
+          select(entry.path, entry.type);
           if (entry.type === 'dir') return toggle(row, entry.path).catch(error => notify(error.message));
           options.open(entry.path);
         };
@@ -231,9 +257,9 @@
     }
 
     function setActive(path = '') {
+      select(path, 'file');
       document.querySelectorAll('#tree .item').forEach(row => {
         row.classList.toggle('active', row.dataset.path === path);
-        row.setAttribute('aria-selected', String(row.dataset.path === path));
       });
     }
 
@@ -260,7 +286,7 @@
       document.querySelector('#tree .active')?.scrollIntoView({ block: 'nearest' });
     }
 
-    return { configure, refresh, scheduleRefresh, filter, setActive, collapse, reveal };
+    return { configure, refresh, scheduleRefresh, filter, setActive, collapse, reveal, creationDirectory };
   })();
 
   function mountTagPanel({ tags, attrs, storageKey, onTag, onAttr, onNavigate, onEditorScale }) {
@@ -269,8 +295,8 @@
       '<span class="spacer"></span>',
       ...attrs.map((attr, index) => `<button class="tag attrTag" data-attr="${index}" title="${escapeHtml(attr.title)}">${escapeHtml(attr.label)}</button>`),
       '<span class="spacer"></span>',
-      '<button id="tagPrevFileBtn" class="tag attrTag tagFileNav" data-nav="-1" title="上一文件；切换前自动保存">←</button>',
-      '<button id="tagNextFileBtn" class="tag attrTag tagFileNav" data-nav="1" title="下一文件；切换前自动保存">→</button>'
+      '<button id="tagPrevFileBtn" class="tag attrTag tagFileNav" data-nav="-1" title="上一文件；保留未保存的修改">←</button>',
+      '<button id="tagNextFileBtn" class="tag attrTag tagFileNav" data-nav="1" title="下一文件；保留未保存的修改">→</button>'
     ].join('');
     byId('tagBar').onclick = event => {
       const tag = event.target.closest('button[data-i]');
@@ -304,7 +330,7 @@
 
   function renderTabs(documents, active) {
     const tabs = byId('tabs');
-    tabs.innerHTML = [...documents].map(document => `<button class="tab${document === active ? ' active' : ''}" data-path="${escapeHtml(document.path)}" title="${escapeHtml(document.path)}"><span class="tabName">${escapeHtml(fileLabel(document.path))}${document.dirty ? ' *' : ''}</span><span class="tabClose" data-close="${escapeHtml(document.path)}" title="Close">×</span></button>`).join('');
+    tabs.innerHTML = [...documents].map(document => `<button draggable="true" class="tab${document === active ? ' active' : ''}" data-path="${escapeHtml(document.path)}" title="${escapeHtml(document.path)}"><span class="tabName">${escapeHtml(fileLabel(document.path))}${document.dirty ? ' *' : ''}</span><span class="tabClose" data-close="${escapeHtml(document.path)}" title="Close">×</span></button>`).join('');
     tabs.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
@@ -405,7 +431,7 @@
   }
 
   function bindWorkbench(actions) {
-    byId('newFileBtn').onclick = actions.newFile;
+    byId('newFileBtn').onclick = () => actions.newFile(tree.creationDirectory());
     byId('saveBtn').onclick = actions.save;
     byId('saveAsBtn').onclick = actions.saveAs;
     byId('saveAllBtn').onclick = actions.saveAll;
@@ -425,7 +451,49 @@
     byId('treeCollapseBtn').onclick = tree.collapse;
     byId('treeRevealBtn').onclick = () => tree.reveal(actions.activePath()).catch(error => notify(error.message));
     byId('treeFilter').oninput = tree.filter;
-    byId('tabs').onclick = event => {
+    const tabs = byId('tabs');
+    let draggedPath = null, dropMarker = null;
+    const clearDropMarker = () => {
+      if (dropMarker) dropMarker.style.boxShadow = '';
+      dropMarker = null;
+    };
+    tabs.ondragstart = event => {
+      const tab = event.target.closest('.tab');
+      if (!tab || event.target.closest('[data-close]')) { event.preventDefault(); return; }
+      draggedPath = tab.dataset.path;
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', draggedPath);
+    };
+    tabs.ondragover = event => {
+      if (draggedPath === null) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      clearDropMarker();
+      const tab = event.target.closest('.tab');
+      if (tab && tab.dataset.path !== draggedPath) {
+        const rect = tab.getBoundingClientRect();
+        dropMarker = tab;
+        tab.style.boxShadow = `inset ${event.clientX < rect.left + rect.width / 2 ? 2 : -2}px 0 var(--ink)`;
+      }
+      const rect = tabs.getBoundingClientRect();
+      if (event.clientX < rect.left + 28) tabs.scrollLeft -= 20;
+      else if (event.clientX > rect.right - 28) tabs.scrollLeft += 20;
+    };
+    tabs.ondragleave = event => {
+      if (!tabs.contains(event.relatedTarget)) clearDropMarker();
+    };
+    tabs.ondrop = event => {
+      if (draggedPath === null) return;
+      event.preventDefault();
+      const tab = event.target.closest('.tab');
+      const rect = tab?.getBoundingClientRect();
+      const path = draggedPath;
+      draggedPath = null;
+      clearDropMarker();
+      actions.moveTab(path, tab?.dataset.path, rect ? event.clientX >= rect.left + rect.width / 2 : true);
+    };
+    tabs.ondragend = () => { draggedPath = null; clearDropMarker(); };
+    tabs.onclick = event => {
       const close = event.target.closest('[data-close]');
       if (close) return actions.closeDocuments([close.dataset.close]);
       const tab = event.target.closest('[data-path]');

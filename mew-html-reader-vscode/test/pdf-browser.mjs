@@ -20,10 +20,10 @@ const extension = await readFile(path.join(root, "extension.cjs"), "utf8");
 const stub = { Uri: { joinPath: (base, ...parts) => `${base}/${parts.join("/")}` } };
 const sandbox = { require: name => name === "vscode" ? stub : createRequire(path.join(root, "extension.cjs"))(name), exports: {}, module: { exports: {} }, console };
 vm.createContext(sandbox);
-vm.runInContext(`${extension}\nexports.pdfHtml = ReaderController.prototype.pdfHtml;`, sandbox);
-const html = sandbox.exports.pdfHtml.call({ context: { extensionUri: "", globalState: { get: () => ({}) } } }, {
+vm.runInContext(`${extension}\nexports.pdfHtml = pdfHtml;`, sandbox);
+const html = sandbox.exports.pdfHtml({
   cspSource: "'self'", asWebviewUri: value => value
-});
+}, { extensionUri: "", globalState: { get: () => ({}) } });
 let activeFile, bytesRead = 0, requests = [];
 const mime = { ".mjs": "text/javascript", ".js": "text/javascript", ".css": "text/css", ".wasm": "application/wasm", ".svg": "image/svg+xml" };
 const server = createServer(async (req, res) => {
@@ -78,7 +78,7 @@ try {
     await page.waitForFunction(() => window.__messages.some(m => m.type === "ready"));
     await page.evaluate(url => {
       window.__start = performance.now();
-      window.postMessage({ type: "showPdf", url, fileName: "Benchmark PDF", pageLabel: "300" });
+      window.postMessage({ type: "showPdf", url, htmlUri: "file:///pages/300.html", fileName: "Benchmark PDF", pageLabel: "300" });
     }, `${base}/book.pdf`);
     await page.waitForFunction(() => {
       const v = window.__reader.viewer;
@@ -102,10 +102,23 @@ try {
     await page.screenshot({ path: path.join(artifacts, `${path.basename(file)}${process.env.PDF_BASELINE ? '-before' : '-after'}.png`) });
     await page.locator("#next").click();
     await page.waitForFunction(n => window.__renders.some(e => e.page === n), measured.physicalPage + 1);
+    await page.evaluate(url => window.__reader.loadPdf({
+      url, htmlUri: "file:///pages/300.html", fileName: "Benchmark PDF", pageLabel: "300"
+    }), `${base}/book.pdf`);
+    await page.waitForTimeout(50);
+    assert.equal(await page.evaluate(() => window.__reader.viewer.currentPageNumber), measured.physicalPage + 1,
+      "returning to a separately hosted PDF preserves later progress for the same HTML");
+    await page.evaluate(url => window.__reader.loadPdf({
+      url, htmlUri: "file:///pages/other.html", fileName: "Benchmark PDF", pageLabel: "300"
+    }), `${base}/book.pdf`);
+    await page.waitForFunction(n => window.__reader.viewer.currentPageNumber === n, measured.physicalPage);
+    await page.locator("#next").click();
+    await page.waitForFunction(n => window.__reader.viewer.currentPageNumber === n, measured.physicalPage + 1);
     await page.locator("#previous").click();
     await page.waitForFunction(n => window.__reader.viewer.currentPageNumber === n, measured.physicalPage);
     await page.locator("#zoom").fill("100%"); await page.locator("#zoom").press("Enter");
     await page.waitForFunction(() => window.__reader.viewer.currentScale === 1);
+    assert.equal(await page.locator("#zoom").inputValue(), "100%", "PDF.js scale 1 is displayed as 100%");
     await page.locator("#direction").click();
     await page.waitForFunction(() => window.__reader.viewer.scrollMode === 1);
     await page.locator("#direction").click();

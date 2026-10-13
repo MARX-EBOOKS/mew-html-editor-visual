@@ -29,20 +29,24 @@ test("PDF header exposes compact navigation and display controls", () => {
   assert.match(script, /if \(page === viewer\.currentPageNumber\) return showPage\(page\)/);
   assert.match(extension, /retainContextWhenHidden: true/);
   assert.match(extension, /mewReader\.pdfDisplaySettings\.v1/);
-  assert.match(extension, /globalState\.update\(PDF_DISPLAY_SETTINGS_KEY/);
+  assert.match(extension, /globalState\.update\("mewReader\.pdfDisplaySettings\.v1"/);
   assert.match(script, /config\.displaySettings/);
   assert.match(script, /type: "pdfDisplaySettings"/);
+  assert.match(script, /function scalePercent\(scale\) \{ return Math\.round\(scale \* 100\); \}/);
+  assert.match(script, /currentScaleValue = String\(Math\.max\(25, Math\.min\(1000, percent\)\) \/ 100\)/);
+  assert.doesNotMatch(script, /PDF_TO_CSS_UNITS|96\s*\/\s*72|72\s*\/\s*96/);
   assert.match(script, /openPdfSource\(config\.pdfjs, message\.url/);
   assert.match(script, /docBaseUrl: message\.url/);
   assert.match(extension, /registerCustomEditorProvider\(PDF_PANEL_VIEW_TYPE, reader/);
   assert.match(extension, /openCustomDocument\(uri\)/);
   assert.match(extension, /resolveCustomEditor\(document, panel\)/);
   assert.match(extension, /executeCommand\("vscode\.openWith", current\.volume\.pdfUri, PDF_PANEL_VIEW_TYPE/);
-  assert.match(script, /vscode\.setState\(\{ \.\.\.state, document:/);
+  assert.match(script, /vscode\.setState\(saved\)/);
   assert.match(extension, /htmlUri: this\.current\.uri\.toString\(true\)/);
   assert.match(extension, /const known = this\.knownPage\(uri\)/);
   assert.match(script, /labelsReady = document\.getPageLabels\(\)\.catch\(\(\) => null\)\.then/);
   assert.match(script, /viewer\.setDocument\(document\); linkService\.setDocument\(document\)/);
+  assert.doesNotMatch(script, /imagesRightClickMinSize/);
   assert.match(script, /--scan-filter/);
   assert.match(styles, /#tools[^}]*height:34px/);
   assert.match(styles, /#stage[^}]*inset:34px 0 0/);
@@ -52,4 +56,11 @@ test("configured page navigation leaves dirty state to VS Code", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "extension.cjs"), "utf8");
   assert.doesNotMatch(source, /document\.save\(\)/);
   assert.doesNotMatch(source, /pendingPdfPage|onDidSaveTextDocument/);
+});
+
+test("returning to a PDF in another window preserves later progress for the same HTML", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "reader-pdf.js"), "utf8");
+  assert.match(source, /const preservePosition = message\.url === currentUrl/);
+  assert.match(source, /Boolean\(message\.htmlUri\) && message\.htmlUri === pending\?\.htmlUri/);
+  assert.match(source, /if \(!preservePosition && !initializing && viewer\?\.pdfDocument\) showPending\(\)/);
 });

@@ -10,6 +10,7 @@ const manifest = require("../package.json");
 test("extension activates, registers commands, and resolves a restored PDF custom editor", async () => {
   const registered = new Set();
   let provider;
+  let tagProvider;
   const disposable = { dispose() {} };
   const uri = value => ({
     scheme: value.split(":")[0],
@@ -18,14 +19,22 @@ test("extension activates, registers commands, and resolves a restored PDF custo
     toString() { return value; }
   });
   const vscode = {
+    ViewColumn: { Active: -1, Beside: -2 },
     Uri: {
       parse: uri,
       joinPath(base, ...parts) { return uri(`${base.toString()}/${parts.join("/")}`); }
     },
     window: {
       activeTextEditor: undefined,
+      tabGroups: { all: [{ tabs: [{ input: undefined }] }] },
       onDidChangeActiveTextEditor() { return disposable; },
       registerWebviewViewProvider() { return disposable; },
+      registerWebviewPanelSerializer(viewType, value) {
+        tagProvider = value;
+        assert.equal(viewType, "mewReader.floatingBar");
+        assert.equal(typeof value.deserializeWebviewPanel, "function");
+        return disposable;
+      },
       registerCustomEditorProvider(viewType, value, options) {
         assert.equal(viewType, "mewReader.pdf");
         assert.equal(typeof value.openCustomDocument, "function");
@@ -36,7 +45,8 @@ test("extension activates, registers commands, and resolves a restored PDF custo
       },
       showErrorMessage() {}, showInformationMessage() {}
     },
-    workspace: { onDidSaveTextDocument() { return disposable; } },
+    workspace: { onDidSaveTextDocument() { return disposable; },
+      getConfiguration() { return { get: (_key, fallback) => fallback }; } },
     commands: {
       registerCommand(id) { registered.add(id); return disposable; },
       executeCommand() { return Promise.resolve(); }
@@ -58,6 +68,10 @@ test("extension activates, registers commands, and resolves a restored PDF custo
   }
   const contributed = manifest.contributes.commands.map(item => item.command);
   assert.deepEqual(contributed.filter(id => !registered.has(id)), []);
+  assert.deepEqual(manifest.contributes.keybindings.filter(binding => binding.command === "mewReader.showBar"), [{
+    command: "mewReader.showBar",
+    key: "ctrl+alt+t"
+  }]);
   assert.deepEqual(manifest.contributes.customEditors, [{
     viewType: "mewReader.pdf",
     displayName: "MEW Synchronized PDF",
@@ -87,10 +101,10 @@ test("extension activates, registers commands, and resolves a restored PDF custo
   } });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(panel.title, "mew.pdf");
-  assert.equal(posted.at(-1).type, "showPdf");
-  assert.equal(posted.at(-1).pageLabel, "317");
-  assert.match(posted.at(-1).url, /mew\.pdf$/);
-  assert.equal(posted.at(-1).nativeData, true);
+  assert.equal(posted.filter(message => message.type === "showPdf").at(-1).type, "showPdf");
+  assert.equal(posted.filter(message => message.type === "showPdf").at(-1).pageLabel, "317");
+  assert.match(posted.filter(message => message.type === "showPdf").at(-1).url, /mew\.pdf$/);
+  assert.equal(posted.filter(message => message.type === "showPdf").at(-1).nativeData, true);
 
   const fixture = await fs.mkdtemp(path.join(tmpdir(), "mew-pdf-data-"));
   try {
@@ -112,4 +126,87 @@ test("extension activates, registers commands, and resolves a restored PDF custo
     assert.equal(path.dirname(path.resolve(fixture)), path.resolve(tmpdir()));
     await fs.rm(fixture, { recursive: true, force: true });
   }
+
+  // A restored PDF tab must block creation/moving before its resolver runs.
+  const commands = [];
+  vscode.commands.executeCommand = async (...args) => { commands.push(args); };
+  let tagRevealed;
+  tagProvider.panels.add({ reveal(...args) { tagRevealed = args; } });
+  tagProvider.findFloating = () => { throw new Error("Attached tag bar must not traverse PDF groups"); };
+  await tagProvider.show();
+  assert.deepEqual(tagRevealed, [undefined, false]);
+  assert.deepEqual(commands.map(args => args[0]), [
+    "workbench.action.focusWindow", "workbench.action.enableCompactAuxiliaryWindow"
+  ]);
+  commands.length = 0;
+  let pdfRevealed;
+  panel.reveal = (...args) => { pdfRevealed = args; };
+  receiveMessage({ type: "focusPdf" });
+  assert.deepEqual(pdfRevealed, [undefined, false]);
+  assert.deepEqual(commands.map(args => args[0]), ["workbench.action.focusWindow"]);
+  commands.length = 0;
+  const savedTab = { input: { viewType: "mewReader.pdf", uri: pdfUri } };
+  const savedGroup = { tabs: [savedTab], activeTab: savedTab };
+  vscode.window.tabGroups = { all: [savedGroup], activeTabGroup: savedGroup };
+  provider.panel = null;
+  await provider.createPanel({ uri: uri("file:///books/317.html"), volume: { pdfUri } });
+  assert.deepEqual(commands, [], "reuse unresolved saved tab without openWith or moving it");
+  vscode.window.activeTextEditor = { document: { uri: uri("file:///books/317.html") } };
+  const originalSync = provider.sync;
+  provider.sync = async () => {
+    provider.current = { volume: { pdfUri } };
+    return true;
+  };
+  await provider.open();
+  assert.deepEqual(commands.map(args => args[0]), [
+    "workbench.action.focusWindow"
+  ], "toolbar focuses the saved window without changing its mode");
+  commands.length = 0;
+  let revealed;
+  provider.panel = { reveal(...args) { revealed = args; } };
+  provider.panelPdfUri = pdfUri;
+  await provider.open();
+  assert.deepEqual(revealed, [undefined, false], "keep the restored panel in its own window");
+  provider.sync = originalSync;
+  vscode.window.tabGroups.all = [];
+
+  // Restart: openWith finishes while the restored custom editor is still pending.
+  provider.panel = null;
+  provider.ready = false;
+  const current = { uri: uri("file:///books/317.html"), page: 317,
+    volume: { pdfUri, pageLabel: "{page}" } };
+  provider.resolvePage = async () => current;
+  provider.watchVolume = () => {};
+  const before = posted.length;
+  assert.equal(await provider.sync(current.uri), true);
+  assert.equal(posted.length, before, "wait for restored webview readiness");
+  const oldReceive = receiveMessage;
+  let disposed;
+  const restoredPanel = {
+    webview: {
+      ...panel.webview,
+      set html(value) {
+        assert.match(value, /reader-config/);
+        receiveMessage({ type: "ready" });
+      }
+    },
+    onDidDispose(callback) { disposed = callback; return disposable; },
+    dispose() { disposed?.(); }
+  };
+  provider.resolveCustomEditor(provider.openCustomDocument(pdfUri), restoredPanel);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(restoredPanel.title, "mew.pdf");
+  assert.equal(posted.filter(message => message.type === "showPdf").at(-1).type, "showPdf");
+  assert.equal(posted.filter(message => message.type === "showPdf").at(-1).pageLabel, "317");
+  receiveMessage({ type: "ready", document: {
+    pdfUri: pdfUri.toString(true), htmlUri: current.uri.toString(true), pageLabel: "318"
+  } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(posted.filter(message => message.type === "showPdf").at(-1).pageLabel, "318",
+    "restore later PDF progress for the same active HTML file");
+  provider.ready = false;
+  oldReceive({ type: "ready" });
+  assert.equal(provider.ready, false, "obsolete panel cannot mark its replacement ready");
+  restoredPanel.dispose();
+  assert.equal(await provider.sync(current.uri), true, "closed panel does not cause a null-title error");
 });

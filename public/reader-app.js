@@ -22,6 +22,7 @@
     config: null,
     volume: null,
     page: null,
+    pdfPage: null,
     document: new DocumentModel({ editable: false }),
     mode: "source",
     workspaceMode: initialParams.get("view") === "reader" ? "reader" : "combined",
@@ -135,6 +136,15 @@
     return state.config?.volumes.find((item) => item.id === state.volume);
   }
 
+  function rememberPdfPage(pageLabel) {
+    const page = Number(String(pageLabel ?? "").match(/^(\d+)/)?.[1]);
+    if (!Number.isSafeInteger(page) || page <= 0 || state.volume == null) return null;
+    state.pdfPage = page;
+    localStorage.setItem(LAST_VOLUME_KEY, state.volume);
+    localStorage.setItem(LAST_PAGE_KEY, String(page));
+    return page;
+  }
+
   function markDirty() {
     ui.setDirty(state.document.dirty);
   }
@@ -214,7 +224,7 @@
     if (state.volume == null || state.page == null) return;
     const params = new URLSearchParams(location.search);
     const paired = state.workspaceMode === "reader" && state.syncSession;
-    for (const [key, value] of Object.entries({ volume: state.volume, page: state.page, mode: state.mode,
+    for (const [key, value] of Object.entries({ volume: state.volume, page: state.pdfPage ?? state.page, mode: state.mode,
       view: paired ? "reader" : null, sync: paired || null })) {
       if (value == null) params.delete(key);
       else params.set(key, value);
@@ -259,6 +269,7 @@
       pageTotal: volume.pages.length,
       pageIndex: index + 1,
       page: state.page,
+      pdfPage: state.pdfPage ?? state.page,
       volume: state.volume,
       hasPrevious: index > 0,
       hasNext: index < volume.pages.length - 1,
@@ -297,8 +308,10 @@
       const volumeChanged = state.volume !== volume.id;
       state.volume = volume.id;
       state.page = page;
-      localStorage.setItem(LAST_VOLUME_KEY, state.volume);
-      localStorage.setItem(LAST_PAGE_KEY, String(state.page));
+      if (!pdfOrigin) state.pdfPage = requestedPage;
+      // With a PDF, persist its confirmed position in pdfPageChange, not the
+      // HTML fallback page. Volumes without a PDF retain navigation memory.
+      if (!volume.pdfUrl) rememberPdfPage(state.pdfPage);
       if (editorPath) editorPathCache.set(`${volume.id}:${page}`, editorPath);
       state.document = document;
       if (!readerOnly) {
@@ -313,8 +326,8 @@
       // PDF 发起的翻页已经处于正确的物理页，不反向驱动 PDF。
       // 左侧网页发起导航时才定位 PDF；UI 会在重复标签中选择离当前物理页最近的一项。
       if (!pdfOrigin) {
-        currentPdfPage = { volume: volume.id, pageLabel: String(page) };
-        ui.setPdf({ url: volume.pdfUrl, pageLabel: String(page) })
+        currentPdfPage = { volume: volume.id, pageLabel: String(requestedPage) };
+        ui.setPdf({ url: volume.pdfUrl, pageLabel: String(requestedPage) })
           .catch((error) => notify(`PDF 载入失败：${error.message}`, true));
       }
       if (page !== requestedPage) notify(`第 ${requestedPage} 页暂无网页文件，已${readerOnly ? "定位" : "显示"}上一可用页 ${page}`);
@@ -632,7 +645,7 @@
     const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
     const editableTarget = event.target.matches?.("textarea,[contenteditable]") || event.target.isContentEditable || event.target.closest?.(".monaco-editor");
     if (event.altKey && !command) {
-      const tag = tagMap.get(key);
+      const tag = tagPanel.tagForKeyEvent(event);
       if (direction || tag) event.preventDefault();
       if (direction) adjacent(direction);
       else if (tag) editTag(tag);
@@ -651,6 +664,10 @@
       mode: () => setMode(), save, undo, redo, volume: changeVolume,
       splitView: enterSplitView, combinedView: restoreCombinedView,
       page: (page) => navigate(state.volume, page), adjacent,
+      beforePdfToc: async () => {
+        updateWorkingCopy();
+        return !state.document.dirty || await save();
+      },
       tag: (index) => editTag(tags[index]),
       attr: (index) => {
         if (state.mode === "visual") return notify("属性按钮请在源代码模式使用");
@@ -661,14 +678,23 @@
       visualInput: () => updateWorkingCopy(),
       visualDoubleClick: trimVisualWordSelection,
       visualClick: openVisualLink,
-      pdfPageChange: ({ pageNumber, pageLabel }) => {
-        updateWorkingCopy();
+      pdfPageChange: ({ pageNumber, pageLabel, url }) => {
         const volume = currentVolume();
-        if (!volume) return;
+        if (!volume || (url && url !== volume.pdfUrl)) return;
         currentPdfPage = { volume: volume.id, pageNumber, pageLabel };
-        const prefix = String(pageLabel ?? "").match(/^(\d+)/)?.[1];
-        if (!prefix) return;
-        const page = Number(prefix);
+        const page = rememberPdfPage(pageLabel);
+        if (page == null) return;
+        renderNavigation();
+        syncUrl();
+        updateWorkingCopy();
+        // Several PDF pages can map to the same HTML file. Keep its working
+        // copy instead of starting a redundant asynchronous reload.
+        if (volume.pages.filter(candidate => candidate <= page).at(-1) === state.page) {
+          ++state.navigationRevision;
+          ++locateRevision;
+          state.pendingPdfNavigation = null;
+          return;
+        }
         if (state.document.dirty) {
           state.pendingPdfNavigation = {
             volume: volume.id,
