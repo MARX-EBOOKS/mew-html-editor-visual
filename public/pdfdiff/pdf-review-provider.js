@@ -146,7 +146,8 @@
       if (session !== saved || request !== generation || saved.model.getValue() !== source
         || saved.model.getVersionId?.() !== version || (saved.provider.isCurrent && !saved.provider.isCurrent(context))) return;
       const items = validateCandidates(result);
-      Object.assign(saved, result, { items, context, source, version, stale: false, manualPending: false });
+      Object.assign(saved, { items, position: result.position ?? saved.position,
+        context, source, version, stale: false, manualPending: false });
       saved.choices = result.choices || new Map(saved.items.map(item => [item.id, saved.choices.get(item.id) || item.options[0].id]));
       render();
     } catch (error) { if (session === saved && request === generation) message(error.message); }
@@ -221,6 +222,8 @@
     if (placement?.container) {
       const container = placement.container, move = () => place(target);
       container.addEventListener('scroll', move); disposals.push(() => container.removeEventListener('scroll', move));
+      placement.eventBus?.on('textlayerrendered', move);
+      disposals.push(() => placement.eventBus?.off('textlayerrendered', move));
     }
     message('正在计算候选…'); place(target);
     try {
@@ -288,6 +291,8 @@
     if (session?.manualPending && session.provider.id === id && session.editor === target) return;
     if (session?.provider.id === id && session.editor === target && valid()) {
       const sameInteraction = request?.interactionId !== undefined && request.interactionId === session.context.request?.interactionId;
+      // Selection synchronization after our own navigation is not a new review request.
+      if (sameInteraction && target.getSelection()?.equalsRange(session.anchor)) { place(target); return; }
       const previousSource = session.context.request?.notice?.source, source = request?.notice?.source;
       const sameSelection = source && previousSource && source.index === previousSource.index
         && source.start === previousSource.start && source.end === previousSource.end;
@@ -313,7 +318,6 @@
         session.editor.revealRangeInCenterIfOutsideViewport(range);
       }
     }
-    place(session.editor);
   }
   async function preview() {
     if (get('expanded').hidden || !get('expanded').open || !valid() || !current()) return;
@@ -337,10 +341,15 @@
     if (!current() || !saved.provider.apply || saved.applying) return;
     saved.applying = true; controls();
     try {
-      const result = await saved.provider.apply({ ...saved, context: { ...saved.context } }, all);
+      // Providers receive candidate data; session lifecycle remains owned here.
+      const result = await saved.provider.apply({ editor: saved.editor, model: saved.model,
+        source: saved.source, version: saved.version, items: saved.items,
+        position: saved.position, choices: saved.choices, context: { ...saved.context } }, all);
       if (session !== saved) return;
       const changed = saved.model.getValue() !== saved.source;
-      Object.assign(saved, result, { applying: true });
+      Object.assign(saved, { items: result.items, choices: result.choices || saved.choices,
+        position: result.position, context: result.context || saved.context,
+        source: saved.model.getValue(), version: saved.model.getVersionId?.() });
       if (changed) saved.needsSave = true;
       Object.assign(saved.context, { source: saved.source, version: saved.version });
       if (saved.context.request) saved.context.request = { ...saved.context.request, snapshot: null };
@@ -379,10 +388,22 @@
     const position = !pdfSide && range ? target.getScrolledVisiblePosition({ lineNumber: range.startLineNumber, column: range.startColumn }) : null;
     const top = Math.max(8, rect?.top || 8), bottom = Math.min(innerHeight - 8, rect?.bottom || innerHeight - 8);
     const fragment = layout?.anchor || noticeAnchor;
+    // Never show a new candidate at the preceding selection's coordinates.
+    panel.style.visibility = pdfSide && current() && !fragment ? 'hidden' : '';
     const anchor = Math.max(top, Math.min(bottom, fragment?.top ?? (rect?.top || 0) + (position?.top ?? 40)));
     const height = panel.getBoundingClientRect().height;
     const above = anchor - height - 8;
-    panel.style.top = `${Math.max(top, Math.min(bottom - height, above >= top ? above : (fragment?.bottom ?? anchor + (position?.height || 20)) + 8))}px`;
+    if (pdfSide && fragment) {
+      const aboveRoom = Math.max(0, Math.min(bottom, fragment.top - 8) - top);
+      const belowTop = Math.max(top, fragment.bottom + 8), belowRoom = Math.max(0, bottom - belowTop);
+      const useAbove = aboveRoom >= height || aboveRoom >= belowRoom && belowRoom < height;
+      const room = useAbove ? aboveRoom : belowRoom;
+      panel.style.maxHeight = `${Math.min(parseFloat(panel.style.maxHeight), room)}px`;
+      panel.style.visibility = room >= 40 ? '' : 'hidden';
+      panel.style.top = `${useAbove ? Math.min(bottom, fragment.top - 8) - Math.min(height, room) : belowTop}px`;
+    } else {
+      panel.style.top = `${Math.max(top, Math.min(bottom - height, above >= top ? above : (fragment?.bottom ?? anchor + (position?.height || 20)) + 8))}px`;
+    }
     panel.style.left = `${Math.max(left, Math.min(right - panel.offsetWidth, fragment?.left ?? left + (position?.left || 0)))}px`;
   }
   async function switchSide() {
@@ -480,21 +501,23 @@
   }
   const viewer = () => readerWindow()?.ReaderUI.getPdfViewer() || window.PdfSelection?.viewer;
   const selection = () => readerWindow()?.PdfSelection || window.PdfSelection;
-  const locator = toolbox.createLocator({}, {
-    document, getPdf: () => viewer()?.pdfDocument, readPageFonts: toolbox.readPageFonts,
+  const fallbackLocator = toolbox.createLocator({}, {
+    document, getPdf: () => viewer()?.pdfDocument,
     isCurrent: pdf => viewer()?.pdfDocument === pdf,
     waitForIdle: () => new Promise(resolve => setTimeout(resolve, 0))
   });
-  function presentation(context) {
+  const getLocator = () => selection()?.locator || fallbackLocator;
+  function presentation(context, item) {
     const reader = readerWindow() || window, source = context.editor?.getDomNode()?.ownerDocument.defaultView || window;
     const split = source !== reader, side = split ? context.request?.side || 'html' : 'pdf';
-    const request = context.request, element = request?.anchorElement, box = request?.anchorBox;
+    const request = context.request;
+    const element = request?.anchorElement, box = request?.anchorBox;
     const rect = element?.isConnected && element.getBoundingClientRect();
-    const anchor = rect && box ? { left: rect.left + box.x * rect.width, top: rect.top + box.y * rect.height,
+    const anchor = item && side === 'pdf' ? getLocator().reviewAnchor(item, context.index) : rect && box ? { left: rect.left + box.x * rect.width, top: rect.top + box.y * rect.height,
       bottom: rect.top + (box.y + box.h) * rect.height } : request?.anchor;
     const destination = side === 'pdf' ? reader : source;
     return { side, switchable: split, switchLabel: side === 'pdf' ? '查看HTML' : '查看PDF', host: destination.ReplacementReview, window: destination,
-      container: viewer()?.container, anchor };
+      container: viewer()?.container, eventBus: viewer()?.eventBus, anchor };
   }
   function comparisonRows(value, compact = true) {
     if (typeof value?.html !== 'string' || typeof value?.pdf !== 'string') return [];
@@ -525,10 +548,6 @@
       && item.font[key] !== item.htmlFont[key]).map(item =>
         `${key === 'italic' ? '斜体' : '粗体'}不一致（HTML ${item.htmlFont[key] ? '是' : '否'} / PDF ${item.font[key] ? '是' : '否'}${key === 'bold' && item.font.scanBoldRatio ? '，扫描估计' : ''}）`))]).join('；');
   }
-  function fontCandidates(index, targets, model) {
-    return formatItems(index, targets).map(item => ({ ...item,
-      range: toolbox.rangeAt(model, index.starts[item.sourceStart], index.ends[item.sourceEnd - 1]) }));
-  }
   const isCurrent = context => context.pdf === viewer()?.pdfDocument;
   async function provide(context) {
     const pdf = context.pdf = viewer()?.pdfDocument;
@@ -542,61 +561,34 @@
       context.index = request.notice.source.index;
       return reviewItems(context.index, context.targets, request.notice, context.model);
     }
-    const full = await (fontEnabled ? locator.indexFonts(pdf) : locator.indexDocument(pdf));
+    const full = await (fontEnabled ? getLocator().indexFonts(pdf) : getLocator().indexDocument(pdf));
     if (context.signal.aborted) return [];
     if (!full || !isCurrent(context)) throw new Error('PDF 已变化，正在等待对照文件就绪。');
-    const index = context.index = locator.editorSourceIndex(context.model);
+    const index = context.index = getLocator().editorSourceIndex(context.model);
     context.targets = [full];
-    locator.prepareSource(index, context.targets, pdf);
+    getLocator().prepareSource(index, context.targets, pdf);
     return reviewItems(index, context.targets, null, context.model);
   }
   function refreshCandidates(context, offset, previous) {
-    // Review is a shrinking list: recheck edited candidates, retain all others.
-    // Only a changed PDF reference needs a new discovery pass (handled by the host).
-    const before = previous.source, after = context.source;
-    const { start, oldEnd, newEnd } = toolbox.changedRange(before, after);
-    const shift = (value, end = false) => value < start || value === start && !end ? value
-      : value >= oldEnd ? value + newEnd - oldEnd : end ? newEnd : start;
-    const oldIndex = context.index?.source === before ? context.index : locator.sourceIndex(before);
-    const index = context.index = locator.editorSourceIndex(context.model, context.targets, oldIndex);
-    const items = [], choices = new Map();
-    for (const candidate of previous.items) {
-      const a = oldIndex.starts[candidate.sourceStart] ?? before.length;
-      const b = oldIndex.ends[candidate.sourceEnd - 1] ?? a;
-      const left = locator.lowerBound(index.starts, shift(a));
-      const right = locator.lowerBound(index.starts, shift(b, true));
-      const touched = a <= oldEnd && b >= start;
-      let updated;
-      if (touched && candidate.comparison && !candidate.font) {
-        const html = index.raw.slice(left, right), pdf = candidate.comparison.pdf;
-        if (toolbox.significantText(html) === toolbox.significantText(pdf)) continue;
-        // Compare only this candidate's revised text to its existing PDF reading.
-        const notice = { source: { start: left, end: right }, html, pdf };
-        const selected = candidate.selection && selectionCandidate(index, notice, context.model);
-        updated = selected ? [selected] : toolbox.reviewCandidates(index, [], notice);
-      } else if (touched && candidate.font) {
-        // Retain format entries only while their original mismatch remains.
-        const text = index.raw.slice(left, right);
-        const htmlFont = index.formats.slice(left, right).find(style => ['italic', 'bold'].some(key =>
-          typeof candidate.font[key] === 'boolean' && style[key] !== candidate.font[key]));
-        if (!text || !htmlFont) continue;
-        updated = [{ ...candidate, id: `font:${left}:${right}`, sourceStart: left, sourceEnd: right, text, htmlFont,
-          formats: undefined,
-          range: toolbox.rangeAt(context.model, shift(a), shift(b, true)) }];
-      } else {
-        updated = [{ ...candidate, sourceStart: left, sourceEnd: right,
-          id: `${candidate.font ? 'font:' : ''}${left}:${right}`,
-          preview: candidate.comparison || candidate.preview,
-          range: candidate.range ? toolbox.rangeAt(context.model, shift(a), shift(b, true)) : undefined,
-          options: candidate.options.map(option => ({ ...option, edits: option.edits.map(edit => ({ ...edit,
-            start: shift(edit.start), end: shift(edit.end, true) })) })) }];
-      }
-      for (const item of updated) {
-        items.push(item); choices.set(item.id, previous.choices.get(candidate.id) || item.options[0].id);
-      }
+    const locator = getLocator(), index = context.index = locator.editorSourceIndex(context.model);
+    locator.prepareSource(index, context.targets, context.pdf);
+    const items = reviewItems(index, context.targets, null, context.model), choices = new Map();
+    // Preserve choices only for unchanged ranges; discover all current differences.
+    const { start, oldEnd, newEnd } = toolbox.changedRange(previous.source, context.source);
+    const oldIndex = previous.context?.index;
+    for (const item of items) {
+      const candidate = oldIndex && previous.items.find(candidate => {
+        const a = oldIndex.starts[candidate.sourceStart], b = oldIndex.ends[candidate.sourceEnd - 1] ?? a;
+        const delta = b <= start ? 0 : a >= oldEnd ? newEnd - oldEnd : null;
+        return delta !== null && a + delta === index.starts[item.sourceStart]
+          && b + delta === (index.ends[item.sourceEnd - 1] ?? index.starts[item.sourceStart])
+          && !!candidate.font === !!item.font;
+      });
+      const choice = candidate && previous.choices.get(candidate.id);
+      choices.set(item.id, item.options.some(option => option.id === choice) ? choice : item.options[0].id);
     }
-    const found = items.findIndex(item => (index.starts[item.sourceEnd] ?? after.length) > offset
-      || (index.starts[item.sourceStart] ?? after.length) >= offset);
+    const found = items.findIndex(item => (index.starts[item.sourceEnd] ?? context.source.length) > offset
+      || (index.starts[item.sourceStart] ?? context.source.length) >= offset);
     return { items, choices, position: found < 0 ? items.length : found };
   }
   function reviewItems(index, targets, notice, model) {
@@ -604,7 +596,8 @@
     const selected = enabled && selectionCandidate(index, notice, model);
     if (selected) text = [...text.filter(item => item.sourceEnd <= selected.sourceStart && item.sourceStart < selected.sourceStart
       || item.sourceStart >= selected.sourceEnd && item.sourceEnd > selected.sourceEnd), selected].sort((a, b) => a.sourceStart - b.sourceStart);
-    const formats = fontCandidates(index, targets, model);
+    const formats = formatItems(index, targets).map(item => ({ ...item,
+      range: toolbox.rangeAt(model, index.starts[item.sourceStart], index.ends[item.sourceEnd - 1]) }));
     const positions = new Map();
     let cursor = 0;
     for (const item of formats) {
@@ -613,7 +606,8 @@
       positions.set(item, nearby && nearby.sourceStart <= item.sourceEnd ? nearby.sourceStart : item.sourceStart);
     }
     const order = item => positions.get(item) ?? item.sourceStart;
-    return [...text, ...formats].sort((a, b) => order(a) - order(b) || Number(!!a.font) - Number(!!b.font));
+    return [...text, ...formats].sort((a, b) => order(a) - order(b) || Number(!!a.font) - Number(!!b.font))
+      .map(item => ({ ...item, pdfSource: { index, start: item.sourceStart, end: item.sourceEnd } }));
   }
   function selectionCandidate(index, notice, model) {
     const source = notice?.source;
@@ -631,65 +625,56 @@
     const ranges = edits.length ? edits : item?.options.flatMap(value => value.edits) || [];
     return { message: item ? item.font ? formatMessage([item]) : '文字不一致' : state.items.length ? '已到末尾，可返回上一条。' : '没有可审阅的差异。',
       comparison: item?.font ? [] : comparisonRows(item?.preview || item?.comparison, !item?.selection),
-      apply: !item?.font,
+      apply: !item?.font || !!edits.length,
       range: item?.range || (ranges.length ? toolbox.rangeAt(state.model, Math.min(...ranges.map(edit => edit.start)), Math.max(...ranges.map(edit => edit.end))) : null),
-      options: [], applyLabel: '替换', advance: false, expanded: false };
+      options: [], applyLabel: item?.font ? '替换格式' : '替换', advance: false, expanded: false };
   }
   function apply(state, all) {
     const item = state.items[state.position];
-    if (!all && item?.font) return state;
-    const edits = (all ? state.items : [item]).flatMap(value => value.options.find(option => option.id === state.choices.get(value.id)).edits);
+    if (all || item?.font) getLocator().prepareSource(state.context.index, state.context.targets, state.context.pdf);
+    const edits = (all ? state.items : [item]).flatMap(value => value.font
+      ? formatItems(state.context.index, state.context.targets).filter(candidate => candidate.sourceStart < value.sourceEnd
+        && candidate.sourceEnd > value.sourceStart).flatMap(candidate => candidate.options[0].edits)
+      : value.options.find(option => option.id === state.choices.get(value.id)).edits);
     const checked = toolbox.validateEdits(state.source, edits);
-    const shift = offset => offset + checked.reduce((sum, edit) => sum + (edit.end <= offset ? edit.text.length - (edit.end - edit.start) : 0), 0);
-    const overlaps = (start, end) => checked.some(edit => edit.start === start || (edit.start < end && edit.end > start)
-      || (edit.start === edit.end && edit.start > start && edit.start < end));
-    // Prepare surviving candidates against the old model before applying the edit.
-    // Conflicting candidates are discarded; independent ranges move by the exact edit delta.
+    const shift = offset => offset + checked.reduce((delta, edit) => delta + (edit.end <= offset
+      ? edit.text.length - (edit.end - edit.start) : 0), 0);
+    const overlaps = (start, end) => checked.some(edit => edit.start === start
+      || edit.start < end && edit.end > start
+      || edit.start === edit.end && edit.start > start && edit.start < end);
+    // Reuse independent candidates; replacing one item must not remap the document.
     const remaining = [];
     for (const [position, candidate] of state.items.entries()) {
-      if ((all && !candidate.font) || candidate === item) continue;
-      if (candidate.options.some(value => value.edits.some(edit => overlaps(edit.start, edit.end)))) continue;
+      if (all || candidate === item || candidate.options.some(option => option.edits.some(edit => overlaps(edit.start, edit.end)))) continue;
       let range;
       if (candidate.range) {
         const start = state.model.getOffsetAt({ lineNumber: candidate.range.startLineNumber, column: candidate.range.startColumn });
         const end = state.model.getOffsetAt({ lineNumber: candidate.range.endLineNumber, column: candidate.range.endColumn });
-        if (overlaps(start, end) && !candidate.font) continue;
+        if (overlaps(start, end)) continue;
         range = { start: shift(start), end: shift(end) };
       }
-      remaining.push({ candidate, range, before: position < state.position,
-        options: candidate.options.map(value => ({ ...value, edits: value.edits.map(edit => ({ ...edit, start: shift(edit.start), end: shift(edit.end) })) })) });
+      remaining.push({ candidate, range, before: position < state.position });
     }
-    toolbox.applyEdits(state.editor, state.model, state.version, state.source, edits);
-    const source = state.model.getValue(), version = state.model.getVersionId?.();
-    const oldIndex = state.context.index?.source === state.source ? state.context.index : locator.sourceIndex(state.source);
-    const index = state.context.index = locator.editorSourceIndex(state.model, state.context.targets, oldIndex);
-    const choices = new Map();
-    state.items = remaining.map(({ candidate, options, range }) => {
-      const updated = { ...candidate, options };
+    toolbox.applyEdits(state.editor, state.model, state.version, state.source, checked);
+    const locator = getLocator(), source = state.model.getValue(), index = locator.editorSourceIndex(state.model, state.context.targets);
+    const oldIndex = state.context.index, choices = new Map();
+    const items = remaining.map(({ candidate, range }) => {
+      const sourceStart = locator.lowerBound(index.starts, shift(oldIndex.starts[candidate.sourceStart] ?? state.source.length));
+      const sourceEnd = locator.lowerBound(index.starts, shift(oldIndex.starts[candidate.sourceEnd] ?? state.source.length));
+      const id = `${candidate.font ? 'font:' : ''}${sourceStart}:${sourceEnd}`;
+      const updated = { ...candidate, id, sourceStart, sourceEnd,
+        options: candidate.options.map(option => ({ ...option,
+          edits: option.edits.map(edit => ({ ...edit, start: shift(edit.start), end: shift(edit.end) })) })) };
       if (range) updated.range = toolbox.rangeAt(state.model, range.start, range.end);
-      if (index) {
-        for (const key of ['sourceStart', 'sourceEnd']) if (candidate[key] !== undefined) {
-          const raw = oldIndex.starts[candidate[key]] ?? state.source.length;
-          updated[key] = locator.lowerBound(index.starts, shift(raw));
-        }
-        const prefix = candidate.font ? 'font:' : '';
-        if (candidate.id === `${prefix}${candidate.sourceStart}:${candidate.sourceEnd}`) {
-          updated.id = `${prefix}${updated.sourceStart}:${updated.sourceEnd}`;
-        }
-        if (candidate.font) updated.text = index.raw.slice(updated.sourceStart, updated.sourceEnd);
-        // The surrounding preview belongs to the previous source; the unchanged
-        // candidate's own comparison remains accurate after independent edits.
-        if (candidate.comparison) updated.preview = candidate.comparison;
-      }
-      choices.set(updated.id, state.choices.get(candidate.id));
-      for (const value of options) toolbox.validateEdits(source, value.edits);
+      if (candidate.font) updated.text = index.raw.slice(sourceStart, sourceEnd);
+      if (candidate.comparison) updated.preview = candidate.comparison;
+      choices.set(id, state.choices.get(candidate.id) || updated.options[0].id);
       return updated;
     });
-    state.choices = choices;
-    state.source = source; state.version = version;
-    state.position = Math.min(remaining.filter(value => value.before).length, Math.max(0, state.items.length - 1));
-    return state;
+    return { items, choices, position: remaining.filter(value => value.before).length,
+      context: { ...state.context, source, index } };
   }
+
   const review = {
     compact: true, content, apply, presentation, isCurrent, provide,
     refreshAfterEdit: refreshCandidates,
@@ -756,18 +741,16 @@
       style.textContent = '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{border-left:2px solid #d58b24;margin-left:-1px;cursor:pointer}';
       doc.head.append(style);
       state = { collection: editor.createDecorationsCollection(), style };
-      const clear = () => { state.collection.clear(); state.source = null; };
+      const clear = () => state.collection.clear();
       const subscriptions = [editor.onDidChangeModel?.(clear), editor.onDidChangeModelContent?.(clear)];
       state.dispose = () => subscriptions.forEach(subscription => subscription?.dispose());
       marks.set(editor, state);
     }
+    if (index) getLocator().prepareSource(index, targets, event.detail.pdf);
     const connections = index ? targets.flatMap(target => (index.connections.get(target) || []).map(item => [item, target])) : [];
     if (enabled && toolbox.monacoAvailable && index) {
-      if (state.source === index && connections.length === state.connections?.length
-        && connections.every(([item, target], i) => item === state.connections[i][0] && target === state.connections[i][1])) return;
       state.collection.set(toolbox.sourceDecorations(index, connections, editor.getModel()));
-      Object.assign(state, { source: index, connections });
-    } else { state.collection.clear(); state.source = null; }
+    } else state.collection.clear();
   }
   window.PdfReviewProvider = {
     readPageFonts: toolbox.readPageFonts,
@@ -850,9 +833,9 @@
         const targets = [...new Set([notice.target?.index, ...(data.targets || [])].filter(Boolean))];
         // Compare the selected PDF layer even before background page mapping
         // has populated the source's connections (including exact text hits).
-        if (notice.target && locator.normalized(index.raw.slice(notice.source.start, notice.source.end)).text
-          === locator.normalized(notice.target.index.raw.slice(notice.target.start, notice.target.end)).text) {
-          locator.rememberConnection(index, notice.source.start, notice.source.end, notice.target.index,
+        if (notice.target && getLocator().normalized(index.raw.slice(notice.source.start, notice.source.end)).text
+          === getLocator().normalized(notice.target.index.raw.slice(notice.target.start, notice.target.end)).text) {
+          getLocator().rememberConnection(index, notice.source.start, notice.source.end, notice.target.index,
             { start: notice.target.start, end: notice.target.end });
         }
         const differences = formatItems(index, targets);

@@ -59,7 +59,7 @@
   cleanup.push(() => detachVisual());
   const status = { state: "waiting-for-pdf", pages: [], matches: 0, differences: [], error: null };
   const api = window.PdfSelection = {
-    status, attachEditor, attachViewer,
+    status, locator: diff, attachEditor, attachViewer,
     highlight: text => select(Array.isArray(text) ? text : [text]),
     clear: () => select([]),
     showReviewPointer(editor, item) {
