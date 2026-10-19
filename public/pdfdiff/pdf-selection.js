@@ -59,9 +59,34 @@
   cleanup.push(() => detachVisual());
   const status = { state: "waiting-for-pdf", pages: [], matches: 0, differences: [], error: null };
   const api = window.PdfSelection = {
-    status, locator: diff, attachEditor, attachViewer,
+    status, attachEditor, attachViewer,
     highlight: text => select(Array.isArray(text) ? text : [text]),
     clear: () => select([]),
+    reviewAnchor(editor, item, index) {
+      const model = editor?.getModel();
+      if (!model || !item || !viewer) return null;
+      index = index?.version === model.getVersionId?.() && index.source === model.getValue()
+        ? index : editorSourceIndex(model);
+      const start = item.sourceStart, end = item.sourceEnd;
+      const entry = { index, start, end, marked: true, text: index.raw.slice(start, end),
+        before: index.raw.slice(Math.max(0, start - 160), start), after: index.raw.slice(end, end + 160) };
+      for (const number of visiblePages()) {
+        const div = viewer.getPageView(number - 1)?.div;
+        if (!div) continue;
+        const result = nativeBoxes(div, [], [entry]);
+        if (!result.focus) continue;
+        const page = div.getBoundingClientRect(), viewport = viewer.container.getBoundingClientRect();
+        const sx = page.width / div.offsetWidth, sy = page.height / div.offsetHeight;
+        for (const box of result.boxes) {
+          const left = page.left + (div.clientLeft + box.x * div.clientWidth) * sx;
+          const top = page.top + (div.clientTop + box.y * div.clientHeight) * sy;
+          const bottom = top + box.h * div.clientHeight * sy;
+          if (top < viewport.top || bottom > viewport.bottom) continue;
+          return { anchor: { left, top, bottom } };
+        }
+      }
+      return null;
+    },
     showReviewPointer(editor, item) {
       api.clearReviewPointer();
       const model = editor?.getModel();
