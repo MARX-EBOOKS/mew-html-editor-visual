@@ -1,17 +1,15 @@
 (() => {
   "use strict";
-  window.PdfLocalTextDiff = { localTextDiff };
+  window.PdfLocalTextDiff = { localTextDiff, changedRange, appendPart };
   // A Levenshtein wavefront skips equal runs; traceback grows with edits, not file area.
   function localTextDiff(left, right, details = false, limit = Infinity) {
     const originalA = [...left], originalB = [...right];
-    let start = 0, endA = originalA.length, endB = originalB.length;
-    while (start < endA && start < endB && originalA[start] === originalB[start]) start++;
-    while (endA > start && endB > start && originalA[endA - 1] === originalB[endB - 1]) { endA--; endB--; }
+    const { start, oldEnd: endA, newEnd: endB } = changedRange(originalA, originalB);
     const a = originalA.slice(start, endA), b = originalB.slice(start, endB), n = a.length, m = b.length;
     const bound = Math.min(limit, details ? 128 : Infinity, Math.max(n, m));
     let previous = new Int32Array([0]), distance = 0;
     const waves = details ? [{ row: previous, trace: null }] : null;
-    for (; distance < bound && previous[n - m + distance] !== n;) {
+    for (; distance < bound && previous[n - m + distance] !== n; ) {
       const score = ++distance, row = new Int32Array(2 * score + 1).fill(-1);
       const trace = details ? new Uint8Array(row.length) : null;
       for (let k = -score; k <= score; k++) {
@@ -19,9 +17,15 @@
         let x = -1, move = 0, candidate = previous[at];
         if (candidate >= 0 && candidate < n && candidate - k < m) x = candidate + 1;
         candidate = previous[at - 1];
-        if (candidate >= 0 && candidate < n && candidate - k + 1 <= m && candidate + 1 > x) { x = candidate + 1; move = 1; }
+        if (candidate >= 0 && candidate < n && candidate - k + 1 <= m && candidate + 1 > x) {
+          x = candidate + 1;
+          move = 1;
+        }
         candidate = previous[at + 1];
-        if (candidate >= 0 && candidate <= n && candidate - k - 1 < m && candidate > x) { x = candidate; move = 2; }
+        if (candidate >= 0 && candidate <= n && candidate - k - 1 < m && candidate > x) {
+          x = candidate;
+          move = 2;
+        }
         if (x < 0) continue;
         let y = x - k;
         while (x < n && y < m && a[x] === b[y]) { x++; y++; }
@@ -43,15 +47,25 @@
       reversed.push({ html: move === 2 ? '' : a[previousX], pdf: move === 1 ? '' : b[previousY], changed: true });
       x = previousX; k = previousK;
     }
-    const parts = [], append = (html, pdf, changed) => {
-      if (!html && !pdf) return;
-      const last = parts.at(-1);
-      if (last?.changed === changed) { last.html += html; last.pdf += pdf; }
-      else parts.push({ html, pdf, changed });
-    };
-    append(originalA.slice(0, start).join(''), originalB.slice(0, start).join(''), false);
-    for (const part of reversed.reverse()) append(part.html, part.pdf, part.changed);
-    append(originalA.slice(endA).join(''), originalB.slice(endB).join(''), false);
+    const parts = [];
+    appendPart(parts, originalA.slice(0, start).join(''), originalB.slice(0, start).join(''), false);
+    for (const part of reversed.reverse()) appendPart(parts, part.html, part.pdf, part.changed);
+    appendPart(parts, originalA.slice(endA).join(''), originalB.slice(endB).join(''), false);
     return { distance, parts };
+  }
+  function changedRange(before, after) {
+    let start = 0, oldEnd = before.length, newEnd = after.length;
+    while (start < oldEnd && start < newEnd && before[start] === after[start]) start++;
+    while (oldEnd > start && newEnd > start && before[oldEnd - 1] === after[newEnd - 1]) { oldEnd--; newEnd--; }
+    return { start, oldEnd, newEnd };
+  }
+  function appendPart(parts, html, pdf, changed) {
+    if (!html && !pdf) return;
+    const last = parts.at(-1);
+    if (last?.changed === changed) {
+      last.html += html;
+      last.pdf += pdf;
+    }
+    else parts.push({ html, pdf, changed });
   }
 })();
