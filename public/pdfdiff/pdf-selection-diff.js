@@ -372,6 +372,9 @@
     if (applied === false) throw new Error('编辑器未能应用替换');
   }
   function textDiff(left, right, details = false, limit = Infinity) {
+    // A bounded match cannot span more extra characters than its edit limit.
+    if (Number.isFinite(limit) && Math.abs(Array.from(left).length - Array.from(right).length) > limit)
+      return { distance: limit + 1, parts: details ? [{ html: left, pdf: right, changed: true }] : undefined };
     if (computer) {
       try { return monacoTextDiff(left, right, details); }
       catch { /* Use the local engine for this comparison; retry Monaco on the next one. */ }

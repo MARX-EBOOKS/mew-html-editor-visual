@@ -134,7 +134,8 @@ window.PdfReviewReady = (async () => {
     message('正在自动重新计算差异…' + (saved.needsSave ? ' 内容已修改，请保存。' : '')); controls();
     if (!composing) manualTimer = setTimeout(() => void refreshAfterEdit(saved), 300);
   }
-  async function refreshAfterEdit(saved) {
+  function refreshAfterEdit(saved) {
+    return saved.refreshTask ||= (async () => {
     if (session !== saved || !saved.manualPending || composing || saved.editor.getModel() !== saved.model) return;
     const request = ++generation, source = saved.model.getValue(), version = saved.model.getVersionId?.();
     const context = { ...saved.context, source, version, request: { ...saved.context.request, snapshot: null } };
@@ -152,9 +153,10 @@ window.PdfReviewReady = (async () => {
       saved.choices = result.choices || new Map(saved.items.map(item => [item.id, saved.choices.get(item.id) || item.options[0].id]));
       render();
     } catch (error) { if (session === saved && request === generation) message(error.message); }
+    })().finally(() => { saved.refreshTask = null; });
   }
   function controls() {
-    const item = current(), ready = valid() && !!item && !session.applying && !session.saving;
+    const item = current(), ready = (valid() || session?.manualPending && !composing) && !!item && !session.applying && !session.saving && !session.waitingApply;
     for (const name of ['apply', 'advance', 'all']) get(name).disabled = !ready || !session?.provider.apply || session.content?.apply === false;
     get('save').textContent = session?.manualSave ? '保存修改' : '替换&保存';
     get('save').disabled = !workspace()?.save || !!session?.saving || !!session?.applying || !(session?.manualSave
@@ -337,8 +339,10 @@ window.PdfReviewReady = (async () => {
     } catch (error) { if (session === saved && request === generation) { clearPreview(); message(error.message); } }
   }
   async function apply(all, advance = false) {
-    if (!valid()) { stale(); return; }
     const saved = session;
+    if (saved?.waitingApply) return;
+    if (saved?.manualPending && !composing) await (saved.waitingApply = refreshAfterEdit(saved)).finally(() => { saved.waitingApply = null; });
+    if (session !== saved || !valid()) return;
     if (!current() || !saved.provider.apply || saved.applying) return;
     saved.applying = true; controls();
     try {
@@ -644,40 +648,13 @@ window.PdfReviewReady = (async () => {
     const checked = toolbox.validateEdits(state.source, edits);
     const shift = offset => offset + checked.reduce((delta, edit) => delta + (edit.end <= offset
       ? edit.text.length - (edit.end - edit.start) : 0), 0);
-    const overlaps = (start, end) => checked.some(edit => edit.start === start
-      || edit.start < end && edit.end > start
-      || edit.start === edit.end && edit.start > start && edit.start < end);
-    // Format edits are recalculated on application, so they can survive text replacements.
-    const remaining = [];
-    for (const [position, candidate] of state.items.entries()) {
-      if (selected.includes(candidate) || (!candidate.font || item.font) && candidate.options.some(option => option.edits.some(edit => overlaps(edit.start, edit.end)))) continue;
-      let range;
-      if (candidate.range) {
-        const start = state.model.getOffsetAt({ lineNumber: candidate.range.startLineNumber, column: candidate.range.startColumn });
-        const end = state.model.getOffsetAt({ lineNumber: candidate.range.endLineNumber, column: candidate.range.endColumn });
-        if ((!candidate.font || item.font) && overlaps(start, end)) continue;
-        range = { start: shift(start), end: shift(end) };
-      }
-      remaining.push({ candidate, range, before: position < state.position });
-    }
     toolbox.applyEdits(state.editor, state.model, state.version, state.source, checked);
-    const locator = getLocator(), source = state.model.getValue(), index = locator.editorSourceIndex(state.model, state.context.targets);
-    const oldIndex = state.context.index, choices = new Map();
-    const items = remaining.map(({ candidate, range }) => {
-      const sourceStart = locator.lowerBound(index.starts, shift(oldIndex.starts[candidate.sourceStart] ?? state.source.length));
-      const sourceEnd = locator.lowerBound(index.starts, shift(oldIndex.starts[candidate.sourceEnd] ?? state.source.length));
-      const id = `${candidate.font ? 'font:' : ''}${sourceStart}:${sourceEnd}`;
-      const updated = { ...candidate, id, sourceStart, sourceEnd,
-        options: candidate.options.map(option => ({ ...option,
-          edits: option.edits.map(edit => ({ ...edit, start: shift(edit.start), end: shift(edit.end) })) })) };
-      if (range) updated.range = toolbox.rangeAt(state.model, range.start, range.end);
-      if (candidate.font) updated.text = index.raw.slice(sourceStart, sourceEnd);
-      if (candidate.comparison) updated.preview = candidate.comparison;
-      choices.set(id, state.choices.get(candidate.id) || updated.options[0].id);
-      return updated;
-    });
-    return { items, choices, position: remaining.filter(value => value.before).length,
-      context: { ...state.context, source, index } };
+    const source = state.model.getValue();
+    const context = { ...state.context, source, version: state.model.getVersionId?.(),
+      request: { ...state.context.request, snapshot: null } };
+    // Regenerate ranges and expected text from the new source, including overlapping format changes.
+    return { ...refreshCandidates(context, shift(state.context.index.starts[item.sourceStart] ?? state.source.length), state),
+      context };
   }
 
   const review = {
@@ -773,8 +750,13 @@ window.PdfReviewReady = (async () => {
     return decorations;
   }
   function measureHighlights(div, index, hits, focusHit) {
+    // PDF text-layer geometry only. Source highlights use Monaco in onSources().
     const { parts } = index, { lowerBound } = fallbackLocator;
     const boxes = [], notices = [];
+    const union = (a, b) => {
+      const left = Math.min(a.left, b.left), top = Math.min(a.top, b.top), right = Math.max(a.right, b.right);
+      return { left, top, right, width: right - left, height: Math.max(a.top + a.height, b.top + b.height) - top };
+    };
     let focus = null;
     for (const hit of hits) {
       let noticeBox = null;
@@ -793,12 +775,9 @@ window.PdfReviewReady = (async () => {
           // Range rects can include both a span and its text, or adjoining spans.
           if (previous && !previous.caret && !box.caret && Math.abs(previous.top - box.top) < .5 && Math.abs(previous.height - box.height) < .5
             && box.left >= previous.left && box.left <= previous.right + .5) {
-            boxes[boxes.length - 1] = { left: previous.left, top: previous.top, width: Math.max(previous.right, box.right) - previous.left,
-              height: previous.height, right: Math.max(previous.right, box.right) };
+            boxes[boxes.length - 1] = union(previous, box);
           } else boxes.push(box);
-          noticeBox = noticeBox ? { left: Math.min(noticeBox.left, box.left), top: Math.min(noticeBox.top, box.top),
-            width: Math.max(noticeBox.right, box.right) - Math.min(noticeBox.left, box.left), right: Math.max(noticeBox.right, box.right),
-            height: Math.max(noticeBox.top + noticeBox.height, box.top + box.height) - Math.min(noticeBox.top, box.top) } : box;
+          noticeBox = noticeBox ? union(noticeBox, box) : box;
           if (hit === focusHit && !focus) focus = box;
         }
       }
@@ -872,9 +851,8 @@ window.PdfReviewReady = (async () => {
     }
     if (index) getLocator().prepareSource(index, targets, event.detail.pdf);
     const connections = index ? targets.flatMap(target => (index.connections.get(target) || []).map(item => [item, target])) : [];
-    if (enabled && index) {
-      state.collection.set(sourceDecorations(index, connections, editor.getModel()));
-    } else state.collection.clear();
+    // Monaco owns rendering, hit ranges and cleanup of all source highlights.
+    state.collection.set(enabled && index ? sourceDecorations(index, connections, editor.getModel()) : []);
   }
   window.PdfReviewProvider = {
     createLocator: toolbox.createLocator,
@@ -920,7 +898,7 @@ window.PdfReviewReady = (async () => {
     const notice = mapping?.target ? { ...mapping,
       fonts: toolbox.fontRuns(mapping.target.index, mapping.target.start, mapping.target.end),
       text: mapping.target.index.raw.slice(mapping.target.start, mapping.target.end) } : mapping;
-    if (!notice) return;
+    if (!notice || notice.source && model && notice.source.index.source !== model.getValue()) return;
     const textDifference = !!changed;
     if (!textDifference) {
       if (notice.source && model && notice.source.index.source === model.getValue()) {
