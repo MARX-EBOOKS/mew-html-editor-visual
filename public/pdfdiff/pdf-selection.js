@@ -489,15 +489,19 @@
       if (!document.getSelection()?.isCollapsed) selectFromPdf();
       else if (contexts.length || reviewPointer) schedule();
     });
-    const measurement = document.createRange(), elementFonts = new Map();
+    const measurement = document.createRange(), elementFonts = new Map(), nodes = [];
     let raw = "", previous = null, previousElement = null, node;
     while ((node = walker.nextNode())) {
-      if (!node.textContent) continue;
+      if (!node.textContent.trim()) continue;
       let element = node;
       while (element !== layer && !spanSet.has(element)) element = element.parentNode;
       if (element === layer) element = node.parentElement;
       measurement.selectNodeContents(node);
       const box = measurement.getBoundingClientRect();
+      nodes.push({ node, element, box });
+    }
+    for (const { node, element, box } of nodes.sort((a, b) =>
+      Math.round((a.box.top - b.box.top) / Math.max(a.box.height, b.box.height)) || a.box.left - b.box.left)) {
       if (previous && element !== previousElement) {
         const lineBreak = Math.abs(box.top - previous.top) > Math.min(box.height, previous.height) * 0.5;
         if (lineBreak) raw += "\n";

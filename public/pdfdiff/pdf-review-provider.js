@@ -132,7 +132,7 @@ window.PdfReviewReady = (async () => {
     if (event) { saved.needsSave = true; saved.manualSave = true; }
     clearTimeout(manualTimer);
     message('正在自动重新计算差异…' + (saved.needsSave ? ' 内容已修改，请保存。' : '')); controls();
-    if (!composing) manualTimer = setTimeout(() => void refreshAfterEdit(saved), 300);
+    if (!composing) manualTimer = setTimeout(() => void refreshAfterEdit(saved), 0);
   }
   function refreshAfterEdit(saved) {
     return saved.refreshTask ||= (async () => {
@@ -151,7 +151,7 @@ window.PdfReviewReady = (async () => {
       Object.assign(saved, { items, position: result.position ?? saved.position,
         context, source, version, stale: false, manualPending: false });
       saved.choices = result.choices || new Map(saved.items.map(item => [item.id, saved.choices.get(item.id) || item.options[0].id]));
-      render();
+      render(true);
     } catch (error) { if (session === saved && request === generation) message(error.message); }
     })().finally(() => { saved.refreshTask = null; });
   }
@@ -215,7 +215,7 @@ window.PdfReviewReady = (async () => {
     const compositionStart = target.onDidCompositionStart?.(() => { composing = true; clearTimeout(manualTimer); });
     const compositionEnd = target.onDidCompositionEnd?.(() => {
       composing = false;
-      if (session?.manualPending) { const saved = session; manualTimer = setTimeout(() => void refreshAfterEdit(saved), 300); }
+      if (session?.manualPending) { const saved = session; manualTimer = setTimeout(() => void refreshAfterEdit(saved), 0); }
     });
     disposals.push(() => compositionStart?.dispose(), () => compositionEnd?.dispose());
     // Keep an opening session so typing while extraction runs schedules a fresh calculation.
@@ -316,7 +316,7 @@ window.PdfReviewReady = (async () => {
     session.anchor = range;
     if (range) {
       session.anchorOffset = session.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
-      if (!keep) {
+      if (!preserveSelection) {
         session.editor.setSelection(range);
         session.editor.revealRangeInCenterIfOutsideViewport(range);
       }
@@ -541,7 +541,10 @@ window.PdfReviewReady = (async () => {
           ...parts.slice(first, last + 1), ...(suffix ? [{ html: suffix, pdf: suffix, changed: false }] : [])];
       }
     }
-    return ['html', 'pdf'].map(side => ({ label: side.toUpperCase(), parts: parts.map(part => ({ text: part[side], changed: part.changed })) }));
+    return ['html', 'pdf'].map(side => ({ label: side.toUpperCase(), parts: parts.map(part => {
+      const missing = part.changed && !part[side].trim() && !!part[side === 'html' ? 'pdf' : 'html'].trim();
+      return { text: missing ? '' : part[side], changed: part.changed };
+    }) }));
   }
   function formatItems(index, targets = []) {
     if (!fontEnabled) return [];
@@ -560,19 +563,18 @@ window.PdfReviewReady = (async () => {
     if (!pdf) throw new Error('请先在对照阅读器中打开 PDF。');
     const request = context.request;
     if (request?.pdf === pdf && request.notice?.source?.index.source === context.source) {
-      // Selection already supplies confirmed mappings and the rendered layer's
-      // fonts. Do not block its popup on font analysis of the entire volume.
       context.targets = [...new Set([request.notice.target?.index, ...(request.targets || [])].filter(Boolean))];
       context.index = request.notice.source.index;
       return reviewItems(context.index, context.targets, request.notice, context.model);
     }
-    const full = await (fontEnabled ? getLocator().indexFonts(pdf) : getLocator().indexDocument(pdf));
+    const full = await getLocator().indexDocument(pdf);
     if (context.signal.aborted) return [];
     if (!full || !isCurrent(context)) throw new Error('PDF 已变化，正在等待对照文件就绪。');
     const index = context.index = getLocator().editorSourceIndex(context.model);
     context.targets = [full];
     getLocator().prepareSource(index, context.targets, pdf);
-    return reviewItems(index, context.targets, null, context.model);
+    if (fontEnabled) await getLocator().indexFonts(pdf, index, context.signal);
+    return context.signal.aborted || !isCurrent(context) ? [] : reviewItems(index, context.targets, null, context.model);
   }
   function refreshCandidates(context, offset, previous) {
     const locator = getLocator(), index = context.index = locator.editorSourceIndex(context.model);
@@ -708,7 +710,6 @@ window.PdfReviewReady = (async () => {
     isEnabled: () => selection()?.selectionEnabled === true,
     setEnabled(value) { selection()?.setSelectionHighlight(value); }
   })];
-  // Diff decorations and click ranges belong to review; selection supplies prepared mappings.
   function sourceDecorations(index, connections, model) {
     const decorations = [], seen = new Set();
     const add = (segments, prefix, options) => {
@@ -725,8 +726,8 @@ window.PdfReviewReady = (async () => {
       let cursor = connection.start;
       for (const part of toolbox.connectionDiff(index, target, connection)?.parts || []) {
         const end = cursor + part.html.length;
-        if (part.changed && toolbox.significantText(part.html) !== toolbox.significantText(part.pdf)) {
-          const escape = text => JSON.stringify(text).replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
+        if (part.changed && toolbox.significantText(part.html, index, cursor) !== toolbox.significantText(part.pdf)) {
+          const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
           const segments = cursor === end ? [toolbox.insertionSegment(index, cursor)] : toolbox.sourceSegments(index, cursor, end);
           add(segments, '', {
             description: 'PDF OCR text difference',
@@ -760,17 +761,18 @@ window.PdfReviewReady = (async () => {
     let focus = null;
     for (const hit of hits) {
       let noticeBox = null;
-      // One DOM Range covers the selection across spans; measure layout once.
-      const first = parts[Math.min(parts.length - 1, lowerBound(parts, hit.start + 1, part => part.end))];
-      const last = hit.start === hit.end ? first : parts[lowerBound(parts, hit.end, part => part.end)];
-      if (first && last && (first.start < hit.end || hit.start === hit.end)) {
+      const caret = hit.start === hit.end || !!hit.difference && !index.raw.slice(hit.start, hit.end).trim();
+      // Reading order can differ from DOM order; measure the indexed text nodes.
+      const first = Math.min(parts.length - 1, lowerBound(parts, hit.start + 1, part => part.end));
+      const last = caret ? first : lowerBound(parts, hit.end, part => part.end);
+      for (const part of parts.slice(first, last + 1)) {
         const range = document.createRange();
-        range.setStart(first.node, Math.max(0, hit.start - first.start));
-        range.setEnd(last.node, Math.max(0, Math.min(last.node.length, hit.end - last.start)));
-        for (let box of range.getClientRects()) if ((box.width || hit.start === hit.end) && box.height) {
+        range.setStart(part.node, Math.max(0, hit.start - part.start));
+        range.setEnd(part.node, Math.max(0, Math.min(part.node.length, (caret ? hit.start : hit.end) - part.start)));
+        for (let box of range.getClientRects()) if ((box.width || caret) && box.height) {
           // Collapsed ranges can have a fractional width in Chromium. Always
           // draw HTML-only text as a visible caret at the PDF insertion point.
-          if (hit.start === hit.end) box = { left: box.left, right: box.left + 2, top: box.top, width: 2, height: box.height, caret: true };
+          if (caret) box = { left: box.left, right: box.left + 2, top: box.top, width: 2, height: box.height, caret: true };
           const previous = boxes.at(-1);
           // Range rects can include both a span and its text, or adjoining spans.
           if (previous && !previous.caret && !box.caret && Math.abs(previous.top - box.top) < .5 && Math.abs(previous.height - box.height) < .5
@@ -845,14 +847,16 @@ window.PdfReviewReady = (async () => {
       style.textContent = '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{border-left:2px solid #d58b24;margin-left:-1px;cursor:pointer}';
       doc.head.append(style);
       state = { collection: editor.createDecorationsCollection(), style };
-      const subscription = editor.onDidChangeModel?.(() => state.collection.clear());
+      const subscription = editor.onDidChangeModel?.(() => { state.key = null; state.collection.clear(); });
       state.dispose = () => subscription?.dispose();
       marks.set(editor, state);
     }
     if (index) getLocator().prepareSource(index, targets, event.detail.pdf);
     const connections = index ? targets.flatMap(target => (index.connections.get(target) || []).map(item => [item, target])) : [];
-    // Monaco owns rendering, hit ranges and cleanup of all source highlights.
+    const key = [index, enabled, editor.getModel(), ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
+    if (state.key?.length === key.length && key.every((value, i) => value === state.key[i])) return;
     state.collection.set(enabled && index ? sourceDecorations(index, connections, editor.getModel()) : []);
+    state.key = key;
   }
   window.PdfReviewProvider = {
     createLocator: toolbox.createLocator,

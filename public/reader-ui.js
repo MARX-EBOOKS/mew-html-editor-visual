@@ -580,7 +580,11 @@
     const oldTask = pdfLoadingTask; pdfLoadingTask = null; await oldTask?.destroy();
     if (!url || revision !== pdfRevision) return;
     try {
-      const task = pdfjs.getDocument({ url, cMapUrl: "/vendor/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/vendor/pdfjs/standard_fonts/", wasmUrl: "/vendor/pdfjs/wasm/" });
+      // Range loading keeps large scans off the network/worker until needed.
+      // Streaming must also be disabled for disableAutoFetch to take effect.
+      const task = pdfjs.getDocument({ url, disableAutoFetch: true, disableStream: true,
+        rangeChunkSize: 256 * 1024,
+        cMapUrl: "/vendor/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/vendor/pdfjs/standard_fonts/", wasmUrl: "/vendor/pdfjs/wasm/" });
       pdfLoadingTask = task;
       const document = await task.promise;
       if (revision !== pdfRevision || task !== pdfLoadingTask) return document.destroy();

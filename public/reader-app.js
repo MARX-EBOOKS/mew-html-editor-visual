@@ -729,8 +729,11 @@
       }
     });
     try {
-      if (state.workspaceMode !== "reader") await ensureEditorRuntime();
-      state.config = await api("/api/reader/config");
+      const [config] = await Promise.all([
+        api("/api/reader/config"),
+        state.workspaceMode !== "reader" ? ensureEditorRuntime() : Promise.resolve()
+      ]);
+      state.config = config;
       const requestedMode = initialParams.get("mode");
       if (requestedMode === "source" || requestedMode === "visual") state.mode = requestedMode;
       if (state.workspaceMode === "reader" && !state.syncSession) state.syncSession = newSession();
