@@ -1,6 +1,8 @@
 // Shared popup renderer and current-file candidate navigation. Providers own content and actions.
-(() => {
+window.PdfReviewReady = (async () => {
   'use strict';
+  if (!window.PdfSelectionDiff) await import('./pdf-selection-diff.js');
+  await window.PdfSelectionDiff.loadMonaco();
   const toolbox = window.PdfSelectionDiff, providers = new Map();
   let session = null, generation = 0, pending = null, view = null, previewModels = [], disposals = [], lastRequest = null;
   let widget = null, widgetEditor = null, noticeAnchor = null, noticeLayout = null, manualTimer = null, composing = false;
@@ -19,7 +21,6 @@
     if (!fields.has(name)) fields.set(name, panel.querySelector(`[data-${name}]`));
     return fields.get(name);
   };
-  function editor() { return window.mewWorkbench?.editor || window.readerMonaco?.editor; }
   function workspace() {
     const owner = session?.editor.getDomNode()?.ownerDocument.defaultView;
     return owner?.mewWorkbench || owner?.readerMonaco;
@@ -164,7 +165,7 @@
     get('position').textContent = session ? `${Math.min(session.position + 1, session.items.length)} / ${session.items.length}` : '';
   }
   async function open(id, suppliedEditor, focusId, fallbackPosition = 0, requestData = null) {
-    const provider = providers.get(id), target = suppliedEditor || editor();
+    const provider = providers.get(id), target = suppliedEditor || window.mewWorkbench?.editor || window.readerMonaco?.editor;
     const placement = provider?.presentation?.({ editor: target, request: requestData });
     if (placement?.host && placement.host !== window.ReplacementReview) return placement.host.open(id, target, focusId, fallbackPosition, requestData);
     close(false);
@@ -263,8 +264,8 @@
         input.onchange = () => { session.choices.set(item.id, value.id); render(); };
         label.append(input, document.createTextNode(value.label)); get('options').append(label);
       }
-      selectField(preserveSelection); session.provider.onSelect?.(item, session.context);
-    }
+      selectField(preserveSelection); session.provider.onSelect?.(item, session.context, session.items);
+    } else session.provider.onClose?.(session.context);
     void preview(); place(session.editor);
   }
   function comparison(rows = []) {
@@ -394,13 +395,15 @@
     const height = panel.getBoundingClientRect().height;
     const above = anchor - height - 8;
     if (pdfSide && fragment) {
-      const aboveRoom = Math.max(0, Math.min(bottom, fragment.top - 8) - top);
-      const belowTop = Math.max(top, fragment.bottom + 8), belowRoom = Math.max(0, bottom - belowTop);
-      const useAbove = aboveRoom >= height || aboveRoom >= belowRoom && belowRoom < height;
-      const room = useAbove ? aboveRoom : belowRoom;
-      panel.style.maxHeight = `${Math.min(parseFloat(panel.style.maxHeight), room)}px`;
-      panel.style.visibility = room >= 40 ? '' : 'hidden';
-      panel.style.top = `${useAbove ? Math.min(bottom, fragment.top - 8) - Math.min(height, room) : belowTop}px`;
+      const placement = layout.window?.PdfSelection?.popupPlacement(fragment, { left, right, top, bottom }, panel.offsetWidth, height)
+        || { left: Math.max(left, Math.min(right - panel.offsetWidth, fragment.left)), height,
+          top: Math.max(top, Math.min(bottom - height, above >= top ? above : fragment.bottom + 8)) };
+      panel.style.visibility = '';
+      if (placement) {
+        panel.style.maxHeight = `${placement.height}px`;
+        panel.style.top = `${placement.top}px`; panel.style.left = `${placement.left}px`;
+      }
+      return;
     } else {
       panel.style.top = `${Math.max(top, Math.min(bottom - height, above >= top ? above : (fragment?.bottom ?? anchor + (position?.height || 20)) + 8))}px`;
     }
@@ -485,7 +488,6 @@
     }
   };
   updateMenu();
-})();
 
 // PDF comparison is one review provider. Selection synchronization remains independent.
 (() => {
@@ -521,7 +523,7 @@
   }
   function comparisonRows(value, compact = true) {
     if (typeof value?.html !== 'string' || typeof value?.pdf !== 'string') return [];
-    let parts = toolbox.monacoDiff(value.html, value.pdf)?.parts || [{ ...value, changed: false }];
+    let parts = toolbox.textDiff(value.html, value.pdf, true)?.parts || [{ ...value, changed: false }];
     if (compact) {
       const first = parts.findIndex(part => part.changed), last = parts.findLastIndex(part => part.changed);
       if (first >= 0) {
@@ -552,7 +554,6 @@
   async function provide(context) {
     const pdf = context.pdf = viewer()?.pdfDocument;
     if (!pdf) throw new Error('请先在对照阅读器中打开 PDF。');
-    if (!toolbox.monacoAvailable && !await toolbox.loadMonaco()) throw new Error('Monaco diff 未能加载，请刷新页面重试。');
     const request = context.request;
     if (request?.pdf === pdf && request.notice?.source?.index.source === context.source) {
       // Selection already supplies confirmed mappings and the rendered layer's
@@ -629,28 +630,32 @@
       range: item?.range || (ranges.length ? toolbox.rangeAt(state.model, Math.min(...ranges.map(edit => edit.start)), Math.max(...ranges.map(edit => edit.end))) : null),
       options: [], applyLabel: item?.font ? '替换格式' : '替换', advance: false, expanded: false };
   }
+  const pattern = value => JSON.stringify([!!value.font, ...(value.font ? [value.text,
+    ...['italic', 'bold'].flatMap(key => [value.htmlFont[key], value.font[key]])] : [value.comparison?.html, value.comparison?.pdf])]);
   function apply(state, all) {
     const item = state.items[state.position];
     if (all || item?.font) getLocator().prepareSource(state.context.index, state.context.targets, state.context.pdf);
-    const edits = (all ? state.items : [item]).flatMap(value => value.font
-      ? formatItems(state.context.index, state.context.targets).filter(candidate => candidate.sourceStart < value.sourceEnd
-        && candidate.sourceEnd > value.sourceStart).flatMap(candidate => candidate.options[0].edits)
-      : value.options.find(option => option.id === state.choices.get(value.id)).edits);
+    const selected = all ? state.items : state.items.filter(value => pattern(value) === pattern(item));
+    const edits = selected.filter(value => !value.font)
+      .flatMap(value => value.options.find(option => option.id === state.choices.get(value.id)).edits);
+    if (selected.some(value => value.font)) edits.push(...formatItems(state.context.index, state.context.targets)
+      .filter(candidate => selected.some(value => value.font && candidate.sourceStart < value.sourceEnd
+        && candidate.sourceEnd > value.sourceStart)).flatMap(candidate => candidate.options[0].edits));
     const checked = toolbox.validateEdits(state.source, edits);
     const shift = offset => offset + checked.reduce((delta, edit) => delta + (edit.end <= offset
       ? edit.text.length - (edit.end - edit.start) : 0), 0);
     const overlaps = (start, end) => checked.some(edit => edit.start === start
       || edit.start < end && edit.end > start
       || edit.start === edit.end && edit.start > start && edit.start < end);
-    // Reuse independent candidates; replacing one item must not remap the document.
+    // Format edits are recalculated on application, so they can survive text replacements.
     const remaining = [];
     for (const [position, candidate] of state.items.entries()) {
-      if (all || candidate === item || candidate.options.some(option => option.edits.some(edit => overlaps(edit.start, edit.end)))) continue;
+      if (selected.includes(candidate) || (!candidate.font || item.font) && candidate.options.some(option => option.edits.some(edit => overlaps(edit.start, edit.end)))) continue;
       let range;
       if (candidate.range) {
         const start = state.model.getOffsetAt({ lineNumber: candidate.range.startLineNumber, column: candidate.range.startColumn });
         const end = state.model.getOffsetAt({ lineNumber: candidate.range.endLineNumber, column: candidate.range.endColumn });
-        if (overlaps(start, end)) continue;
+        if ((!candidate.font || item.font) && overlaps(start, end)) continue;
         range = { start: shift(start), end: shift(end) };
       }
       remaining.push({ candidate, range, before: position < state.position });
@@ -678,7 +683,7 @@
   const review = {
     compact: true, content, apply, presentation, isCurrent, provide,
     refreshAfterEdit: refreshCandidates,
-    onSelect(item, context) { selection()?.showReviewPointer(context.editor, item); },
+    onSelect(item, context, items) { selection()?.showReviewPointer(context.editor, items.filter(value => pattern(value) === pattern(item))); },
     onClose(context) { selection()?.clearReviewPointer(context.editor); }
   };
   const unregister = [host.register({
@@ -727,7 +732,127 @@
     setEnabled(value) { selection()?.setSelectionHighlight(value); }
   })];
   // Diff decorations and click ranges belong to review; selection supplies prepared mappings.
-  const marks = new Map(), pageFontItems = new WeakMap();
+  function sourceDecorations(index, connections, model) {
+    const decorations = [], seen = new Set();
+    const add = (segments, prefix, options) => {
+      for (const { start, end } of segments) {
+        const key = `${prefix}${start}:${end}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        decorations.push({ range: toolbox.rangeAt(model, start, end), options: {
+          linesDecorationsClassName: 'mew-ocr-diff-line', stickiness: 1, ...options
+        } });
+      }
+    };
+    for (const [connection, target] of connections) {
+      let cursor = connection.start;
+      for (const part of toolbox.connectionDiff(index, target, connection)?.parts || []) {
+        const end = cursor + part.html.length;
+        if (part.changed && toolbox.significantText(part.html) !== toolbox.significantText(part.pdf)) {
+          const escape = text => JSON.stringify(text).replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
+          const segments = cursor === end ? [toolbox.insertionSegment(index, cursor)] : toolbox.sourceSegments(index, cursor, end);
+          add(segments, '', {
+            description: 'PDF OCR text difference',
+            inlineClassName: part.html.length ? 'mew-ocr-diff-text' : undefined,
+            beforeContentClassName: part.html.length ? undefined : 'mew-ocr-diff-insert',
+            hoverMessage: { value: 'HTML: ' + escape(part.html) + '\n\nOCR: ' + escape(part.pdf), isTrusted: false },
+            linesDecorationsTooltip: 'Text differs from PDF OCR'
+          });
+        }
+        cursor = end;
+      }
+    }
+    for (const item of toolbox.formatDifferences(index, connections)) {
+      const formats = item.formats || [item];
+      add(toolbox.sourceSegments(index, item.sourceStart, item.sourceEnd), 'font:', {
+        description: 'PDF font difference', inlineClassName: 'mew-ocr-diff-text mew-font-diff-text',
+        hoverMessage: { value: `HTML ${toolbox.fontSummary(formats.map(value => value.htmlFont))}\n\nPDF ${toolbox.fontSummary(formats.map(value => value.font))}`, isTrusted: false },
+        linesDecorationsTooltip: '粗体／斜体与 PDF 不一致'
+      });
+    }
+    return decorations;
+  }
+  function measureHighlights(div, index, hits, focusHit) {
+    const { parts } = index, { lowerBound } = fallbackLocator;
+    const boxes = [], notices = [];
+    let focus = null;
+    for (const hit of hits) {
+      let noticeBox = null;
+      // One DOM Range covers the selection across spans; measure layout once.
+      const first = parts[Math.min(parts.length - 1, lowerBound(parts, hit.start + 1, part => part.end))];
+      const last = hit.start === hit.end ? first : parts[lowerBound(parts, hit.end, part => part.end)];
+      if (first && last && (first.start < hit.end || hit.start === hit.end)) {
+        const range = document.createRange();
+        range.setStart(first.node, Math.max(0, hit.start - first.start));
+        range.setEnd(last.node, Math.max(0, Math.min(last.node.length, hit.end - last.start)));
+        for (let box of range.getClientRects()) if ((box.width || hit.start === hit.end) && box.height) {
+          // Collapsed ranges can have a fractional width in Chromium. Always
+          // draw HTML-only text as a visible caret at the PDF insertion point.
+          if (hit.start === hit.end) box = { left: box.left, right: box.left + 2, top: box.top, width: 2, height: box.height, caret: true };
+          const previous = boxes.at(-1);
+          // Range rects can include both a span and its text, or adjoining spans.
+          if (previous && !previous.caret && !box.caret && Math.abs(previous.top - box.top) < .5 && Math.abs(previous.height - box.height) < .5
+            && box.left >= previous.left && box.left <= previous.right + .5) {
+            boxes[boxes.length - 1] = { left: previous.left, top: previous.top, width: Math.max(previous.right, box.right) - previous.left,
+              height: previous.height, right: Math.max(previous.right, box.right) };
+          } else boxes.push(box);
+          noticeBox = noticeBox ? { left: Math.min(noticeBox.left, box.left), top: Math.min(noticeBox.top, box.top),
+            width: Math.max(noticeBox.right, box.right) - Math.min(noticeBox.left, box.left), right: Math.max(noticeBox.right, box.right),
+            height: Math.max(noticeBox.top + noticeBox.height, box.top + box.height) - Math.min(noticeBox.top, box.top) } : box;
+          if (hit === focusHit && !focus) focus = box;
+        }
+      }
+      if (noticeBox) notices.push({ box: noticeBox, ...hit.difference, target: { index, start: hit.start, end: hit.end }, source: hit.source });
+    }
+    const pageBox = div.getBoundingClientRect();
+    const sx = pageBox.width / div.offsetWidth, sy = pageBox.height / div.offsetHeight;
+    const relative = box => ({
+      x: (box.left - pageBox.left - div.clientLeft * sx) / (div.clientWidth * sx),
+      y: (box.top - pageBox.top - div.clientTop * sy) / (div.clientHeight * sy),
+      w: box.width / (div.clientWidth * sx), h: box.height / (div.clientHeight * sy), caret: !!box.caret
+    });
+    return { count: hits.length, focus: focus && relative(focus), boxes: boxes.map(relative), notices: notices.map(notice => ({ ...notice, box: relative(notice.box) })) };
+  }
+  const selectionAreas = new Map(), pointerAreas = new Map();
+  function paintHighlight(div, boxes, color, pointer = false) {
+    const store = pointer ? pointerAreas : selectionAreas;
+    const previous = store.get(div);
+    if (previous?.boxes === boxes && previous.node.isConnected) return previous;
+    if (!boxes.length) {
+      previous?.node.remove();
+      store.delete(div);
+      return;
+    }
+    const overlay = previous?.node.isConnected ? previous.node : document.createElement("div");
+    if (!overlay.isConnected) {
+      overlay.className = !pointer ? "mew-pdf-selection-highlight" : "mew-pdf-selection-highlight mew-pdf-review-pointer";
+      overlay.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden;contain:strict;";
+      div.append(overlay);
+    }
+    for (let i = 0; i < boxes.length; i++) {
+      const box = boxes[i];
+      let mark = overlay.children[i];
+      if (!mark) {
+        mark = document.createElement("div");
+        mark.setAttribute("aria-hidden", "true");
+        overlay.append(mark);
+      }
+      mark.style.cssText = `position:absolute;left:${box.x * 100}%;top:${box.y * 100}%;width:${box.w * 100}%;height:${box.h * 100}%;border-radius:2px;pointer-events:none;`;
+      mark.style.background = box.caret ? '#d58b24' : color;
+      mark.classList.toggle('mew-pdf-selection-caret', box.caret);
+    }
+    while (overlay.children.length > boxes.length) overlay.lastElementChild.remove();
+    const painted = { node: overlay, boxes };
+    store.set(div, painted);
+    return painted;
+  }
+  function clearHighlights(pointer = false, visible = new Set()) {
+    const areas = pointer ? pointerAreas : selectionAreas;
+    for (const [div, painted] of areas) if (!visible.has(div)) {
+      painted.node.remove(); areas.delete(div);
+    }
+  }
+  const marks = new Map();
   function clearMarks() {
     for (const state of marks.values()) { state.collection.clear(); state.dispose?.(); state.style.remove(); }
     marks.clear();
@@ -741,51 +866,22 @@
       style.textContent = '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{border-left:2px solid #d58b24;margin-left:-1px;cursor:pointer}';
       doc.head.append(style);
       state = { collection: editor.createDecorationsCollection(), style };
-      const clear = () => state.collection.clear();
-      const subscriptions = [editor.onDidChangeModel?.(clear), editor.onDidChangeModelContent?.(clear)];
-      state.dispose = () => subscriptions.forEach(subscription => subscription?.dispose());
+      const subscription = editor.onDidChangeModel?.(() => state.collection.clear());
+      state.dispose = () => subscription?.dispose();
       marks.set(editor, state);
     }
     if (index) getLocator().prepareSource(index, targets, event.detail.pdf);
     const connections = index ? targets.flatMap(target => (index.connections.get(target) || []).map(item => [item, target])) : [];
-    if (enabled && toolbox.monacoAvailable && index) {
-      state.collection.set(toolbox.sourceDecorations(index, connections, editor.getModel()));
+    if (enabled && index) {
+      state.collection.set(sourceDecorations(index, connections, editor.getModel()));
     } else state.collection.clear();
   }
   window.PdfReviewProvider = {
+    createLocator: toolbox.createLocator,
+    measureHighlights, paintHighlight, clearHighlights,
+    getHighlight: div => selectionAreas.get(div),
     readPageFonts: toolbox.readPageFonts,
-    layerFonts(view, layer, refresh) {
-      const page = view?.pdfPage, objects = page?.commonObjs, fonts = new Map();
-      if (page?.getTextContent && !pageFontItems.has(page)) {
-        pageFontItems.set(page, { items: [], fonts: new Map() });
-        toolbox.readPageText(page).then(async content => {
-          const items = content.items.filter(item => item.str?.length);
-          const fonts = await toolbox.readPageFonts(page, items);
-          pageFontItems.set(page, { items, fonts }); refresh();
-        }).catch(() => pageFontItems.delete(page));
-      }
-      const data = pageFontItems.get(page), items = data?.items || [];
-      const spans = (view?._textHighlighter?.textDivs || [...layer.querySelectorAll('span[role="presentation"]')]).filter(span => span.textContent);
-      const names = new Map();
-      if (spans.length === items.length && spans.every((span, i) => span.textContent === items[i].str))
-        spans.forEach((span, i) => names.set(span, items[i]));
-      return element => {
-        const css = element.ownerDocument.defaultView.getComputedStyle(element), family = css.fontFamily;
-        const item = names.get(element);
-        const observed = item && toolbox.textItemFont(data?.fonts, item);
-        if (observed) return observed;
-        const id = item?.fontName || element.dataset?.fontName;
-        const key = `${id}:${family}:${css.fontStyle}:${css.fontWeight}`;
-        if (!fonts.has(key)) {
-          const font = id && objects?.has(id) ? objects.get(id) : objects && [...objects].map(([, value]) => value)
-            .find(value => value.loadedName && family.includes(value.loadedName));
-          const style = data?.fonts.get(id) || toolbox.fontStyle(font, family, css);
-          fonts.set(key, page?.getTextContent && !data?.fonts.has(id)
-            ? { ...style, bold: null, italic: null, reason: '字体渲染模式检查中' } : style);
-        }
-        return fonts.get(key);
-      };
-    },
+    layerFonts: toolbox.layerFonts,
     selectionRange(editor, event, range) {
       // A text drag owns its full range, even when it ends on a diff marker.
       if (!event?.lineRange && !range.isEmpty?.()) return null;
@@ -810,7 +906,6 @@
     if (!enabled && !fontEnabled) return;
     const data = event.detail, editor = data.editor, model = editor?.getModel();
     const request = ++differenceRequest, version = model?.getVersionId?.();
-    if (!toolbox.monacoAvailable && !await toolbox.loadMonaco()) return;
     if (request !== differenceRequest || editor?.getModel() !== model || model?.getVersionId?.() !== version) return;
     const readerHost = listeningWindow?.ReplacementReview;
     const destination = ['pdf-ocr', 'pdf-font'].some(id => readerHost?.isOpenFor(id, editor)) ? readerHost
@@ -820,7 +915,7 @@
       && dismissed.range === editor?.getSelection()?.toString() && dismissed.interaction === data.interactionId) return;
     dismissed = null;
     const changed = data.notices.find(value => typeof value.html === 'string' && typeof value.pdf === 'string'
-      && toolbox.monacoDiff(value.html, value.pdf)?.parts.some(part => part.changed));
+      && toolbox.textDiff(value.html, value.pdf, true)?.parts.some(part => part.changed));
     const mapping = changed || data.notices.find(value => value.source) || data.notices[0];
     const notice = mapping?.target ? { ...mapping,
       fonts: toolbox.fontRuns(mapping.target.index, mapping.target.start, mapping.target.end),
@@ -883,5 +978,8 @@
       previousApi = api; previousEnabled = state; host.refreshMenu();
     }
   }, 500);
-  window.addEventListener('pagehide', () => { clearInterval(poll); clearMarks(); window.removeEventListener('pdf-selection-sources', onSources); window.removeEventListener('pdf-selection-reset', clearMarks); listeningWindow?.removeEventListener('pdf-selection-difference', onDifference); window.removeEventListener('replacement-review-closed', onClose); unregister.forEach(dispose => dispose()); });
+  window.addEventListener('pagehide', () => { clearInterval(poll); clearHighlights(); clearHighlights(true); clearMarks(); window.removeEventListener('pdf-selection-sources', onSources); window.removeEventListener('pdf-selection-reset', clearMarks); listeningWindow?.removeEventListener('pdf-selection-difference', onDifference); window.removeEventListener('replacement-review-closed', onClose); unregister.forEach(dispose => dispose()); });
+})();
+
+  return window.PdfReviewProvider;
 })();

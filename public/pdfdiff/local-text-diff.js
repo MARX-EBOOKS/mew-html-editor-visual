@@ -1,8 +1,8 @@
 (() => {
   "use strict";
-  window.PdfLocalTextDiff = { localTextDiff, changedRange, appendPart };
+  window.PdfLocalTextDiff = { textDiff, changedRange, appendPart };
   // A Levenshtein wavefront skips equal runs; traceback grows with edits, not file area.
-  function localTextDiff(left, right, details = false, limit = Infinity) {
+  function textDiff(left, right, details = false, limit = Infinity) {
     const originalA = [...left], originalB = [...right];
     const { start, oldEnd: endA, newEnd: endB } = changedRange(originalA, originalB);
     const a = originalA.slice(start, endA), b = originalB.slice(start, endB), n = a.length, m = b.length;

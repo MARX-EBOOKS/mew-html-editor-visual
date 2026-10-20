@@ -1,42 +1,24 @@
 (() => {
   "use strict";
-  const { localTextDiff, changedRange, appendPart } = window.PdfLocalTextDiff;
   let computer = null, monacoTask = null;
-  const fontPages = new WeakMap(), pageTexts = new WeakMap();
+  const pageTexts = new WeakMap();
+  const fontPages = new WeakMap(), pageFontItems = new WeakMap();
   window.PdfSelectionDiff = {
-    localTextDiff, textDiff, sourceDecorations, createLocator, fontStyle, fontRuns, fontSummary, formatDifferences, readPageFonts, readPageText, textItemFont,
-    textEdits, validateEdits, previewEdits, applyEdits, rangeAt, reviewCandidates, significantText, changedRange,
+    textDiff, connectionDiff, sourceSegments, insertionSegment, createLocator, layerFonts, fontStyle, fontRuns, fontSummary, formatDifferences, readPageFonts, readPageText, textItemFont,
+    textEdits, fontEdits, validateEdits, previewEdits, applyEdits, rangeAt, reviewCandidates, significantText, changedRange,
     get monacoAvailable() { return !!computer; },
-    monacoDiff: (left, right) => textDiff(left, right, true, Infinity, true),
     useMonaco(value) { computer = value; },
-    loadMonaco() {
+    async loadMonaco() {
+      if (!window.PdfLocalTextDiff) await import('./local-text-diff.js');
       if (computer) return Promise.resolve(true);
       return monacoTask ||= import("/monaco/esm/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.js")
         .then(({ DefaultLinesDiffComputer }) => {
-          computer ||= new DefaultLinesDiffComputer();
+          computer = new DefaultLinesDiffComputer();
           return true;
-        })
-        .catch(() => {
-          monacoTask = null;
-          return false;
-        });
+        }).catch(() => false);
     }
   };
-  function readPageText(page) {
-    if (!pageTexts.has(page)) pageTexts.set(page, Promise.resolve().then(() => page.getTextContent())
-      .catch(error => {
-        pageTexts.delete(page);
-        throw error;
-      }));
-    return pageTexts.get(page);
-  }
-
-  function significantText(text) { return text.replace(/[\s\-\u00ad\u2010\u2011]/g, ''); }
-  function connectionDiff(source, target, connection, monacoOnly = true) {
-    return connection.editorDiff ||= textDiff(source.raw.slice(connection.start, connection.end),
-      target.raw.slice(connection.targetStart, connection.targetEnd), true, Infinity, monacoOnly);
-  }
-  // Generated PDF.js CSS families can hide intrinsic bold/italic faces.
+  // 粗体／斜体：字体读取、区间归并、摘要、替换编辑与差异比较。
   function fontStyle(font, fallback = '', css = {}) {
     const name = font?.name || fallback;
     // Tesseract placeholder flags do not describe the recognized text.
@@ -75,10 +57,10 @@
       const fonts = new Map(), textFonts = new Set();
       let letters = 0, boldLetters = 0;
       for (const item of items) {
-        const id = item.fontName;
-        if (!fonts.has(id)) {
-          const font = id && page.commonObjs?.has(id) ? page.commonObjs.get(id) : null;
-          const style = fontStyle(font, id || '');
+        let style = fonts.get(item.fontName);
+        if (!style) {
+          const id = item.fontName, font = id && page.commonObjs?.has(id) ? page.commonObjs.get(id) : null;
+          style = fontStyle(font, id || '');
           if (failed) {
             style.bold = style.italic = null;
             style.reason = '字体读取失败';
@@ -90,7 +72,7 @@
           }
           fonts.set(id, style);
         }
-        const count = item.str?.replace(/\s/g, '').length || 0, style = fonts.get(id);
+        const count = item.str?.replace(/\s/g, '').length || 0;
         if (count) textFonts.add(style);
         letters += count;
         if (style.bold === true) boldLetters += count;
@@ -123,54 +105,67 @@
     return runs;
   }
   function fontSummary(runs) {
-    const state = key => {
+    const states = [], reasons = [...new Set(runs.map(run => run.reason).filter(Boolean))];
+    for (const key of ['italic', 'bold']) {
       const values = new Set(runs.map(run => run[key]));
-      return !values.size || values.has(null) ? '未知' : values.size > 1 ? '混合' : values.has(true) ? '是' : '否';
-    };
-    const reasons = [...new Set(runs.map(run => run.reason).filter(Boolean))];
-    return `斜体：${state('italic')}；粗体：${state('bold')}` + (reasons.length ? `（${reasons.join('；')}）` : '');
+      const state = !values.size || values.has(null) ? '未知' : values.size > 1 ? '混合' : values.has(true) ? '是' : '否';
+      states.push(`${key === 'italic' ? '斜体' : '粗体'}：${state}`);
+    }
+    return states.join('；') + (reasons.length ? `（${reasons.join('；')}）` : '');
   }
-  // Merge nearby changes within a line; never bridge correctly styled words.
-  function mergeCandidates(index, items) {
-    const merged = [];
-    for (const item of items.sort((a, b) => a.sourceStart - b.sourceStart || a.sourceEnd - b.sourceEnd)) {
-      const previous = merged.at(-1), gap = previous && index.raw.slice(previous.sourceEnd, item.sourceStart);
-      if (!previous || item.sourceStart < previous.sourceEnd || /[\r\n]/.test(gap)
-        || (!item.comparison && gap.trim() && !['italic', 'bold'].some(key =>
-          typeof previous.font[key] === 'boolean' && item.font[key] === previous.font[key]
-          && index.formats.slice(previous.sourceEnd, item.sourceStart).every((style, i) =>
-            /\s/u.test(gap[i]) || (style && style[key] !== previous.font[key]))))
-        || (/\s/u.test(gap) && /[\p{L}\p{N}]/u.test(gap))) {
-        merged.push(item);
-        continue;
-      }
-      previous.sourceEnd = item.sourceEnd;
-      previous.id = `${item.comparison ? '' : 'font:'}${previous.sourceStart}:${previous.sourceEnd}`;
-      previous.options[0].edits.push(...item.options[0].edits);
-      if (item.comparison) {
-        previous.comparison = { html: index.raw.slice(previous.sourceStart, previous.sourceEnd),
-          pdf: previous.comparison.pdf + gap + item.comparison.pdf };
-        previous.previewStart = Math.min(previous.previewStart, item.previewStart);
-        previous.previewEnd = Math.max(previous.previewEnd, item.previewEnd);
-        previous.preview = { html: index.raw.slice(previous.previewStart, previous.previewEnd),
-          pdf: index.raw.slice(previous.previewStart, previous.sourceStart) + previous.comparison.pdf
-            + index.raw.slice(previous.sourceEnd, previous.previewEnd) };
-      } else {
-        previous.formats = [...(previous.formats || [{ font: previous.font, htmlFont: previous.htmlFont }]),
-          ...(item.formats || [{ font: item.font, htmlFont: item.htmlFont }])];
-        previous.text = index.raw.slice(previous.sourceStart, previous.sourceEnd);
+  function fontEdits(index, start, end, font) {
+    const original = index.formats[start], keys = ['italic', 'bold'];
+    const changes = keys.filter(key => typeof font[key] === 'boolean' && font[key] !== original[key]);
+    if (!changes.length) return [];
+    const tags = (original.tags || []).filter(tag => changes.some(key =>
+      typeof tag[key] === 'boolean' && tag[key] !== font[key])).sort((a, b) => b.openStart - a.openStart);
+    if (tags.some(tag => tag.closeStart === undefined || !['i', 'em', 'b', 'strong', 'span'].includes(tag.name))) return [];
+    let a = index.starts[start], b = index.ends[end - 1], text = index.source.slice(a, b);
+    for (const key of keys) {
+      const desired = typeof font[key] === 'boolean' ? font[key] : original[key];
+      if (desired && (changes.includes(key) || tags.some(tag => tag[key] === true))) {
+        const pattern = key === 'italic' ? 'i|em' : 'b|strong';
+        // Extend a nearby wrapper rather than adding another pair of tags.
+        // Removed wrappers keep their own boundary handling below.
+        const nearby = !tags.length && changes.length === 1;
+        let left = nearby && new RegExp(`</(${pattern})>([ \\t]*)$`, 'i').exec(index.source.slice(0, a));
+        if (left && !index.formats[start - left[2].length - 1]?.tags.some(tag =>
+          tag.closeEnd === a - left[2].length && tag[key] === true
+          && tag.opening.toLowerCase() === `<${tag.name}>`
+          && keys.every(other => other === key || tag[other] === null || tag[other] === original[other]))) left = null;
+        const name = left?.[1] || (key === 'italic' ? 'i' : 'b');
+        const right = nearby && new RegExp(`^([ \\t]*)<(${left ? name : pattern})>`, 'i').exec(index.source.slice(b));
+        const wrapper = left?.[1] || right?.[2] || name;
+        if (left) a -= left[0].length;
+        if (right) b += right[0].length;
+        text = (left ? left[2] : `<${wrapper}>`) + text + (right ? right[1] : `</${wrapper}>`);
       }
     }
-    return merged;
+    // Delete a whole wrapper, or move its closing/opening tag to the selection.
+    for (const tag of tags) {
+      const before = index.source.slice(tag.openEnd, a), after = index.source.slice(b, tag.closeStart);
+      if (!index.raw.slice(tag.rawStart, start).trim()) { a = tag.openStart; text = before + text; }
+      else {
+        const space = before.match(/[ \t]*$/)[0];
+        a -= space.length; text = tag.closing + space + text;
+      }
+      if (!index.raw.slice(end, tag.rawEnd).trim()) { b = tag.closeEnd; text += after; }
+      else {
+        const space = after.match(/^[ \t]*/)[0];
+        b += space.length; text += space + tag.opening;
+      }
+    }
+    if (changes.some(key => !font[key]) && !tags.length) return [];
+    return [{ start: a, end: b, expected: index.source.slice(a, b), text }];
   }
   // Compare formatting only where unchanged text confirms character correspondence.
   function formatDifferences(index, connections) {
     if (!index.formats) return [];
-    const items = [], seen = new Set(), runsByTarget = new Map();
+    const items = new Map(), runsByTarget = new Map();
     for (const [connection, target] of connections) {
       if (!runsByTarget.has(target)) runsByTarget.set(target, fontRuns(target));
       const runs = runsByTarget.get(target);
-      const diff = connectionDiff(index, target, connection, false);
+      const diff = connectionDiff(index, target, connection);
       let left = connection.start, right = connection.targetStart;
       for (const part of diff?.parts || []) {
         if (!part.changed) for (const font of runs) {
@@ -182,47 +177,12 @@
             const htmlFont = index.formats[start];
             let stop = start + 1;
             while (stop < end && index.formats[stop] === htmlFont) stop++;
-            const changes = htmlFont ? [['italic', 'i', 'i|em'], ['bold', 'b', 'b|strong']]
-              .filter(([key]) => typeof font[key] === 'boolean' && font[key] !== htmlFont[key]) : [];
-            if (changes.length) {
+            const differs = htmlFont && ['italic', 'bold'].some(key => typeof font[key] === 'boolean' && font[key] !== htmlFont[key]);
+            if (differs) {
               const text = index.raw.slice(start, stop), a = start + (text.match(/^\s*/)?.[0].length || 0),
                 b = stop - (text.match(/\s*$/)?.[0].length || 0), id = `font:${a}:${b}`;
-              if (a < b && !seen.has(id)) {
-                seen.add(id);
-                let start = index.starts[a], end = index.ends[b - 1], replacement = index.source.slice(start, end);
-                let supported = true;
-                for (const [key, tag, pattern] of changes) {
-                  if (font[key]) {
-                    const left = new RegExp(`</(${pattern})>(\\s*)$`, 'i').exec(index.source.slice(0, start));
-                    const right = new RegExp(`^(\\s*)<(${left ? left[1] : pattern})>`, 'i').exec(index.source.slice(end));
-                    if (left) start -= left[0].length;
-                    if (right) end += right[0].length;
-                    const name = left?.[1] || right?.[2] || tag;
-                    replacement = (left ? left[2] : `<${name}>`) + replacement + (right ? right[1] : `</${name}>`);
-                    continue;
-                  }
-                  const opening = new RegExp(`(<(${pattern})>)[^<>]*$`, 'i').exec(index.source.slice(0, start));
-                  const closing = opening && new RegExp(`^[^<>]*?(</${opening[2]}>)`, 'i').exec(index.source.slice(end));
-                  if (!closing) {
-                    supported = false;
-                    break;
-                  }
-                  if (opening.index + opening[1].length === start) start -= opening[1].length;
-                  else {
-                    const space = /\s*$/.exec(index.source.slice(0, start))[0];
-                    start -= space.length;
-                    replacement = closing[1] + space + replacement;
-                  }
-                  if (closing[0] === closing[1]) end += closing[1].length;
-                  else {
-                    const space = /^\s*/.exec(index.source.slice(end))[0];
-                    end += space.length;
-                    replacement += space + opening[1];
-                  }
-                }
-                items.push({ id, sourceStart: a, sourceEnd: b, text: index.raw.slice(a, b), font, htmlFont,
-                  options: [{ id: 'format', edits: supported ? [{ start, end, text: replacement, expected: index.source.slice(start, end) }] : [] }] });
-              }
+              if (a < b && !items.has(id)) items.set(id, { sourceStart: a, sourceEnd: b, font, htmlFont,
+                formats: [{ font, htmlFont }] });
             }
             start = stop;
           }
@@ -231,7 +191,80 @@
         right += part.pdf.length;
       }
     }
-    return mergeCandidates(index, items);
+    // Merge adjacent format changes, or bridge punctuation with the same mismatch.
+    const merged = [];
+    for (const item of [...items.values()].sort((a, b) => a.sourceStart - b.sourceStart || a.sourceEnd - b.sourceEnd)) {
+      const previous = merged.at(-1), gap = previous && index.raw.slice(previous.sourceEnd, item.sourceStart);
+      const joins = previous && item.sourceStart >= previous.sourceEnd && !/[\r\n]/.test(gap)
+        && previous.htmlFont.tags === item.htmlFont.tags
+        && ['italic', 'bold'].every(key => previous.font[key] === item.font[key] && previous.htmlFont[key] === item.htmlFont[key])
+        && (!gap.trim() || !(/\s/u.test(gap) && /[\p{L}\p{N}]/u.test(gap)) && ['italic', 'bold'].some(key =>
+          typeof previous.font[key] === 'boolean'
+          && index.formats.slice(previous.sourceEnd, item.sourceStart).every((style, i) =>
+            /\s/u.test(gap[i]) || (style && style[key] !== previous.font[key]))));
+      if (!joins) { merged.push(item); continue; }
+      previous.sourceEnd = item.sourceEnd;
+      previous.formats.push(...item.formats);
+    }
+    return merged.map(item => ({ ...item, id: `font:${item.sourceStart}:${item.sourceEnd}`,
+      text: index.raw.slice(item.sourceStart, item.sourceEnd),
+      options: [{ id: 'format', edits: fontEdits(index, item.sourceStart, item.sourceEnd, item.font) }] }));
+  }
+  function htmlFontDefinition(name, text, rawStart, openStart) {
+    const style = /\bstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(text);
+    const declarations = style ? style[1] ?? style[2] : '';
+    const italic = /(?:^|;)\s*font-style\s*:\s*([^;!]+)/i.exec(declarations)?.[1].trim();
+    const bold = /(?:^|;)\s*font-weight\s*:\s*([^;!]+)/i.exec(declarations)?.[1].trim();
+    const definition = { name, opening: text, rawStart, openStart, openEnd: openStart + text.length,
+      italic: italic && /^(normal|italic|oblique)\b/i.test(italic) ? !/^normal$/i.test(italic) : /^(i|em)$/.test(name) ? true : null,
+      bold: bold && /^(normal|bold|[1-9]00)$/i.test(bold) ? /bold/i.test(bold) || Number(bold) >= 600 : /^(b|strong)$/.test(name) ? true : null };
+    return definition;
+  }
+  function layerFonts(view, layer, refresh) {
+    const page = view?.pdfPage, objects = page?.commonObjs, fonts = new Map();
+    if (page?.getTextContent && !pageFontItems.has(page)) {
+      pageFontItems.set(page, { items: [], fonts: new Map() });
+      readPageText(page).then(async content => {
+        const items = content.items.filter(item => item.str?.length);
+        const fonts = await readPageFonts(page, items);
+        pageFontItems.set(page, { items, fonts }); refresh();
+      }).catch(() => pageFontItems.delete(page));
+    }
+    const data = pageFontItems.get(page), items = data?.items || [];
+    const spans = (view?._textHighlighter?.textDivs || [...layer.querySelectorAll('span[role="presentation"]')]).filter(span => span.textContent);
+    const names = new Map();
+    if (spans.length === items.length && spans.every((span, i) => span.textContent === items[i].str))
+      spans.forEach((span, i) => names.set(span, items[i]));
+    return element => {
+      const css = element.ownerDocument.defaultView.getComputedStyle(element), family = css.fontFamily;
+      const item = names.get(element);
+      const observed = item && textItemFont(data?.fonts, item);
+      if (observed) return observed;
+      const id = item?.fontName || element.dataset?.fontName;
+      const key = `${id}:${family}:${css.fontStyle}:${css.fontWeight}`;
+      if (!fonts.has(key)) {
+        const font = id && objects?.has(id) ? objects.get(id) : objects && [...objects].map(([, value]) => value)
+          .find(value => value.loadedName && family.includes(value.loadedName));
+        const style = data?.fonts.get(id) || fontStyle(font, family, css);
+        fonts.set(key, page?.getTextContent && !data?.fonts.has(id)
+          ? { ...style, bold: null, italic: null, reason: '字体渲染模式检查中' } : style);
+      }
+      return fonts.get(key);
+    };
+  }
+  function readPageText(page) {
+    if (!pageTexts.has(page)) pageTexts.set(page, Promise.resolve().then(() => page.getTextContent())
+      .catch(error => {
+        pageTexts.delete(page);
+        throw error;
+      }));
+    return pageTexts.get(page);
+  }
+
+  function significantText(text) { return text.replace(/[\s\-\u00ad\u2010\u2011]/g, ''); }
+  function connectionDiff(source, target, connection) {
+    return connection.editorDiff ||= textDiff(source.raw.slice(connection.start, connection.end),
+      target.raw.slice(connection.targetStart, connection.targetEnd), true);
   }
   function reviewCandidates(index, targets = [], notice = null) {
     const items = [], seen = new Map();
@@ -277,9 +310,9 @@
     for (const target of targets.filter(Boolean)) for (const connection of index.connections.get(target) || [])
       add(connection.start, connectionDiff(index, target, connection)?.parts, target.raw, connection.targetStart);
     if (notice?.source && index.raw.slice(notice.source.start, notice.source.end) === notice.html) {
-      add(notice.source.start, textDiff(notice.html, notice.pdf, true, Infinity, true)?.parts);
+      add(notice.source.start, textDiff(notice.html, notice.pdf, true)?.parts);
     }
-    return mergeCandidates(index, items);
+    return items.sort((a, b) => a.sourceStart - b.sourceStart || a.sourceEnd - b.sourceEnd);
   }
   function rangeAt(model, start, end) {
     const a = model.getPositionAt(start), b = model.getPositionAt(end);
@@ -338,108 +371,59 @@
     editor.pushUndoStop?.();
     if (applied === false) throw new Error('编辑器未能应用替换');
   }
-  function textDiff(left, right, details = false, limit = Infinity, monacoOnly = false) {
-    if (left === right) return monacoOnly
-      ? (computer ? { parts: left ? [{ html: left, pdf: right, changed: false }] : [] } : null)
-      : { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
-    if (details && computer) {
-      try {
-        const result = computer.computeDiff(left.split("\n"), right.split("\n"), {
-          ignoreTrimWhitespace: false, maxComputationTimeMs: 50,
-          computeMoves: false, extendToSubwords: false
-        });
-        if (result.hitTimeout) throw new Error("Monaco diff timed out");
-        if (monacoOnly) {
-          // Wrapping can split matching prose across Monaco anchors; align it together.
-          const precise = localTextDiff(left, right, true, 128);
-          if (precise.distance <= 128) return { parts: precise.parts };
-        }
-        const offsets = text => {
-          const starts = [0];
-          for (let i = 0; i < text.length; i++) if (text[i] === "\n") starts.push(i + 1);
-          return (line, column) => starts[line - 1] + column - 1;
-        };
-        const offsetA = offsets(left), offsetB = offsets(right), parts = [];
-        let a = 0, b = 0;
-        const append = (html, pdf, changed) => {
-          if (!changed && html !== pdf) throw new Error("Incomplete Monaco ranges");
-          // Refine changed runs that absorb matching text between Monaco anchors.
-          const precise = changed && monacoOnly && localTextDiff(html, pdf, true, 128);
-          if (precise && precise.distance <= 128)
-            for (const part of precise.parts) appendPart(parts, part.html, part.pdf, part.changed);
-          else appendPart(parts, html, pdf, changed);
-        };
-        const ranges = [];
-        for (const change of result.changes) {
-          if (!change.innerChanges?.length) throw new Error("Missing Monaco character ranges");
-          for (const { originalRange: x, modifiedRange: y } of change.innerChanges) {
-            const startA = offsetA(x.startLineNumber, x.startColumn), endA = offsetA(x.endLineNumber, x.endColumn);
-            const startB = offsetB(y.startLineNumber, y.startColumn), endB = offsetB(y.endLineNumber, y.endColumn);
-            if (![startA, endA, startB, endB].every(Number.isInteger) || startA < a || startB < b
-              || endA < startA || endB < startB || endA > left.length || endB > right.length) throw new Error("Invalid Monaco ranges");
-            const previous = ranges.at(-1), gapA = left.slice(a, startA), gapB = right.slice(b, startB);
-            // Join changes across blank lines so refinement can recover matching headings.
-            if (monacoOnly && previous && gapA === gapB && /^\s*$/.test(gapA)) {
-              previous.endA = endA; previous.endB = endB;
-            } else ranges.push({ startA, endA, startB, endB });
-            a = endA; b = endB;
-          }
-        }
-        a = 0; b = 0;
-        for (const { startA, endA, startB, endB } of ranges) {
-          append(left.slice(a, startA), right.slice(b, startB), false);
-          append(left.slice(startA, endA), right.slice(startB, endB), true);
-          a = endA; b = endB;
-        }
-        append(left.slice(a), right.slice(b), false);
-        if (monacoOnly) return { parts };
-        const { distance } = localTextDiff(left, right, false, Math.min(limit, 128));
-        if (distance > Math.min(limit, 128)) return localTextDiff(left, right, details, limit);
-        return { distance, parts };
-      } catch { /* Failed or incomplete mappings use local traceback. */ }
+  function textDiff(left, right, details = false, limit = Infinity) {
+    if (computer) {
+      try { return monacoTextDiff(left, right, details); }
+      catch { /* Use the local engine for this comparison; retry Monaco on the next one. */ }
     }
-    return monacoOnly ? null : localTextDiff(left, right, details, limit);
+    return window.PdfLocalTextDiff.textDiff(left, right, details, limit);
   }
-  function sourceDecorations(index, connections, model) {
-    if (!computer) return [];
-    const decorations = [], seen = new Set();
-    const add = (segments, prefix, options) => {
-      for (const { start, end } of segments) {
-        const key = `${prefix}${start}:${end}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        decorations.push({ range: rangeAt(model, start, end), options: {
-          linesDecorationsClassName: 'mew-ocr-diff-line', stickiness: 1, ...options
-        } });
-      }
+  function monacoTextDiff(left, right, details = false) {
+    if (left === right) return { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
+    const result = computer.computeDiff(left.split("\n"), right.split("\n"), {
+      ignoreTrimWhitespace: false, maxComputationTimeMs: 1000,
+      computeMoves: false, extendToSubwords: false
+    });
+    if (result.hitTimeout) throw new Error("Monaco diff timed out");
+    const offsets = text => {
+      const starts = [0];
+      for (let i = 0; i < text.length; i++) if (text[i] === "\n") starts.push(i + 1);
+      return range => starts[range.startLineNumber - 1] + range.startColumn - 1;
     };
-    for (const [connection, target] of connections) {
-      let cursor = connection.start;
-      for (const part of connectionDiff(index, target, connection)?.parts || []) {
-        const end = cursor + part.html.length;
-        if (part.changed && significantText(part.html) !== significantText(part.pdf)) {
-          const escape = text => JSON.stringify(text).replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
-          const segments = cursor === end ? [insertionSegment(index, cursor)] : sourceSegments(index, cursor, end);
-          add(segments, '', {
-            description: 'PDF OCR text difference',
-            inlineClassName: part.html.length ? 'mew-ocr-diff-text' : undefined,
-            beforeContentClassName: part.html.length ? undefined : 'mew-ocr-diff-insert',
-            hoverMessage: { value: 'HTML: ' + escape(part.html) + '\n\nOCR: ' + escape(part.pdf), isTrusted: false },
-            linesDecorationsTooltip: 'Text differs from PDF OCR'
-          });
+    const offsetA = offsets(left), offsetB = offsets(right), parts = [];
+    let a = 0, b = 0, distance = 0;
+    for (const change of result.changes) {
+      if (!change.innerChanges?.length) throw new Error("Missing Monaco character ranges");
+      for (const { originalRange: x, modifiedRange: y } of change.innerChanges) {
+        const startA = offsetA(x), startB = offsetB(y);
+        const endA = offsetA({ startLineNumber: x.endLineNumber, startColumn: x.endColumn });
+        const endB = offsetB({ startLineNumber: y.endLineNumber, startColumn: y.endColumn });
+        if (![startA, endA, startB, endB].every(Number.isInteger) || startA < a || startB < b
+          || endA < startA || endB < startB || endA > left.length || endB > right.length
+          || left.slice(a, startA) !== right.slice(b, startB)) throw new Error("Invalid Monaco ranges");
+        if (details) {
+          appendPart(parts, left.slice(a, startA), right.slice(b, startB), false);
+          appendPart(parts, left.slice(startA, endA), right.slice(startB, endB), true);
         }
-        cursor = end;
+        distance += Math.max(Array.from(left.slice(startA, endA)).length, Array.from(right.slice(startB, endB)).length);
+        a = endA; b = endB;
       }
     }
-    for (const item of formatDifferences(index, connections)) {
-      const formats = item.formats || [item];
-      add(sourceSegments(index, item.sourceStart, item.sourceEnd), 'font:', {
-        description: 'PDF font difference', inlineClassName: 'mew-ocr-diff-text mew-font-diff-text',
-        hoverMessage: { value: `HTML ${fontSummary(formats.map(value => value.htmlFont))}\n\nPDF ${fontSummary(formats.map(value => value.font))}`, isTrusted: false },
-        linesDecorationsTooltip: '粗体／斜体与 PDF 不一致'
-      });
-    }
-    return decorations;
+    if (left.slice(a) !== right.slice(b)) throw new Error("Incomplete Monaco ranges");
+    if (details) appendPart(parts, left.slice(a), right.slice(b), false);
+    return { distance, parts: details ? parts : undefined };
+  }
+  function changedRange(before, after) {
+    let start = 0, oldEnd = before.length, newEnd = after.length;
+    while (start < oldEnd && start < newEnd && before[start] === after[start]) start++;
+    while (oldEnd > start && newEnd > start && before[oldEnd - 1] === after[newEnd - 1]) { oldEnd--; newEnd--; }
+    return { start, oldEnd, newEnd };
+  }
+  function appendPart(parts, html, pdf, changed) {
+    if (!html && !pdf) return;
+    const last = parts.at(-1);
+    if (last?.changed === changed) { last.html += html; last.pdf += pdf; }
+    else parts.push({ html, pdf, changed });
   }
   function createLocator(options = {}, environment = {}) {
     const documents = new WeakMap(), sourceIndexes = new WeakMap(), noPdf = {};
@@ -449,7 +433,7 @@
       connectedRange, reviewAnchor, indexDocument, indexFonts, getDocumentIndex, findLocations, prepareSource, locateSource, locateLayer };
     function sourceIndex(source) {
       const template = document.createElement("template"), starts = [], ends = [], formats = [];
-      const stack = [{ name: '', italic: false, bold: false }];
+      const stack = [{ name: '', italic: false, bold: false, tags: [] }];
       let raw = "", ignored = "";
       const tokens = /<!--[\s\S]*?(?:-->|$)|<![^>]*>|<\/?[a-z][^>"']*(?:(?:"[^"]*"|'[^']*')[^>"']*)*>|&(?:#\d+|#x[\da-f]+|[a-z][\da-z]+);|[^<&]+|[<&]/gi;
       for (const token of source.matchAll(tokens)) {
@@ -464,14 +448,15 @@
           if (!tag[1] && /^(head|script|style)$/.test(name)) ignored = name;
           if (tag[1]) {
             const at = stack.findLastIndex(value => value.name === name);
-            if (at > 0) stack.length = at;
+            if (at > 0) {
+              Object.assign(stack[at].definition, { closeStart: token.index, closeEnd: token.index + text.length, closing: text, rawEnd: raw.length });
+              stack.length = at;
+            }
           } else if (!ignored && !/^(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/.test(name) && !/\/\s*>$/.test(text)) {
-            const inherited = stack.at(-1), style = /\bstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(text);
-            const declarations = style ? style[1] ?? style[2] : '';
-            const italic = /(?:^|;)\s*font-style\s*:\s*([^;!]+)/i.exec(declarations)?.[1].trim();
-            const bold = /(?:^|;)\s*font-weight\s*:\s*([^;!]+)/i.exec(declarations)?.[1].trim();
-            stack.push({ name, italic: italic && /^(normal|italic|oblique)\b/i.test(italic) ? !/^normal$/i.test(italic) : /^(i|em)$/.test(name) || inherited.italic,
-              bold: bold && /^(normal|bold|[1-9]00)$/i.test(bold) ? /bold/i.test(bold) || Number(bold) >= 600 : /^(b|strong)$/.test(name) || inherited.bold });
+            const inherited = stack.at(-1);
+            const definition = htmlFontDefinition(name, text, raw.length, token.index);
+            stack.push({ name, definition, italic: definition.italic ?? inherited.italic, bold: definition.bold ?? inherited.bold,
+              tags: definition.italic !== null || definition.bold !== null ? [...inherited.tags, definition] : inherited.tags });
           }
           value = (tag[1] && /^(p|div|li|h[1-6])$/.test(name)) || name === "br" ? "\n" : "";
           encoded = true;
@@ -902,7 +887,7 @@
       if (!source) return;
       pages = [...new Set([...pages, ...(environment.getTargets?.() || [])])].filter(Boolean);
       const full = getDocumentIndex(pdf);
-      if (computer && full && source.preparedDocument !== full) {
+      if (full && source.preparedDocument !== full) {
         sourcePageScope(full, source, true);
         for (const item of full.connections.get(source) || [])
           rememberConnection(source, item.targetStart, item.targetEnd, full, { start: item.start, end: item.end }, {

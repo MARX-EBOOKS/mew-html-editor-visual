@@ -3,9 +3,7 @@ import { createReadStream, existsSync, watch } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import readerCore from "./mew-html-reader-vscode/reader-core.cjs";
-
-const { CONFIG_NAMES, normalizedVolumes, pageFromName, isInside } = readerCore;
+const CONFIG_NAMES = [".mew-reader.json", "mew-reader.json"];
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(HERE, process.argv.includes("--legacy") ? "public_legacy" : "public");
@@ -84,7 +82,9 @@ function readerSettings(value = {}) {
     ink: color(value.ink, "#000000"),
     invert: Boolean(value.invert),
     horizontal: Boolean(value.horizontal),
-    scale: typeof value.scale === "string" && value.scale.length <= 32 ? value.scale : "page-width"
+    scale: typeof value.scale === "string" && value.scale.length <= 32 ? value.scale : "page-width",
+    diffHighlight: value.diffHighlight !== false,
+    selectionHighlight: value.selectionHighlight !== false
   };
 }
 
@@ -137,6 +137,40 @@ async function scanPageFiles(pageDir, pattern, explicitPages = []) {
     for (const page of explicitPages) pageFiles.set(page, null);
   }
   return pageFiles;
+}
+
+function pageFromName(name, pattern) {
+  const match = new RegExp(pattern, "i").exec(name);
+  const page = Number(match?.groups?.page ?? match?.[1]);
+  return Number.isFinite(page) ? page : null;
+}
+
+function isInside(candidate, root) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function normalizedVolumes(config) {
+  const volumes = Array.isArray(config.volumes) && config.volumes.length ? config.volumes : [config];
+  return volumes.map((volume, index) => {
+    const pages = volume.pages && !Array.isArray(volume.pages) ? volume.pages : {};
+    const id = String(volume.id ?? config.id ?? index + 1);
+    const pattern = pages.pattern ?? volume.pagePattern ?? config.pagePattern;
+    const pdf = volume.pdf?.file ?? volume.pdf ?? config.pdf?.file ?? config.pdf;
+    const explicitPages = Array.isArray(pages.list) ? pages.list : Array.isArray(volume.pages) ? volume.pages : [];
+    if (!pattern) throw new Error(`卷册 ${id} 缺少 pages.pattern/pagePattern`);
+    if (!pdf) throw new Error(`卷册 ${id} 缺少 pdf`);
+    return {
+      id,
+      title: String(volume.title ?? config.title ?? `PDF ${id}`),
+      shortTitle: String(volume.shortTitle ?? volume.title ?? config.shortTitle ?? config.title ?? id),
+      directory: String(pages.directory ?? volume.htmlRoot ?? config.htmlRoot ?? "."),
+      pattern: String(pattern), pdf: String(pdf),
+      pageLabel: String(volume.pageLabel ?? config.pageLabel ?? "{page}"),
+      toc: Array.isArray(volume.toc) ? volume.toc : [],
+      explicitPages: [...new Set(explicitPages.map(Number).filter(Number.isFinite))].sort((a, b) => a - b)
+    };
+  });
 }
 
 async function loadLibrary() {
@@ -377,7 +411,8 @@ async function api(req, res, url) {
   if (url.pathname === "/api/reader/settings") {
     if (req.method === "GET") return reply(res, 200, await loadReaderSettings());
     if (req.method === "PUT") {
-      const settings = readerSettings(await jsonBody(req));
+      const patch = await jsonBody(req);
+      const settings = readerSettings({ ...await loadReaderSettings(), ...patch });
       await fs.writeFile(SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
       return reply(res, 200, settings);
     }
