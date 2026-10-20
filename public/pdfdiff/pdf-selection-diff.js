@@ -165,9 +165,11 @@
     for (const [connection, target] of connections) {
       const runs = fontRuns(target, connection.targetStart, connection.targetEnd);
       const diff = connectionDiff(index, target, connection);
-      let left = connection.start, right = connection.targetStart;
+      let left = connection.start, right = connection.targetStart, run = 0;
       for (const part of diff?.parts || []) {
-        if (!part.changed) for (const font of runs) {
+        while (run < runs.length && runs[run].end <= right) run++;
+        if (!part.changed) for (let i = run; i < runs.length && runs[i].start < right + part.pdf.length; i++) {
+          const font = runs[i];
           const a = Math.max(right, font.start), b = Math.min(right + part.pdf.length, font.end);
           if (a >= b) continue;
           let start = left + a - right;
@@ -270,27 +272,40 @@
       target.raw.slice(connection.targetStart, connection.targetEnd), true);
   }
   function reviewCandidates(index, targets = [], notice = null) {
-    const items = [], seen = new Map();
+    const items = [], seen = [];
+    function claim(start, end) {
+      let low = 0, high = seen.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (seen[middle].start < start) low = middle + 1; else high = middle;
+      }
+      if (seen[low]?.start === start || low && seen[low - 1].end > start
+        || seen[low] && seen[low].start < end && seen[low].end > start) return false;
+      seen.splice(low, 0, { start, end });
+      return true;
+    }
     const add = (start, parts, pdfRaw = '', pdfStart = 0) => {
-      const sourceBase = start, pdfBase = pdfStart;
+      const projection = [];
+      let left = start, right = pdfStart;
+      for (const part of parts || []) {
+        if (part.pdf.length) projection.push({ left, right, stop: right + part.pdf.length, part });
+        left += part.html.length; right += part.pdf.length;
+      }
       const project = (offset, endBias) => {
-        let left = sourceBase, right = pdfBase;
-        for (const part of parts || []) {
-          const stop = right + part.pdf.length;
-          if (offset <= stop && part.pdf.length) {
-            if (!part.changed) return left + Math.max(0, offset - right);
-            if (offset <= right) return left;
-            return endBias || offset === stop ? left + part.html.length : left;
-          }
-          left += part.html.length;
-          right = stop;
+        let low = 0, high = projection.length;
+        while (low < high) {
+          const middle = (low + high) >>> 1;
+          if (projection[middle].stop < offset) low = middle + 1; else high = middle;
         }
-        return left;
+        const hit = projection[low];
+        if (!hit) return left;
+        if (!hit.part.changed) return hit.left + Math.max(0, offset - hit.right);
+        if (offset <= hit.right) return hit.left;
+        return endBias || offset === hit.stop ? hit.left + hit.part.html.length : hit.left;
       };
       for (const part of parts || []) {
         const end = start + part.html.length, id = `${start}:${end}`;
-        if (part.changed && significantText(part.html, index, start) !== significantText(part.pdf) && ![...seen].some(([a, b]) => start === a || start < b && end > a)) {
-          seen.set(start, end);
+        if (part.changed && significantText(part.html, index, start) !== significantText(part.pdf) && claim(start, end)) {
           const lineStart = pdfRaw.lastIndexOf('\n', Math.max(0, pdfStart - 1)) + 1;
           const nextLine = pdfRaw.indexOf('\n', pdfStart + part.pdf.length);
           const lineEnd = nextLine < 0 ? pdfRaw.length : nextLine;
@@ -375,9 +390,12 @@
     if (applied === false) throw new Error('编辑器未能应用替换');
   }
   function textDiff(left, right, details = false, limit = Infinity) {
+    if (left === right) return { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
     // A bounded match cannot span more extra characters than its edit limit.
     if (Number.isFinite(limit) && Math.abs(Array.from(left).length - Array.from(right).length) > limit)
       return { distance: limit + 1, parts: details ? [{ html: left, pdf: right, changed: true }] : undefined };
+    // Anchor checks only need a bounded distance, not Monaco's full line alignment.
+    if (!details && Number.isFinite(limit)) return window.PdfLocalTextDiff.textDiff(left, right, false, limit);
     if (computer) {
       try { return monacoTextDiff(left, right, details); }
       catch { /* Use the local engine for this comparison; retry Monaco on the next one. */ }
@@ -385,7 +403,6 @@
     return window.PdfLocalTextDiff.textDiff(left, right, details, limit);
   }
   function monacoTextDiff(left, right, details = false) {
-    if (left === right) return { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
     const result = computer.computeDiff(left.split("\n"), right.split("\n"), {
       ignoreTrimWhitespace: false, maxComputationTimeMs: 1000,
       computeMoves: false, extendToSubwords: false
@@ -407,21 +424,24 @@
         if (![startA, endA, startB, endB].every(Number.isInteger) || startA < a || startB < b
           || endA < startA || endB < startB || endA > left.length || endB > right.length
           || left.slice(a, startA) !== right.slice(b, startB)) throw new Error("Invalid Monaco ranges");
+        let changeDistance = Math.max(Array.from(left.slice(startA, endA)).length, Array.from(right.slice(startB, endB)).length);
         if (details) {
           appendPart(parts, left.slice(a, startA), right.slice(b, startB), false);
           // Refine each hunk even when the whole passage exceeds the edit budget.
           const html = left.slice(startA, endA), pdf = right.slice(startB, endB);
           const refined = window.PdfLocalTextDiff.textDiff(html, pdf, true, 128);
+          if (refined.distance <= 128) changeDistance = refined.distance;
           for (const part of refined.parts) appendPart(parts, part.html, part.pdf, part.changed);
         }
-        distance += Math.max(Array.from(left.slice(startA, endA)).length, Array.from(right.slice(startB, endB)).length);
+        distance += changeDistance;
         a = endA; b = endB;
       }
     }
     if (left.slice(a) !== right.slice(b)) throw new Error("Incomplete Monaco ranges");
     if (details) appendPart(parts, left.slice(a), right.slice(b), false);
     // Line anchors can split matching wrapped prose into a deletion and insertion.
-    if (details && distance > 1) {
+    // A single changed run was already refined above; only separated runs can realign.
+    if (details && distance > 1 && parts.filter(part => part.changed).length > 1) {
       const limit = Math.min(128, distance - 1);
       const refined = window.PdfLocalTextDiff.textDiff(left, right, true, limit);
       if (refined.distance <= limit) return refined;
@@ -442,6 +462,7 @@
   }
   function createLocator(options = {}, environment = {}) {
     const documents = new WeakMap(), sourceIndexes = new WeakMap(), noPdf = {};
+    const reviewAnchors = new WeakMap();
     const document = environment.document || window.document;
     return { sourceIndex, editorSourceIndex, sourcePageScope, normalized, matches, locate,
       normalizedRange, approximateMatches, lowerBound, rememberConnection, patchedWords,
@@ -519,6 +540,12 @@
           if (cached?.scope && delta !== null) index.pageScopes.set(target, {
             ...cached, scope: { ...cached.scope, start: cached.scope.start + delta, end: cached.scope.end + delta }
           });
+          // Formatting edits retain the same text coordinates in both directions.
+          // Reuse the reverse scope too, so prepareSource does not rematch the volume.
+          if (previous.raw === index.raw) {
+            const reverseScope = target.pageScopes?.get(previous);
+            if (reverseScope) target.pageScopes.set(index, reverseScope);
+          }
         }
       }
       pairs.set(pdf, index);
@@ -527,12 +554,21 @@
     function reviewAnchor(item, currentIndex) {
       const source = item?.pdfSource;
       if (!source) return null;
+      let anchors = reviewAnchors.get(item);
+      if (!anchors) reviewAnchors.set(item, anchors = new WeakMap());
       // Read the candidate's confirmed diff, including after its HTML offsets move.
       // Popup layout must never search again or prepare another source mapping.
       for (const { index } of environment.getVisiblePages?.() || []) {
         if (!index?.layer?.isConnected) continue;
-        const hit = connectedRange(source.index, index, source.start, source.end, false, undefined, true)
-          || currentIndex && connectedRange(currentIndex, index, item.sourceStart, item.sourceEnd, false, undefined, true);
+        const connections = source.index.connections.get(index), currentConnections = currentIndex?.connections.get(index);
+        let cached = anchors.get(index);
+        if (!cached || cached.connections !== connections || cached.currentIndex !== currentIndex || cached.currentConnections !== currentConnections) {
+          const hit = connectedRange(source.index, index, source.start, source.end, false, undefined, true)
+            || currentIndex && currentIndex !== source.index && connectedRange(currentIndex, index, item.sourceStart, item.sourceEnd, false, undefined, true);
+          cached = { connections, currentIndex, currentConnections, hit };
+          anchors.set(index, cached);
+        }
+        const hit = cached.hit;
         if (!hit) continue;
         const end = index.raw.slice(hit.start, hit.end).trim() ? hit.end : hit.start;
         const first = Math.min(index.parts.length - 1, lowerBound(index.parts, hit.start + 1, part => part.end));
@@ -857,7 +893,6 @@
       const locations = entries.map(entry => {
         let index = documentIndex, hit = null, number;
         for (const page of visible) {
-          if (page.index && entry.index) sourcePageScope(entry.index, page.index, true);
           hit = page.index && entry.index && connectedRange(entry.index, page.index, entry.start, entry.end, false, undefined, entry.marked);
           if (hit) {
             index = page.index;
@@ -896,20 +931,28 @@
       for (const entry of index.pages) {
         if (source && !ranges?.some(hit => hit.targetStart < entry.end && hit.targetEnd > entry.start)
           || entry.parts.every(part => part.font)) continue;
-        await environment.waitForIdle(pdf);
         if (signal?.aborted || !environment.isCurrent(pdf)) return null;
-        const page = await pdf.getPage(entry.number);
-        if (signal?.aborted || !environment.isCurrent(pdf)) return null;
-        const fonts = await readPageFonts(page, entry.parts.map(part => part.item));
-        for (const part of entry.parts) part.font = textItemFont(fonts, part.item);
-        index.fontVersion = (index.fontVersion || 0) + 1;
+        // Share in-flight work too; separate reviews can request the same page.
+        await (entry.fontTask ||= (async () => {
+          await environment.waitForIdle(pdf);
+          if (!environment.isCurrent(pdf)) return;
+          const page = await pdf.getPage(entry.number);
+          if (!environment.isCurrent(pdf)) return;
+          const fonts = await readPageFonts(page, entry.parts.map(part => part.item));
+          if (!environment.isCurrent(pdf)) return;
+          for (const part of entry.parts) part.font = textItemFont(fonts, part.item);
+          index.fontVersion = (index.fontVersion || 0) + 1;
+        })().finally(() => { entry.fontTask = null; }));
       }
-      return environment.isCurrent(pdf) ? index : null;
+      return !signal?.aborted && environment.isCurrent(pdf) ? index : null;
     }
     function prepareSource(source, pages, pdf) {
       if (!source) return;
       pages = [...new Set([...pages, ...(environment.getTargets?.() || [])])].filter(Boolean);
       const full = getDocumentIndex(pdf);
+      const prepared = source.preparation;
+      if (prepared && prepared.pdf === pdf && prepared.full === full && prepared.pages.length === pages.length
+        && pages.every((page, i) => page === prepared.pages[i] && source.connections.get(page) === prepared.connections[i])) return;
       if (full && source.preparedDocument !== full) {
         sourcePageScope(full, source, true);
         for (const item of full.connections.get(source) || [])
@@ -923,12 +966,16 @@
       // Prefer whole-passage mappings over shorter quotations on adjacent pages.
       const connections = pages.flatMap(page =>
         (source.connections.get(page) || []).map(connection => ({ page, connection })));
-      for (const page of pages) source.connections.set(page,
-        (source.connections.get(page) || []).filter(item => !connections.some(other => other.page !== page
+      for (const page of pages) {
+        const previous = source.connections.get(page) || [];
+        const retained = previous.filter(item => !connections.some(other => other.page !== page
           // Whole-document text extraction does not carry the rendered page's fonts.
           && other.page !== full
           && other.connection.start <= item.start && other.connection.end >= item.end
-          && other.connection.end - other.connection.start > item.end - item.start)));
+          && other.connection.end - other.connection.start > item.end - item.start));
+        if (retained.length !== previous.length) source.connections.set(page, retained);
+      }
+      source.preparation = { pdf, full, pages, connections: pages.map(page => source.connections.get(page)) };
       source.preparedPdf = pdf;
     }
     function locateSource(index, chunks) {

@@ -6,6 +6,7 @@ window.PdfReviewReady = (async () => {
   const toolbox = window.PdfSelectionDiff, providers = new Map();
   let session = null, generation = 0, pending = null, view = null, previewModels = [], disposals = [], lastRequest = null;
   let widget = null, widgetEditor = null, noticeAnchor = null, noticeLayout = null, manualTimer = null, composing = false;
+  let placementFrame = null;
   const menu = document.getElementById('replacementFeatures');
   const panel = document.createElement('section');
   panel.className = 'replacement-review'; panel.hidden = true;
@@ -30,7 +31,7 @@ window.PdfReviewReady = (async () => {
   function presentation() { return session?.provider.presentation?.(session.context, current()) || noticeLayout; }
   function valid() {
     return session && !session.stale && session.editor.getModel() === session.model
-      && session.model.getValue() === session.source && session.model.getVersionId?.() === session.version
+      && (session.version !== undefined ? session.model.getVersionId?.() === session.version : session.model.getValue() === session.source)
       && (!session.provider.isCurrent || session.provider.isCurrent(session.context));
   }
   function validateCandidates(result) {
@@ -97,6 +98,7 @@ window.PdfReviewReady = (async () => {
     target.addContentWidget(widget);
   }
   function close(dismiss = true, restoreFocus = true) {
+    cancelAnimationFrame(placementFrame); placementFrame = null;
     clearTimeout(manualTimer); manualTimer = null; composing = false;
     ++generation; pending?.abort(); pending = null;
     disposals.splice(0).forEach(dispose => dispose());
@@ -116,7 +118,7 @@ window.PdfReviewReady = (async () => {
   function stale(event) {
     if (!session) return;
     session.stale = true; ++generation; clearPreview();
-    queueManualRefresh(event); controls();
+    queueManualRefresh(event);
   }
   function queueManualRefresh(event) {
     const saved = session;
@@ -156,12 +158,12 @@ window.PdfReviewReady = (async () => {
     })().finally(() => { saved.refreshTask = null; });
   }
   function controls() {
-    const item = current(), ready = (valid() || session?.manualPending && !composing) && !!item && !session.applying && !session.saving && !session.waitingApply;
+    const item = current(), currentVersion = valid(), ready = (currentVersion || session?.manualPending && !composing) && !!item && !session.applying && !session.saving && !session.waitingApply;
     for (const name of ['apply', 'advance', 'all']) get(name).disabled = !ready || !session?.provider.apply || session.content?.apply === false;
     get('save').textContent = session?.manualSave ? '保存修改' : '替换&保存';
     get('save').disabled = !workspace()?.save || !!session?.saving || !!session?.applying || !(session?.manualSave
       ? session.editor.getModel() === session.model : ready && session?.provider.apply && session.content?.apply !== false);
-    const blocked = !valid() || !!session?.applying;
+    const blocked = !currentVersion || !!session?.applying;
     get('prev').disabled = blocked || session.position <= 0;
     get('next').disabled = blocked || session.position >= session.items.length - 1;
     get('position').textContent = session ? `${Math.min(session.position + 1, session.items.length)} / ${session.items.length}` : '';
@@ -221,9 +223,9 @@ window.PdfReviewReady = (async () => {
     // Keep an opening session so typing while extraction runs schedules a fresh calculation.
     session = { provider, editor: target, model, source, version, context, items: [], position: 0,
       choices: new Map(), manualSave: requestData?.snapshot?.manualSave || false, needsSave: requestData?.snapshot?.needsSave || false };
-    const scroll = target.onDidScrollChange(() => place(target)); disposals.push(() => scroll.dispose());
+    const scroll = target.onDidScrollChange(queuePlace); disposals.push(() => scroll.dispose());
     if (placement?.container) {
-      const container = placement.container, move = () => place(target);
+      const container = placement.container, move = queuePlace;
       container.addEventListener('scroll', move); disposals.push(() => container.removeEventListener('scroll', move));
       placement.eventBus?.on('textlayerrendered', move);
       disposals.push(() => placement.eventBus?.off('textlayerrendered', move));
@@ -341,7 +343,8 @@ window.PdfReviewReady = (async () => {
   async function apply(all, advance = false) {
     const saved = session;
     if (saved?.waitingApply) return;
-    if (saved?.manualPending && !composing) await (saved.waitingApply = refreshAfterEdit(saved)).finally(() => { saved.waitingApply = null; });
+    if (saved?.refreshTask || saved?.manualPending && !composing)
+      await (saved.waitingApply = saved.refreshTask || refreshAfterEdit(saved)).finally(() => { saved.waitingApply = null; });
     if (session !== saved || !valid()) return;
     if (!current() || !saved.provider.apply || saved.applying) return;
     saved.applying = true; controls();
@@ -351,10 +354,10 @@ window.PdfReviewReady = (async () => {
         source: saved.source, version: saved.version, items: saved.items,
         position: saved.position, choices: saved.choices, context: { ...saved.context } }, all);
       if (session !== saved) return;
-      const changed = saved.model.getValue() !== saved.source;
+      const source = saved.model.getValue(), changed = source !== saved.source;
       Object.assign(saved, { items: result.items, choices: result.choices || saved.choices,
         position: result.position, context: result.context || saved.context,
-        source: saved.model.getValue(), version: saved.model.getVersionId?.() });
+        source, version: saved.model.getVersionId?.() });
       if (changed) saved.needsSave = true;
       Object.assign(saved.context, { source: saved.source, version: saved.version });
       if (saved.context.request) saved.context.request = { ...saved.context.request, snapshot: null };
@@ -374,6 +377,11 @@ window.PdfReviewReady = (async () => {
     if (!valid() || session.applying) return;
     const next = session.position + direction;
     if (next >= 0 && next < session.items.length) { session.position = next; render(); }
+  }
+  function queuePlace() {
+    if (!panel.hidden && placementFrame === null) placementFrame = requestAnimationFrame(() => {
+      placementFrame = null; place();
+    });
   }
   function place(target = session?.editor) {
     if (panel.hidden) return;
@@ -477,8 +485,8 @@ window.PdfReviewReady = (async () => {
     if (position && session.anchor && api?.Range.containsPosition(session.anchor, position)) return;
     if (!panel.hidden && !event.composedPath().includes(panel)) close(true, false);
   }, true);
-  new ResizeObserver(() => place()).observe(panel);
-  window.addEventListener('resize', () => place());
+  new ResizeObserver(queuePlace).observe(panel);
+  window.addEventListener('resize', queuePlace);
   window.addEventListener('pagehide', () => { close(); view?.dispose(); });
   window.ReplacementReview = {
     open, openForSelection, showNotice, close, refreshMenu: updateMenu,
@@ -518,16 +526,25 @@ window.PdfReviewReady = (async () => {
     const split = source !== reader, side = split ? context.request?.side || 'html' : 'pdf';
     const request = context.request;
     const element = request?.anchorElement, box = request?.anchorBox;
-    const rect = element?.isConnected && element.getBoundingClientRect();
+    const rect = (!item || side !== 'pdf') && element?.isConnected && element.getBoundingClientRect();
     const anchor = item && side === 'pdf' ? getLocator().reviewAnchor(item, context.index) : rect && box ? { left: rect.left + box.x * rect.width, top: rect.top + box.y * rect.height,
       bottom: rect.top + (box.y + box.h) * rect.height } : request?.anchor;
     const destination = side === 'pdf' ? reader : source;
     return { side, switchable: split, switchLabel: side === 'pdf' ? '查看HTML' : '查看PDF', host: destination.ReplacementReview, window: destination,
       container: viewer()?.container, eventBus: viewer()?.eventBus, anchor };
   }
+  const comparisonCache = new WeakMap();
+  function comparisonParts(value) {
+    let cached = comparisonCache.get(value);
+    if (!cached || cached.html !== value.html || cached.pdf !== value.pdf) {
+      cached = { html: value.html, pdf: value.pdf, parts: toolbox.textDiff(value.html, value.pdf, true)?.parts || [{ ...value, changed: false }] };
+      comparisonCache.set(value, cached);
+    }
+    return cached.parts;
+  }
   function comparisonRows(value, compact = true) {
     if (typeof value?.html !== 'string' || typeof value?.pdf !== 'string') return [];
-    let parts = toolbox.textDiff(value.html, value.pdf, true)?.parts || [{ ...value, changed: false }];
+    let parts = comparisonParts(value);
     if (compact) {
       const first = parts.findIndex(part => part.changed), last = parts.findLastIndex(part => part.changed);
       if (first >= 0) {
@@ -582,24 +599,28 @@ window.PdfReviewReady = (async () => {
     const items = reviewItems(index, context.targets, null, context.model), choices = new Map();
     // Preserve choices only for unchanged ranges; discover all current differences.
     const { start, oldEnd, newEnd } = toolbox.changedRange(previous.source, context.source);
-    const oldIndex = previous.context?.index;
-    for (const item of items) {
-      const candidate = oldIndex && previous.items.find(candidate => {
-        const a = oldIndex.starts[candidate.sourceStart], b = oldIndex.ends[candidate.sourceEnd - 1] ?? a;
-        const delta = b <= start ? 0 : a >= oldEnd ? newEnd - oldEnd : null;
-        return delta !== null && a + delta === index.starts[item.sourceStart]
-          && b + delta === (index.ends[item.sourceEnd - 1] ?? index.starts[item.sourceStart])
-          && !!candidate.font === !!item.font;
-      });
+    const oldIndex = previous.context?.index, retained = new Map();
+    for (const candidate of oldIndex ? previous.items : []) {
+      const a = oldIndex.starts[candidate.sourceStart], b = oldIndex.ends[candidate.sourceEnd - 1] ?? a;
+      const delta = b <= start ? 0 : a >= oldEnd ? newEnd - oldEnd : null;
+      if (delta !== null) {
+        const key = `${a + delta}:${b + delta}:${!!candidate.font}`;
+        if (!retained.has(key)) retained.set(key, candidate);
+      }
+    }
+    let found = -1;
+    for (const [position, item] of items.entries()) {
+      const a = index.starts[item.sourceStart], b = index.ends[item.sourceEnd - 1] ?? a;
+      const candidate = retained.get(`${a}:${b}:${!!item.font}`);
       const choice = candidate && previous.choices.get(candidate.id);
       choices.set(item.id, item.options.some(option => option.id === choice) ? choice : item.options[0].id);
+      if (found < 0 && ((index.starts[item.sourceEnd] ?? context.source.length) > offset
+        || (index.starts[item.sourceStart] ?? context.source.length) >= offset)) found = position;
     }
-    const found = items.findIndex(item => (index.starts[item.sourceEnd] ?? context.source.length) > offset
-      || (index.starts[item.sourceStart] ?? context.source.length) >= offset);
     return { items, choices, position: found < 0 ? items.length : found };
   }
   function reviewItems(index, targets, notice, model) {
-    let text = enabled ? toolbox.reviewCandidates(index, targets, notice) : [];
+    let text = enabled ? toolbox.reviewCandidates(index, targets) : [];
     const selected = enabled && selectionCandidate(index, notice, model);
     if (selected) text = [...text.filter(item => item.sourceEnd <= selected.sourceStart && item.sourceStart < selected.sourceStart
       || item.sourceStart >= selected.sourceEnd && item.sourceEnd > selected.sourceEnd), selected].sort((a, b) => a.sourceStart - b.sourceStart);
@@ -636,12 +657,16 @@ window.PdfReviewReady = (async () => {
       range: item?.range || (ranges.length ? toolbox.rangeAt(state.model, Math.min(...ranges.map(edit => edit.start)), Math.max(...ranges.map(edit => edit.end))) : null),
       options: [], applyLabel: item?.font ? '替换格式' : '替换', advance: false, expanded: false };
   }
-  const pattern = value => JSON.stringify([!!value.font, ...(value.font ? [value.text,
-    ...['italic', 'bold'].flatMap(key => [value.htmlFont[key], value.font[key]])] : [value.comparison?.html, value.comparison?.pdf])]);
+  const patterns = new WeakMap();
+  const pattern = value => {
+    if (!patterns.has(value)) patterns.set(value, JSON.stringify([!!value.font, ...(value.font ? [value.text,
+      ...['italic', 'bold'].flatMap(key => [value.htmlFont[key], value.font[key]])] : [value.comparison?.html, value.comparison?.pdf])]));
+    return patterns.get(value);
+  };
   function apply(state, all) {
     const item = state.items[state.position];
     if (all || item?.font) getLocator().prepareSource(state.context.index, state.context.targets, state.context.pdf);
-    const selected = all ? state.items : state.items.filter(value => pattern(value) === pattern(item));
+    const key = item && pattern(item), selected = all ? state.items : state.items.filter(value => pattern(value) === key);
     const edits = selected.filter(value => !value.font)
       .flatMap(value => value.options.find(option => option.id === state.choices.get(value.id)).edits);
     if (selected.some(value => value.font)) edits.push(...formatItems(state.context.index, state.context.targets)
@@ -662,7 +687,7 @@ window.PdfReviewReady = (async () => {
   const review = {
     compact: true, content, apply, presentation, isCurrent, provide,
     refreshAfterEdit: refreshCandidates,
-    onSelect(item, context, items) { selection()?.showReviewPointer(context.editor, items.filter(value => pattern(value) === pattern(item))); },
+    onSelect(item, context, items) { const key = pattern(item); selection()?.showReviewPointer(context.editor, items.filter(value => pattern(value) === key)); },
     onClose(context) { selection()?.clearReviewPointer(context.editor); }
   };
   const unregister = [host.register({
@@ -754,6 +779,7 @@ window.PdfReviewReady = (async () => {
     // PDF text-layer geometry only. Source highlights use Monaco in onSources().
     const { parts } = index, { lowerBound } = fallbackLocator;
     const boxes = [], notices = [];
+    let range;
     const union = (a, b) => {
       const left = Math.min(a.left, b.left), top = Math.min(a.top, b.top), right = Math.max(a.right, b.right);
       return { left, top, right, width: right - left, height: Math.max(a.top + a.height, b.top + b.height) - top };
@@ -766,7 +792,7 @@ window.PdfReviewReady = (async () => {
       const first = Math.min(parts.length - 1, lowerBound(parts, hit.start + 1, part => part.end));
       const last = caret ? first : lowerBound(parts, hit.end, part => part.end);
       for (const part of parts.slice(first, last + 1)) {
-        const range = document.createRange();
+        range ||= document.createRange();
         range.setStart(part.node, Math.max(0, hit.start - part.start));
         range.setEnd(part.node, Math.max(0, Math.min(part.node.length, (caret ? hit.start : hit.end) - part.start)));
         for (let box of range.getClientRects()) if ((box.width || caret) && box.height) {
@@ -897,11 +923,12 @@ window.PdfReviewReady = (async () => {
       && dismissed.range === editor?.getSelection()?.toString() && dismissed.interaction === data.interactionId) return;
     dismissed = null;
     const changed = data.notices.find(value => typeof value.html === 'string' && typeof value.pdf === 'string'
-      && toolbox.textDiff(value.html, value.pdf, true)?.parts.some(part => part.changed));
+      && comparisonParts(value).some(part => part.changed));
     const mapping = changed || data.notices.find(value => value.source) || data.notices[0];
     const notice = mapping?.target ? { ...mapping,
       fonts: toolbox.fontRuns(mapping.target.index, mapping.target.start, mapping.target.end),
       text: mapping.target.index.raw.slice(mapping.target.start, mapping.target.end) } : mapping;
+    if (notice && mapping !== notice && comparisonCache.has(mapping)) comparisonCache.set(notice, comparisonCache.get(mapping));
     if (!notice || notice.source && model && notice.source.index.source !== model.getValue()) return;
     const textDifference = !!changed;
     if (!textDifference) {
