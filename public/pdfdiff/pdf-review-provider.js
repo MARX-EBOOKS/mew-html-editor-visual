@@ -640,10 +640,10 @@ window.PdfReviewReady = (async () => {
   function selectionCandidate(index, notice, model) {
     const source = notice?.source;
     if (!source || index.raw.slice(source.start, source.end) !== notice.html) return null;
-    const selected = toolbox.reviewCandidates(index, [], notice);
+    const selected = toolbox.reviewCandidates(index, [], notice, comparisonParts(notice));
     if (!selected.length) return null;
     return { id: `${source.start}:${source.end}`, sourceStart: source.start, sourceEnd: source.end,
-      selection: true, comparison: { html: notice.html, pdf: notice.pdf },
+      selection: true, comparison: notice,
       range: toolbox.rangeAt(model, index.starts[source.start] ?? index.source.length,
         index.ends[source.end - 1] ?? index.starts[source.start] ?? index.source.length),
       options: [{ id: 'pdf', label: '替换', edits: selected.flatMap(item => item.options[0].edits) }] };
@@ -887,7 +887,7 @@ window.PdfReviewReady = (async () => {
   window.PdfReviewProvider = {
     createLocator: toolbox.createLocator,
     measureHighlights, paintHighlight, clearHighlights,
-    getHighlight: div => selectionAreas.get(div),
+    getHighlight: (div, pointer = false) => (pointer ? pointerAreas : selectionAreas).get(div),
     readPageFonts: toolbox.readPageFonts,
     layerFonts: toolbox.layerFonts,
     selectionRange(editor, event, range) {

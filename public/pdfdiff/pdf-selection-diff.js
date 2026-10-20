@@ -271,7 +271,7 @@
     return connection.editorDiff ||= textDiff(source.raw.slice(connection.start, connection.end),
       target.raw.slice(connection.targetStart, connection.targetEnd), true);
   }
-  function reviewCandidates(index, targets = [], notice = null) {
+  function reviewCandidates(index, targets = [], notice = null, selectedParts = null) {
     const items = [], seen = [];
     function claim(start, end) {
       let low = 0, high = seen.length;
@@ -328,7 +328,7 @@
     for (const target of targets.filter(Boolean)) for (const connection of index.connections.get(target) || [])
       add(connection.start, connectionDiff(index, target, connection)?.parts, target.raw, connection.targetStart);
     if (notice?.source && index.raw.slice(notice.source.start, notice.source.end) === notice.html) {
-      add(notice.source.start, textDiff(notice.html, notice.pdf, true)?.parts);
+      add(notice.source.start, selectedParts || textDiff(notice.html, notice.pdf, true)?.parts);
     }
     return items.sort((a, b) => a.sourceStart - b.sourceStart || a.sourceEnd - b.sourceEnd);
   }
@@ -341,7 +341,7 @@
     const segments = [];
     for (let at = start; at < end; at++) {
       const a = index.starts[at], b = index.ends[at], last = segments.at(-1);
-      if (index.source?.slice(a, b).startsWith('<')) continue;
+      if (/^\s*$|^</.test(index.source?.slice(a, b))) continue;
       if (last && a <= last.end) last.end = Math.max(last.end, b);
       else segments.push({ start: a, end: b });
     }
@@ -403,6 +403,11 @@
     return window.PdfLocalTextDiff.textDiff(left, right, details, limit);
   }
   function monacoTextDiff(left, right, details = false) {
+    // Resolve bounded OCR changes before paying for full line alignment.
+    if (details) {
+      const refined = window.PdfLocalTextDiff.textDiff(left, right, true, 128);
+      if (refined.distance <= 128) return refined;
+    }
     const result = computer.computeDiff(left.split("\n"), right.split("\n"), {
       ignoreTrimWhitespace: false, maxComputationTimeMs: 1000,
       computeMoves: false, extendToSubwords: false
@@ -439,13 +444,6 @@
     }
     if (left.slice(a) !== right.slice(b)) throw new Error("Incomplete Monaco ranges");
     if (details) appendPart(parts, left.slice(a), right.slice(b), false);
-    // Line anchors can split matching wrapped prose into a deletion and insertion.
-    // A single changed run was already refined above; only separated runs can realign.
-    if (details && distance > 1 && parts.filter(part => part.changed).length > 1) {
-      const limit = Math.min(128, distance - 1);
-      const refined = window.PdfLocalTextDiff.textDiff(left, right, true, limit);
-      if (refined.distance <= limit) return refined;
-    }
     return { distance, parts: details ? parts : undefined };
   }
   function changedRange(before, after) {
@@ -570,6 +568,9 @@
         }
         const hit = cached.hit;
         if (!hit) continue;
+        const layer = index.layer.getBoundingClientRect();
+        if (cached.bounds) return { left: layer.left + cached.bounds.left * layer.width,
+          top: layer.top + cached.bounds.top * layer.height, bottom: layer.top + cached.bounds.bottom * layer.height };
         const end = index.raw.slice(hit.start, hit.end).trim() ? hit.end : hit.start;
         const first = Math.min(index.parts.length - 1, lowerBound(index.parts, hit.start + 1, part => part.end));
         const last = hit.start === end ? first : lowerBound(index.parts, end, part => part.end), boxes = [];
@@ -579,8 +580,13 @@
           range.setEnd(part.node, Math.max(0, Math.min(part.node.length, end - part.start)));
           boxes.push(...[...range.getClientRects()].filter(box => box.height));
         }
-        if (boxes.length) return { left: Math.min(...boxes.map(box => box.left)),
-          top: Math.min(...boxes.map(box => box.top)), bottom: Math.max(...boxes.map(box => box.bottom)) };
+        if (boxes.length) {
+          const bounds = { left: Math.min(...boxes.map(box => box.left)),
+            top: Math.min(...boxes.map(box => box.top)), bottom: Math.max(...boxes.map(box => box.bottom)) };
+          if (layer.width && layer.height) cached.bounds = { left: (bounds.left - layer.left) / layer.width,
+            top: (bounds.top - layer.top) / layer.height, bottom: (bounds.bottom - layer.top) / layer.height };
+          return bounds;
+        }
       }
       return null;
     }

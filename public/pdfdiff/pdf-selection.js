@@ -67,9 +67,22 @@
       const boxes = [];
       for (const number of visiblePages()) {
         const div = viewer.getPageView(number - 1)?.div;
-        for (const mark of div?.querySelectorAll('.mew-pdf-selection-highlight > div') || []) {
-          const box = mark.getBoundingClientRect();
-          if (box.height && box.bottom > viewport.top && box.top < viewport.bottom) boxes.push(box);
+        const painted = div ? [review.getHighlight(div), review.getHighlight(div, true)].filter(area => area?.node.isConnected) : [];
+        if (!painted.length) continue;
+        const page = div.getBoundingClientRect(), sx = page.width / div.offsetWidth, sy = page.height / div.offsetHeight;
+        const pageLeft = page.left + div.clientLeft * sx, pageTop = page.top + div.clientTop * sy,
+          pageWidth = div.clientWidth * sx, pageHeight = div.clientHeight * sy;
+        for (const mark of painted.flatMap(area => area.boxes)) {
+          const left = pageLeft + mark.x * pageWidth, top = pageTop + mark.y * pageHeight;
+          const box = { left, top, right: left + mark.w * pageWidth,
+            bottom: top + mark.h * pageHeight, height: mark.h * pageHeight };
+          if (!box.height || box.bottom <= viewport.top || box.top >= viewport.bottom) continue;
+          const previous = boxes.at(-1);
+          // Gaps narrower than the popup cannot hold it; treat adjoining words as one obstacle.
+          if (previous && Math.abs(previous.top - box.top) < .5 && Math.abs(previous.bottom - box.bottom) < .5
+            && box.left <= previous.right + width && box.right >= previous.left - width) {
+            previous.left = Math.min(previous.left, box.left); previous.right = Math.max(previous.right, box.right);
+          } else boxes.push({ left: box.left, right: box.right, top: box.top, bottom: box.bottom });
         }
       }
       // A multiline anchor spans the gaps too; use the actual marks when painted.
