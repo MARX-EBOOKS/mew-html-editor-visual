@@ -1,14 +1,12 @@
-// PDF review owns sessions, popup, navigation, replacement and highlights.
 window.PdfReviewReady = (async () => {
-  'use strict';
   if (!window.PdfSelectionDiff) await import('./pdf-selection-diff.js');
-  if (!window.LocalOcrTextReader) await import('./local-ocr-text-reader.js');
-
-function createReviewHost(toolbox) {
-  const providers = new Map();
-  let session = null, generation = 0, pending = null, view = null, previewModels = [], disposals = [], lastRequest = null;
+// Shared popup renderer and current-file candidate navigation. Providers own content and actions.
+(() => {
+  'use strict';
+  const toolbox = window.PdfSelectionDiff, providers = new Map();
+  let session = null, generation = 0, pending = null, disposals = [], lastRequest = null;
   let widget = null, widgetEditor = null, noticeAnchor = null, noticeLayout = null, manualTimer = null, composing = false;
-  let placementFrame = null;
+  let placementFrame = 0;
   const menu = document.getElementById('replacementFeatures');
   const panel = document.createElement('section');
   panel.className = 'replacement-review'; panel.hidden = true;
@@ -24,6 +22,7 @@ function createReviewHost(toolbox) {
     if (!fields.has(name)) fields.set(name, panel.querySelector(`[data-${name}]`));
     return fields.get(name);
   };
+  function editor() { return window.mewWorkbench?.editor || window.readerMonaco?.editor; }
   function workspace() {
     const owner = session?.editor.getDomNode()?.ownerDocument.defaultView;
     return owner?.mewWorkbench || owner?.readerMonaco;
@@ -33,7 +32,7 @@ function createReviewHost(toolbox) {
   function presentation() { return session?.provider.presentation?.(session.context, current()) || noticeLayout; }
   function valid() {
     return session && !session.stale && session.editor.getModel() === session.model
-      && (session.version !== undefined ? session.model.getVersionId?.() === session.version : session.model.getValue() === session.source)
+      && (session.version !== undefined ? session.model.getVersionId() === session.version : session.model.getValue() === session.source)
       && (!session.provider.isCurrent || session.provider.isCurrent(session.context));
   }
   function validateCandidates(result) {
@@ -76,10 +75,7 @@ function createReviewHost(toolbox) {
     }
   }
   function clearPreview() {
-    view?.setModel(null);
-    const previous = previewModels.splice(0);
-    // Monaco releases the previous diff view model on the next event-loop turn.
-    if (previous.length) setTimeout(() => previous.forEach(model => model.dispose()), 0);
+    get('preview').replaceChildren();
   }
   function mount(target) {
     const api = target?.getDomNode()?.ownerDocument.defaultView.monaco;
@@ -100,7 +96,7 @@ function createReviewHost(toolbox) {
     target.addContentWidget(widget);
   }
   function close(dismiss = true, restoreFocus = true) {
-    cancelAnimationFrame(placementFrame); placementFrame = null;
+    cancelAnimationFrame(placementFrame); placementFrame = 0;
     clearTimeout(manualTimer); manualTimer = null; composing = false;
     ++generation; pending?.abort(); pending = null;
     disposals.splice(0).forEach(dispose => dispose());
@@ -108,19 +104,18 @@ function createReviewHost(toolbox) {
     if (widget) { widgetEditor.removeContentWidget(widget); widget = widgetEditor = null; document.body.append(panel); delete panel.dataset.contentWidget; panel.style.cssText = ''; }
     const previous = session; session = null;
     previous?.provider.onClose?.(previous.context);
-    if (previous && dismiss) window.dispatchEvent(new CustomEvent('replacement-review-closed', { detail: {
-      id: previous.provider.id, editor: previous.editor, model: previous.model
-    } }));
     const owner = previous?.editor.getDomNode()?.ownerDocument.defaultView;
-    if (previous && dismiss && owner && owner !== window) owner.dispatchEvent(new owner.CustomEvent('replacement-review-closed', { detail: {
-      id: previous.provider.id, editor: previous.editor, model: previous.model
-    } }));
+    if (previous && dismiss) for (const target of new Set([window, owner].filter(Boolean))) {
+      target.dispatchEvent(new target.CustomEvent('replacement-review-closed', { detail: {
+        id: previous.provider.id, editor: previous.editor, model: previous.model
+      } }));
+    }
     if (dismiss && restoreFocus && panel.dataset.side !== 'pdf') previous?.editor.focus();
   }
   function stale(event) {
     if (!session) return;
     session.stale = true; ++generation; clearPreview();
-    queueManualRefresh(event);
+    queueManualRefresh(event); controls();
   }
   function queueManualRefresh(event) {
     const saved = session;
@@ -136,10 +131,9 @@ function createReviewHost(toolbox) {
     if (event) { saved.needsSave = true; saved.manualSave = true; }
     clearTimeout(manualTimer);
     message('正在自动重新计算差异…' + (saved.needsSave ? ' 内容已修改，请保存。' : '')); controls();
-    if (!composing) manualTimer = setTimeout(() => void refreshAfterEdit(saved), 0);
+    if (!composing) manualTimer = setTimeout(() => void refreshAfterEdit(saved), 300);
   }
-  function refreshAfterEdit(saved) {
-    return saved.refreshTask ||= (async () => {
+  async function refreshAfterEdit(saved) {
     if (session !== saved || !saved.manualPending || composing || saved.editor.getModel() !== saved.model) return;
     const request = ++generation, source = saved.model.getValue(), version = saved.model.getVersionId?.();
     const context = { ...saved.context, source, version, request: { ...saved.context.request, snapshot: null } };
@@ -157,21 +151,20 @@ function createReviewHost(toolbox) {
       saved.choices = result.choices || new Map(saved.items.map(item => [item.id, saved.choices.get(item.id) || item.options[0].id]));
       render(true);
     } catch (error) { if (session === saved && request === generation) message(error.message); }
-    })().finally(() => { saved.refreshTask = null; });
   }
   function controls() {
-    const item = current(), currentVersion = valid(), ready = (currentVersion || session?.manualPending && !composing) && !!item && !session.applying && !session.saving && !session.waitingApply;
+    const item = current(), ready = valid() && !!item && !session.applying && !session.saving;
     for (const name of ['apply', 'advance', 'all']) get(name).disabled = !ready || !session?.provider.apply || session.content?.apply === false;
     get('save').textContent = session?.manualSave ? '保存修改' : '替换&保存';
     get('save').disabled = !workspace()?.save || !!session?.saving || !!session?.applying || !(session?.manualSave
       ? session.editor.getModel() === session.model : ready && session?.provider.apply && session.content?.apply !== false);
-    const blocked = !currentVersion || !!session?.applying;
+    const blocked = !valid() || !!session?.applying;
     get('prev').disabled = blocked || session.position <= 0;
     get('next').disabled = blocked || session.position >= session.items.length - 1;
     get('position').textContent = session ? `${Math.min(session.position + 1, session.items.length)} / ${session.items.length}` : '';
   }
   async function open(id, suppliedEditor, focusId, fallbackPosition = 0, requestData = null) {
-    const provider = providers.get(id), target = suppliedEditor || window.mewWorkbench?.editor || window.readerMonaco?.editor;
+    const provider = providers.get(id), target = suppliedEditor || editor();
     const placement = provider?.presentation?.({ editor: target, request: requestData });
     if (placement?.host && placement.host !== window.ReplacementReview) return placement.host.open(id, target, focusId, fallbackPosition, requestData);
     close(false);
@@ -219,7 +212,7 @@ function createReviewHost(toolbox) {
     const compositionStart = target.onDidCompositionStart?.(() => { composing = true; clearTimeout(manualTimer); });
     const compositionEnd = target.onDidCompositionEnd?.(() => {
       composing = false;
-      if (session?.manualPending) { const saved = session; manualTimer = setTimeout(() => void refreshAfterEdit(saved), 0); }
+      if (session?.manualPending) { const saved = session; manualTimer = setTimeout(() => void refreshAfterEdit(saved), 300); }
     });
     disposals.push(() => compositionStart?.dispose(), () => compositionEnd?.dispose());
     // Keep an opening session so typing while extraction runs schedules a fresh calculation.
@@ -243,9 +236,9 @@ function createReviewHost(toolbox) {
       const items = validateCandidates(result);
       let found = items.findIndex(item => item.id === focusId);
       if (found < 0) found = provider.focusIndex?.(items, requestData) ?? -1;
-      Object.assign(session, { items,
+      session = { provider, editor: target, model, source, version, context, items,
         position: found >= 0 ? found : Math.max(0, Math.min(fallbackPosition, items.length - 1)),
-        choices: new Map(items.map(item => [item.id, snapshot?.choices.get(item.id) || item.options[0].id])) });
+        manualSave: snapshot?.manualSave || false, needsSave: snapshot?.needsSave || false, choices: new Map(items.map(item => [item.id, snapshot?.choices.get(item.id) || item.options[0].id])) };
       render(!!requestData);
     } catch (error) { if (request === generation) {
       if (provider.isCurrent && !provider.isCurrent(context)) stale();
@@ -270,8 +263,9 @@ function createReviewHost(toolbox) {
         input.onchange = () => { session.choices.set(item.id, value.id); render(); };
         label.append(input, document.createTextNode(value.label)); get('options').append(label);
       }
-      selectField(preserveSelection); session.provider.onSelect?.(item, session.context, session.items);
-    } else session.provider.onClose?.(session.context);
+      selectField(preserveSelection);
+    }
+    session.provider.onSelect?.(item, session.context);
     void preview(); place(session.editor);
   }
   function comparison(rows = []) {
@@ -314,40 +308,36 @@ function createReviewHost(toolbox) {
     return open(id, target, focusId, 0, request);
   }
   function selectField(preserveSelection) {
-    const selected = preserveSelection && session.editor.getSelection();
-    const keep = selected && !selected.isEmpty();
-    const range = keep ? selected : session.content?.range;
-    session.anchor = range;
-    if (range) {
-      session.anchorOffset = session.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
-      if (!preserveSelection) {
-        session.editor.setSelection(range);
-        session.editor.revealRangeInCenterIfOutsideViewport(range);
-      }
-    }
+    const range = session.anchor = session.content?.range;
+    if (!range) return;
+    session.anchorOffset = session.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
+    if (preserveSelection && session.editor.getSelection()) return;
+    session.editor.setSelection(range);
+    session.editor.revealRangeInCenterIfOutsideViewport(range);
   }
   async function preview() {
     if (get('expanded').hidden || !get('expanded').open || !valid() || !current()) return;
     const saved = session, request = ++generation;
     try {
-      const api = await window.MewEditorCore.loadMonaco();
-      if (session !== saved || request !== generation || !valid() || !get('expanded').open) return;
       const data = await session.provider.preview?.(session, get('file').checked);
       if (!data || session !== saved || request !== generation || !valid()) return;
-      const { before, after, language = 'plaintext' } = data;
-      if (!view) view = api.editor.createDiffEditor(get('preview'), { automaticLayout: true, readOnly: true, originalEditable: false,
-        renderSideBySide: false, minimap: { enabled: false }, scrollBeyondLastLine: false, diffAlgorithm: 'advanced' });
+      const parts = toolbox.textDiff(data.before, data.after, true).parts;
       clearPreview();
-      previewModels = [api.editor.createModel(before, language), api.editor.createModel(after, language)];
-      view.setModel({ original: previewModels[0], modified: previewModels[1] });
+      for (const [side, label] of [['html', '修改前'], ['pdf', '修改后']]) {
+        const row = document.createElement('pre');
+        row.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;margin:8px';
+        row.append(document.createTextNode(label + '\n'));
+        for (const part of parts) {
+          const span = document.createElement(part.changed ? 'mark' : 'span');
+          span.textContent = part[side]; row.append(span);
+        }
+        get('preview').append(row);
+      }
     } catch (error) { if (session === saved && request === generation) { clearPreview(); message(error.message); } }
   }
   async function apply(all, advance = false) {
+    if (!valid()) { stale(); return; }
     const saved = session;
-    if (saved?.waitingApply) return;
-    if (saved?.refreshTask || saved?.manualPending && !composing)
-      await (saved.waitingApply = saved.refreshTask || refreshAfterEdit(saved)).finally(() => { saved.waitingApply = null; });
-    if (session !== saved || !valid()) return;
     if (!current() || !saved.provider.apply || saved.applying) return;
     saved.applying = true; controls();
     try {
@@ -356,10 +346,10 @@ function createReviewHost(toolbox) {
         source: saved.source, version: saved.version, items: saved.items,
         position: saved.position, choices: saved.choices, context: { ...saved.context } }, all);
       if (session !== saved) return;
-      const source = saved.model.getValue(), changed = source !== saved.source;
+      const changed = saved.model.getValue() !== saved.source;
       Object.assign(saved, { items: result.items, choices: result.choices || saved.choices,
         position: result.position, context: result.context || saved.context,
-        source, version: saved.model.getVersionId?.() });
+        source: saved.model.getValue(), version: saved.model.getVersionId?.() });
       if (changed) saved.needsSave = true;
       Object.assign(saved.context, { source: saved.source, version: saved.version });
       if (saved.context.request) saved.context.request = { ...saved.context.request, snapshot: null };
@@ -380,11 +370,6 @@ function createReviewHost(toolbox) {
     const next = session.position + direction;
     if (next >= 0 && next < session.items.length) { session.position = next; render(); }
   }
-  function queuePlace() {
-    if (!panel.hidden && placementFrame === null) placementFrame = requestAnimationFrame(() => {
-      placementFrame = null; place();
-    });
-  }
   function place(target = session?.editor) {
     if (panel.hidden) return;
     const layout = presentation(), pdfSide = layout?.side === 'pdf';
@@ -403,25 +388,32 @@ function createReviewHost(toolbox) {
     const position = !pdfSide && range ? target.getScrolledVisiblePosition({ lineNumber: range.startLineNumber, column: range.startColumn }) : null;
     const top = Math.max(8, rect?.top || 8), bottom = Math.min(innerHeight - 8, rect?.bottom || innerHeight - 8);
     const fragment = layout?.anchor || noticeAnchor;
-    // Never show a new candidate at the preceding selection's coordinates.
-    panel.style.visibility = pdfSide && current() && !fragment ? 'hidden' : '';
+    panel.style.visibility = '';
     const anchor = Math.max(top, Math.min(bottom, fragment?.top ?? (rect?.top || 0) + (position?.top ?? 40)));
     const height = panel.getBoundingClientRect().height;
-    const above = anchor - height - 8;
+    panel.style.left = `${Math.max(left, Math.min(right - panel.offsetWidth, fragment?.left ?? left + (position?.left || 0)))}px`;
     if (pdfSide && fragment) {
-      const placement = layout.window?.PdfSelection?.popupPlacement(fragment, { left, right, top, bottom }, panel.offsetWidth, height)
-        || { left: Math.max(left, Math.min(right - panel.offsetWidth, fragment.left)), height,
-          top: Math.max(top, Math.min(bottom - height, above >= top ? above : fragment.bottom + 8)) };
-      panel.style.visibility = '';
-      if (placement) {
-        panel.style.maxHeight = `${placement.height}px`;
-        panel.style.top = `${placement.top}px`; panel.style.left = `${placement.left}px`;
-      }
-      return;
+      const x = parseFloat(panel.style.left), width = panel.offsetWidth;
+      const occupied = (layout.highlights?.length ? layout.highlights : [fragment]).filter(box => box.bottom > top && box.top < bottom
+        && (box.right === undefined || box.right > x && box.left < x + width)).sort((a, b) => a.top - b.top);
+      const gaps = []; let edge = top;
+      for (const box of occupied) { if (box.top - 8 > edge) gaps.push([edge, box.top - 8]); edge = Math.max(edge, box.bottom + 8); }
+      if (edge < bottom) gaps.push([edge, bottom]);
+      const gap = gaps.filter(([a, b]) => b - a >= Math.min(height, 100)).sort((a, b) =>
+        Number(b[1] - b[0] >= height) - Number(a[1] - a[0] >= height)
+        || Math.abs(Math.max(a[0], Math.min(a[1] - height, anchor - height - 8)) - anchor)
+          - Math.abs(Math.max(b[0], Math.min(b[1] - height, anchor - height - 8)) - anchor))[0];
+      const room = gap ? Math.min(height, gap[1] - gap[0]) : height;
+      if (gap) panel.style.maxHeight = `${room}px`;
+      panel.style.top = `${gap ? Math.max(gap[0], Math.min(gap[1] - room, anchor - room - 8)) : Math.max(top, bottom - height)}px`;
+      if (!gap && (left >= width + 16 || innerWidth - right >= width + 16)) panel.style.left = `${left >= width + 16 ? left - width - 8 : right + 8}px`;
     } else {
+      const above = anchor - height - 8;
       panel.style.top = `${Math.max(top, Math.min(bottom - height, above >= top ? above : (fragment?.bottom ?? anchor + (position?.height || 20)) + 8))}px`;
     }
-    panel.style.left = `${Math.max(left, Math.min(right - panel.offsetWidth, fragment?.left ?? left + (position?.left || 0)))}px`;
+  }
+  function queuePlace() {
+    if (!panel.hidden && !placementFrame) placementFrame = requestAnimationFrame(() => { placementFrame = 0; place(); });
   }
   async function switchSide() {
     if (!valid() || session.applying) return;
@@ -489,9 +481,9 @@ function createReviewHost(toolbox) {
   }, true);
   new ResizeObserver(queuePlace).observe(panel);
   window.addEventListener('resize', queuePlace);
-  window.addEventListener('pagehide', () => { close(); view?.dispose(); });
-  updateMenu();
-  return {
+  window.addEventListener('pdf-selection-highlight-change', queuePlace);
+  window.addEventListener('pagehide', () => { close(); });
+  window.ReplacementReview = {
     open, openForSelection, showNotice, close, refreshMenu: updateMenu,
     isOpenFor(id, target) { return !panel.hidden && (session?.provider.id === id && session.editor === target || lastRequest?.id === id && lastRequest.editor === target); },
     invalidate(id, changed = () => true) { if (session?.provider.id === id && changed(session.context)) stale(); },
@@ -502,11 +494,13 @@ function createReviewHost(toolbox) {
       return () => { if (session?.provider === provider || lastRequest?.id === provider.id) close(); providers.delete(provider.id); updateMenu(); };
     }
   };
-}
+  updateMenu();
+})();
 
 // PDF comparison is one review provider. Selection synchronization remains independent.
 (() => {
-  const toolbox = window.PdfSelectionDiff, host = window.ReplacementReview ||= createReviewHost(toolbox);
+  'use strict';
+  const host = window.ReplacementReview, toolbox = window.PdfSelectionDiff;
   let enabled = true, fontEnabled = true;
   try { enabled = localStorage.getItem('mew.pdf-review.enabled') !== 'false'; } catch {}
   try { fontEnabled = localStorage.getItem('mew.pdf-review.font-enabled') !== 'false'; } catch {}
@@ -528,25 +522,17 @@ function createReviewHost(toolbox) {
     const split = source !== reader, side = split ? context.request?.side || 'html' : 'pdf';
     const request = context.request;
     const element = request?.anchorElement, box = request?.anchorBox;
-    const rect = (!item || side !== 'pdf') && element?.isConnected && element.getBoundingClientRect();
+    const rect = element?.isConnected && element.getBoundingClientRect();
     const anchor = item && side === 'pdf' ? getLocator().reviewAnchor(item, context.index) : rect && box ? { left: rect.left + box.x * rect.width, top: rect.top + box.y * rect.height,
       bottom: rect.top + (box.y + box.h) * rect.height } : request?.anchor;
     const destination = side === 'pdf' ? reader : source;
     return { side, switchable: split, switchLabel: side === 'pdf' ? '查看HTML' : '查看PDF', host: destination.ReplacementReview, window: destination,
-      container: viewer()?.container, eventBus: viewer()?.eventBus, anchor };
-  }
-  const comparisonCache = new WeakMap();
-  function comparisonParts(value) {
-    let cached = comparisonCache.get(value);
-    if (!cached || cached.html !== value.html || cached.pdf !== value.pdf) {
-      cached = { html: value.html, pdf: value.pdf, parts: toolbox.textDiff(value.html, value.pdf, true)?.parts || [{ ...value, changed: false }] };
-      comparisonCache.set(value, cached);
-    }
-    return cached.parts;
+      container: viewer()?.container, eventBus: viewer()?.eventBus, anchor,
+      highlights: item && side === 'pdf' ? selection()?.highlightRects?.() : [] };
   }
   function comparisonRows(value, compact = true) {
     if (typeof value?.html !== 'string' || typeof value?.pdf !== 'string') return [];
-    let parts = comparisonParts(value);
+    let parts = toolbox.textDiff(value.html, value.pdf, true)?.parts || [{ ...value, changed: false }];
     if (compact) {
       const first = parts.findIndex(part => part.changed), last = parts.findLastIndex(part => part.changed);
       if (first >= 0) {
@@ -560,10 +546,8 @@ function createReviewHost(toolbox) {
           ...parts.slice(first, last + 1), ...(suffix ? [{ html: suffix, pdf: suffix, changed: false }] : [])];
       }
     }
-    return ['html', 'pdf'].map(side => ({ label: side.toUpperCase(), parts: parts.map(part => {
-      const missing = part.changed && !part[side].trim() && !!part[side === 'html' ? 'pdf' : 'html'].trim();
-      return { text: missing ? '' : part[side], changed: part.changed };
-    }) }));
+    return ['html', 'pdf'].map(side => ({ label: side.toUpperCase(), parts: parts.map(part => ({
+      text: part.changed && !part[side].trim() ? '' : part[side], changed: part.changed })) }));
   }
   function formatItems(index, targets = []) {
     if (!fontEnabled) return [];
@@ -581,22 +565,20 @@ function createReviewHost(toolbox) {
     const pdf = context.pdf = viewer()?.pdfDocument;
     if (!pdf) throw new Error('请先在对照阅读器中打开 PDF。');
     const request = context.request;
-    const full = await getLocator().indexDocument(pdf);
+    if (request?.pdf === pdf && request.notice?.source?.index.source === context.source) {
+      // Selection already supplies confirmed mappings and the rendered layer's
+      // fonts. Do not block its popup on font analysis of the entire volume.
+      context.targets = [...new Set([request.notice.target?.index, ...(request.targets || [])].filter(Boolean))];
+      context.index = request.notice.source.index;
+      return reviewItems(context.index, context.targets, request.notice, context.model);
+    }
+    const full = await (fontEnabled ? getLocator().indexFonts(pdf) : getLocator().indexDocument(pdf));
     if (context.signal.aborted) return [];
     if (!full || !isCurrent(context)) throw new Error('PDF 已变化，正在等待对照文件就绪。');
     const index = context.index = getLocator().editorSourceIndex(context.model);
     context.targets = [full];
     getLocator().prepareSource(index, context.targets, pdf);
-    if (fontEnabled) await getLocator().indexFonts(pdf, index, context.signal);
-    return context.signal.aborted || !isCurrent(context) ? [] : reviewItems(index, context.targets, cachedNotice(request?.notice, pdf), context.model);
-  }
-  function cachedNotice(notice, pdf) {
-    const full = getLocator().getDocumentIndex(pdf), source = notice?.source;
-    if (!full || !source) return null;
-    getLocator().prepareSource(source.index, [full], pdf);
-    const hit = getLocator().connectedRange(source.index, full, source.start, source.end, false, undefined, true);
-    return hit ? { ...notice, html: source.index.raw.slice(source.start, source.end),
-      pdf: full.raw.slice(hit.start, hit.end), target: { index: full, start: hit.start, end: hit.end } } : null;
+    return reviewItems(index, context.targets, null, context.model);
   }
   function refreshCandidates(context, offset, previous) {
     const locator = getLocator(), index = context.index = locator.editorSourceIndex(context.model);
@@ -604,28 +586,24 @@ function createReviewHost(toolbox) {
     const items = reviewItems(index, context.targets, null, context.model), choices = new Map();
     // Preserve choices only for unchanged ranges; discover all current differences.
     const { start, oldEnd, newEnd } = toolbox.changedRange(previous.source, context.source);
-    const oldIndex = previous.context?.index, retained = new Map();
-    for (const candidate of oldIndex ? previous.items : []) {
-      const a = oldIndex.starts[candidate.sourceStart], b = oldIndex.ends[candidate.sourceEnd - 1] ?? a;
-      const delta = b <= start ? 0 : a >= oldEnd ? newEnd - oldEnd : null;
-      if (delta !== null) {
-        const key = `${a + delta}:${b + delta}:${!!candidate.font}`;
-        if (!retained.has(key)) retained.set(key, candidate);
-      }
-    }
-    let found = -1;
-    for (const [position, item] of items.entries()) {
-      const a = index.starts[item.sourceStart], b = index.ends[item.sourceEnd - 1] ?? a;
-      const candidate = retained.get(`${a}:${b}:${!!item.font}`);
+    const oldIndex = previous.context?.index;
+    for (const item of items) {
+      const candidate = oldIndex && previous.items.find(candidate => {
+        const a = oldIndex.starts[candidate.sourceStart], b = oldIndex.ends[candidate.sourceEnd - 1] ?? a;
+        const delta = b <= start ? 0 : a >= oldEnd ? newEnd - oldEnd : null;
+        return delta !== null && a + delta === index.starts[item.sourceStart]
+          && b + delta === (index.ends[item.sourceEnd - 1] ?? index.starts[item.sourceStart])
+          && !!candidate.font === !!item.font;
+      });
       const choice = candidate && previous.choices.get(candidate.id);
       choices.set(item.id, item.options.some(option => option.id === choice) ? choice : item.options[0].id);
-      if (found < 0 && ((index.starts[item.sourceEnd] ?? context.source.length) > offset
-        || (index.starts[item.sourceStart] ?? context.source.length) >= offset)) found = position;
     }
+    const found = items.findIndex(item => (index.starts[item.sourceEnd] ?? context.source.length) > offset
+      || (index.starts[item.sourceStart] ?? context.source.length) >= offset);
     return { items, choices, position: found < 0 ? items.length : found };
   }
   function reviewItems(index, targets, notice, model) {
-    let text = enabled ? toolbox.reviewCandidates(index, targets) : [];
+    let text = enabled ? toolbox.reviewCandidates(index, targets, notice) : [];
     const selected = enabled && selectionCandidate(index, notice, model);
     if (selected) text = [...text.filter(item => item.sourceEnd <= selected.sourceStart && item.sourceStart < selected.sourceStart
       || item.sourceStart >= selected.sourceEnd && item.sourceEnd > selected.sourceEnd), selected].sort((a, b) => a.sourceStart - b.sourceStart);
@@ -645,10 +623,10 @@ function createReviewHost(toolbox) {
   function selectionCandidate(index, notice, model) {
     const source = notice?.source;
     if (!source || index.raw.slice(source.start, source.end) !== notice.html) return null;
-    const selected = toolbox.reviewCandidates(index, [], notice, comparisonParts(notice));
+    const selected = toolbox.reviewCandidates(index, [], notice);
     if (!selected.length) return null;
     return { id: `${source.start}:${source.end}`, sourceStart: source.start, sourceEnd: source.end,
-      selection: true, comparison: notice,
+      selection: true, comparison: { html: notice.html, pdf: notice.pdf },
       range: toolbox.rangeAt(model, index.starts[source.start] ?? index.source.length,
         index.ends[source.end - 1] ?? index.starts[source.start] ?? index.source.length),
       options: [{ id: 'pdf', label: '替换', edits: selected.flatMap(item => item.options[0].edits) }] };
@@ -662,32 +640,63 @@ function createReviewHost(toolbox) {
       range: item?.range || (ranges.length ? toolbox.rangeAt(state.model, Math.min(...ranges.map(edit => edit.start)), Math.max(...ranges.map(edit => edit.end))) : null),
       options: [], applyLabel: item?.font ? '替换格式' : '替换', advance: false, expanded: false };
   }
-  const patterns = new WeakMap();
-  const pattern = value => {
-    if (!patterns.has(value)) patterns.set(value, JSON.stringify([!!value.font, ...(value.font ? [value.text,
-      ...['italic', 'bold'].flatMap(key => [value.htmlFont[key], value.font[key]])] : [value.comparison?.html, value.comparison?.pdf])]));
-    return patterns.get(value);
-  };
   function apply(state, all) {
     const item = state.items[state.position];
-    const key = item && pattern(item), selected = all ? state.items : state.items.filter(value => pattern(value) === key);
-    const edits = selected.flatMap(value => value.options.find(option => option.id === state.choices.get(value.id)).edits);
+    const pattern = value => JSON.stringify(value.font
+      ? [value.text, value.htmlFont.italic, value.htmlFont.bold, value.font.italic, value.font.bold]
+      : [value.comparison?.html, value.comparison?.pdf]);
+    const key = pattern(item);
+    const selected = new Set(all ? state.items : state.items.filter(candidate => candidate === item
+      || !!candidate.font === !!item.font && pattern(candidate) === key
+        && (candidate.font || typeof item.comparison?.html === 'string' && typeof item.comparison?.pdf === 'string')));
+    if (all || item?.font) getLocator().prepareSource(state.context.index, state.context.targets, state.context.pdf);
+    const edits = [...selected].flatMap(value => value.font
+      ? formatItems(state.context.index, state.context.targets).filter(candidate => candidate.sourceStart < value.sourceEnd
+        && candidate.sourceEnd > value.sourceStart).flatMap(candidate => candidate.options[0].edits)
+      : value.options.find(option => option.id === state.choices.get(value.id)).edits);
     const checked = toolbox.validateEdits(state.source, edits);
     const shift = offset => offset + checked.reduce((delta, edit) => delta + (edit.end <= offset
       ? edit.text.length - (edit.end - edit.start) : 0), 0);
+    const overlaps = (start, end) => checked.some(edit => edit.start === start
+      || edit.start < end && edit.end > start
+      || edit.start === edit.end && edit.start > start && edit.start < end);
+    // Reuse independent candidates; replacing one item must not remap the document.
+    const remaining = [];
+    for (const [position, candidate] of state.items.entries()) {
+      if (selected.has(candidate) || candidate.options.some(option => option.edits.some(edit => overlaps(edit.start, edit.end)))) continue;
+      let range;
+      if (candidate.range) {
+        const start = state.model.getOffsetAt({ lineNumber: candidate.range.startLineNumber, column: candidate.range.startColumn });
+        const end = state.model.getOffsetAt({ lineNumber: candidate.range.endLineNumber, column: candidate.range.endColumn });
+        if (overlaps(start, end)) continue;
+        range = { start: shift(start), end: shift(end) };
+      }
+      remaining.push({ candidate, range, before: position < state.position });
+    }
     toolbox.applyEdits(state.editor, state.model, state.version, state.source, checked);
-    const source = state.model.getValue();
-    const context = { ...state.context, source, version: state.model.getVersionId?.(),
-      request: { ...state.context.request, snapshot: null } };
-    // Regenerate ranges and expected text from the new source, including overlapping format changes.
-    return { ...refreshCandidates(context, shift(state.context.index.starts[item.sourceStart] ?? state.source.length), state),
-      context };
+    const locator = getLocator(), source = state.model.getValue(), index = locator.editorSourceIndex(state.model, state.context.targets);
+    const oldIndex = state.context.index, choices = new Map();
+    const items = remaining.map(({ candidate, range }) => {
+      const sourceStart = locator.lowerBound(index.starts, shift(oldIndex.starts[candidate.sourceStart] ?? state.source.length));
+      const sourceEnd = locator.lowerBound(index.starts, shift(oldIndex.starts[candidate.sourceEnd] ?? state.source.length));
+      const id = `${candidate.font ? 'font:' : ''}${sourceStart}:${sourceEnd}`;
+      const updated = { ...candidate, id, sourceStart, sourceEnd,
+        options: candidate.options.map(option => ({ ...option,
+          edits: option.edits.map(edit => ({ ...edit, start: shift(edit.start), end: shift(edit.end) })) })) };
+      if (range) updated.range = toolbox.rangeAt(state.model, range.start, range.end);
+      if (candidate.font) updated.text = index.raw.slice(sourceStart, sourceEnd);
+      if (candidate.comparison) updated.preview = candidate.comparison;
+      choices.set(id, state.choices.get(candidate.id) || updated.options[0].id);
+      return updated;
+    });
+    return { items, choices, position: remaining.filter(value => value.before).length,
+      context: { ...state.context, source, index } };
   }
 
   const review = {
     compact: true, content, apply, presentation, isCurrent, provide,
     refreshAfterEdit: refreshCandidates,
-    onSelect(item, context, items) { const key = pattern(item); selection()?.showReviewPointer(context.editor, items.filter(value => pattern(value) === key)); },
+    onSelect(item, context) { selection()?.showReviewPointer(context.editor, item); },
     onClose(context) { selection()?.clearReviewPointer(context.editor); }
   };
   const unregister = [host.register({
@@ -735,208 +744,14 @@ function createReviewHost(toolbox) {
     isEnabled: () => selection()?.selectionEnabled === true,
     setEnabled(value) { selection()?.setSelectionHighlight(value); }
   })];
-  function sourceDecorations(index, connections, model) {
-    const decorations = [], seen = new Set();
-    const add = (segments, prefix, options) => {
-      for (const { start, end } of segments) {
-        const key = `${prefix}${start}:${end}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        decorations.push({ range: toolbox.rangeAt(model, start, end), options: {
-          linesDecorationsClassName: 'mew-ocr-diff-line', stickiness: 1, ...options
-        } });
-      }
-    };
-    const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
-    for (const [connection, target] of connections) {
-      for (const { start, end, html, pdf } of toolbox.differences(index, target, connection).text)
-        add(start === end ? [toolbox.insertionSegment(index, start)] : toolbox.sourceSegments(index, start, end), '', {
-          description: 'PDF OCR text difference',
-          inlineClassName: html.length ? 'mew-ocr-diff-text' : undefined,
-          beforeContentClassName: html.length ? undefined : 'mew-ocr-diff-insert',
-          hoverMessage: { value: 'HTML: ' + escape(html) + '\n\nOCR: ' + escape(pdf), isTrusted: false },
-          linesDecorationsTooltip: 'Text differs from PDF OCR'
-        });
-    }
-    for (const item of toolbox.formatDifferences(index, connections)) {
-      const formats = item.formats || [item];
-      add(toolbox.sourceSegments(index, item.sourceStart, item.sourceEnd), 'font:', {
-        description: 'PDF font difference', inlineClassName: 'mew-ocr-diff-text mew-font-diff-text',
-        hoverMessage: { value: `HTML ${toolbox.fontSummary(formats.map(value => value.htmlFont))}\n\nPDF ${toolbox.fontSummary(formats.map(value => value.font))}`, isTrusted: false },
-        linesDecorationsTooltip: '粗体／斜体与 PDF 不一致'
-      });
-    }
-    return decorations;
-  }
-  // Offsets are in PDF.js's original text-item sequence, without geometry sorting.
-  function selectionOffsets(index, range) {
-    let start = null, end = null;
-    for (const part of index.parts) {
-      const element = index.highlighter.textDivs[part.divIdx];
-      if (!range.intersectsNode(element)) continue;
-      const selected = range.cloneRange(); selected.selectNodeContents(element);
-      if (element.contains(range.startContainer)) selected.setStart(range.startContainer, range.startOffset);
-      if (element.contains(range.endContainer)) selected.setEnd(range.endContainer, range.endOffset);
-      const prefix = selected.cloneRange(); prefix.selectNodeContents(element);
-      prefix.setEnd(selected.startContainer, selected.startOffset);
-      const a = prefix.toString().length, b = a + selected.toString().length;
-      if (a >= b) continue;
-      start ??= part.start + a; end = part.start + b;
-    }
-    return start === null ? null : { start, end };
-  }
-  function reviewAnchor(index, hit) {
-    const match = index.highlighter?._convertMatches([hit.start], [hit.end - hit.start])[0];
-    const element = match && index.highlighter.textDivs[match.begin.divIdx];
-    return element?.isConnected ? element.getBoundingClientRect() : null;
-  }
-  function measureHighlights(div, index, hits, focusHit) {
-    const boxes = [], notices = [], page = div.getBoundingClientRect();
-    let focus = null;
-    for (const hit of hits) {
-      const caret = hit.start === hit.end || !!hit.difference && !index.raw.slice(hit.start, hit.end).trim();
-      const end = caret ? hit.start : hit.end;
-      const anchor = reviewAnchor(index, { start: hit.start, end });
-      if (!anchor || !page.width || !page.height) continue;
-      // Geometry is only a popup/scroll hint; PDF.js paints the indexed match.
-      const box = { start: hit.start, end, caret,
-        x: (anchor.left - page.left) / page.width, y: (anchor.top - page.top) / page.height,
-        w: anchor.width / page.width, h: anchor.height / page.height };
-      boxes.push(box);
-      if (hit === focusHit) focus = box;
-      if (hit.difference || hit.source) notices.push({ box, ...hit.difference,
-        target: { index, start: hit.start, end: hit.end }, source: hit.source });
-    }
-    boxes.index = index;
-    return { count: hits.length, focus, boxes, notices };
-  }
-  const selectionAreas = new Map(), pointerAreas = new Map(), nativeHighlighters = new WeakMap();
-  function updateHighlights(div, index) {
-    const highlighter = index.highlighter;
-    if (!nativeHighlighters.has(highlighter)) {
-      const update = highlighter._updateMatches;
-      const state = { div, index };
-      nativeHighlighters.set(highlighter, state);
-      highlighter._updateMatches = function(reset = false) {
-        const { div, index } = state, controller = this.findController;
-        const selection = document.getSelection();
-        const range = selection?.rangeCount && !selection.isCollapsed && selection.getRangeAt(0);
-        const saved = range && index.parts && index.layer.contains(range.commonAncestorContainer)
-          && selectionOffsets(index, range);
-        const backwards = range && selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
-        const own = [selectionAreas.get(div), pointerAreas.get(div)]
-          .filter(area => area?.index.highlighter === this).flatMap(area => area.matches);
-        const pageIdx = this.pageIdx, entries = [];
-        const found = controller?.highlightMatches ? controller.pageMatches[pageIdx] || [] : [];
-        const lengths = controller?.pageMatchesLength[pageIdx] || [];
-        const selected = controller?.selected;
-        found.forEach((start, i) => {
-          if (controller.state.highlightAll || selected?.pageIdx === pageIdx && selected.matchIdx === i)
-            entries.push({ start, end: start + lengths[i], selected: selected?.pageIdx === pageIdx && selected.matchIdx === i });
-        });
-        entries.push(...own.map(box => ({ start: box.start, end: box.end })));
-        entries.sort((a, b) => a.start - b.start || b.end - a.end);
-        const merged = [];
-        for (const entry of entries) {
-          const last = merged.at(-1);
-          if (last && (entry.start < last.end || entry.start === last.start)) {
-            last.end = Math.max(last.end, entry.end); last.selected ||= entry.selected;
-          } else merged.push({ ...entry });
-        }
-        if (own.length) this.findController = new Proxy(controller || {}, {
-          get(target, key) {
-            if (key === 'highlightMatches') return true;
-            if (key === 'pageMatches') return { [pageIdx]: merged.map(entry => entry.start) };
-            if (key === 'pageMatchesLength') return { [pageIdx]: merged.map(entry => entry.end - entry.start) };
-            if (key === 'selected') return { pageIdx, matchIdx: merged.findIndex(entry => entry.selected) };
-            if (key === 'state') return { ...target.state, highlightAll: true };
-            if (key === 'scrollMatchIntoView') return args => target.scrollMatchIntoView({ ...args, matchIndex: selected.matchIdx });
-            const value = Reflect.get(target, key, target);
-            return typeof value === 'function' ? value.bind(target) : value;
-          }
-        });
-        // PDF.js rewrites its text spans. Those writes do not invalidate sequence indexes.
-        index.observer.disconnect();
-        try {
-          if (!own.length) {
-            delete index.layer.dataset.mewHighlight;
-            index.layer.style.removeProperty('--mew-pdf-highlight-color');
-          }
-          update.call(this, reset);
-          // Popup placement uses the marks PDF.js already painted, including wrapped lines.
-          // These bounds never participate in matching or text-item indexing.
-          if (own.length && !reset) {
-            const page = div.getBoundingClientRect();
-            const bounds = [...index.layer.querySelectorAll('.highlight')].flatMap(mark =>
-              [...mark.getClientRects()].map(box => ({ x: (box.left - page.left) / page.width,
-                y: (box.top - page.top) / page.height, w: box.width / page.width, h: box.height / page.height })));
-            for (const areas of [selectionAreas, pointerAreas]) {
-              const painted = areas.get(div);
-              if (painted?.index.highlighter === this) painted.boxes = bounds;
-            }
-          }
-          if (saved) {
-            const match = this._convertMatches([saved.start], [saved.end - saved.start])[0];
-            const position = point => {
-              const element = this.textDivs[point.divIdx];
-              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-              let node, offset = point.offset;
-              while ((node = walker.nextNode())) {
-                if (offset <= node.length) return [node, offset];
-                offset -= node.length;
-              }
-              return [element, element.childNodes.length];
-            };
-            const begin = position(match.begin), end = position(match.end);
-            selection.setBaseAndExtent(...(backwards ? end : begin), ...(backwards ? begin : end));
-          }
-        }
-        finally {
-          this.findController = controller;
-          index.observer.observe(index.layer, { subtree: true, childList: true, characterData: true, attributes: true });
-        }
-      };
-    }
-    nativeHighlighters.get(highlighter).index = index;
-    highlighter._updateMatches();
-  }
-  function paintHighlight(div, boxes, color, pointer = false) {
-    const store = pointer ? pointerAreas : selectionAreas, previous = store.get(div);
-    if (previous?.matches === boxes && previous.node.isConnected) return previous;
-    const index = boxes.index || previous?.index;
-    if (!boxes.length || !index) {
-      store.delete(div);
-      if (index) updateHighlights(div, index);
-      return;
-    }
-    const painted = { node: index.layer, index, matches: boxes, boxes };
-    if (!document.getElementById('mew-pdf-native-highlights')) {
-      const style = document.createElement('style'); style.id = 'mew-pdf-native-highlights';
-      style.textContent = '.textLayer[data-mew-highlight] .highlight{--highlight-bg-color:var(--mew-pdf-highlight-color)}.textLayer[data-mew-highlight] .highlight.appended:empty{border-left:2px solid #d58b24}';
-      document.head.append(style);
-    }
-    index.layer.dataset.mewHighlight = '';
-    index.layer.style.setProperty('--mew-pdf-highlight-color', color);
-    store.set(div, painted);
-    updateHighlights(div, index);
-    return painted;
-  }
-  function clearHighlights(pointer = false, visible = new Set()) {
-    const areas = pointer ? pointerAreas : selectionAreas;
-    for (const [div, painted] of areas) if (!visible.has(div)) {
-      areas.delete(div);
-      if (painted.node.isConnected) updateHighlights(div, painted.index);
-    }
-  }
-  const marks = new Map();
+  // Diff decorations and click ranges belong to review; selection supplies prepared mappings.
+  const marks = new Map(), pageFontItems = new WeakMap();
   function clearMarks() {
     for (const state of marks.values()) { state.collection.clear(); state.dispose?.(); state.style.remove(); }
     marks.clear();
   }
   function onSources(event) {
-    const { editor, index, enabled } = event.detail;
-    const full = getLocator().getDocumentIndex(event.detail.pdf);
-    const targets = full ? [full] : [];
+    const { editor, index, targets, enabled } = event.detail;
     if (!editor?.createDecorationsCollection) return;
     let state = marks.get(editor);
     if (!state) {
@@ -944,32 +759,51 @@ function createReviewHost(toolbox) {
       style.textContent = '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{border-left:2px solid #d58b24;margin-left:-1px;cursor:pointer}';
       doc.head.append(style);
       state = { collection: editor.createDecorationsCollection(), style };
-      const subscription = editor.onDidChangeModel?.(() => { state.key = null; state.collection.clear(); });
-      const disposed = editor.onDidDispose?.(() => {
-        state.dispose();
-        state.style.remove();
-        marks.delete(editor);
-      });
-      state.dispose = () => { subscription?.dispose(); disposed?.dispose(); state.key = null; };
+      const clear = () => state.collection.clear();
+      const subscriptions = [editor.onDidChangeModel?.(clear), editor.onDidChangeModelContent?.(clear)];
+      state.dispose = () => subscriptions.forEach(subscription => subscription?.dispose());
       marks.set(editor, state);
     }
     if (index) getLocator().prepareSource(index, targets, event.detail.pdf);
     const connections = index ? targets.flatMap(target => (index.connections.get(target) || []).map(item => [item, target])) : [];
-    const previous = state.key, model = editor.getModel();
-    if (previous && previous.index === index && previous.enabled === enabled && previous.model === model
-      && previous.connections.size === connections.length && connections.every(([item, target]) => {
-        const saved = previous.connections.get(item);
-        return saved?.target === target && saved.fontVersion === target.fontVersion;
-      })) return;
-    state.collection.set(enabled && index ? sourceDecorations(index, connections, model) : []);
-    state.key = { index, enabled, model, connections: new Map(connections.map(([item, target]) =>
-      [item, { target, fontVersion: target.fontVersion }])) };
+    if (enabled && index) {
+      state.collection.set(toolbox.sourceDecorations(index, connections, editor.getModel()));
+    } else state.collection.clear();
   }
   window.PdfReviewProvider = {
-    createLocator: toolbox.createLocator,
-    sourceDecorations, measureHighlights, paintHighlight, clearHighlights, reviewAnchor, selectionOffsets,
-    getHighlight: (div, pointer = false) => (pointer ? pointerAreas : selectionAreas).get(div),
-    layerFonts: toolbox.layerFonts,
+    readPageFonts: toolbox.readPageFonts,
+    layerFonts(view, layer, refresh) {
+      const page = view?.pdfPage, objects = page?.commonObjs, fonts = new Map();
+      if (page?.getTextContent && !pageFontItems.has(page)) {
+        pageFontItems.set(page, { items: [], fonts: new Map() });
+        toolbox.readPageText(page).then(async content => {
+          const items = content.items.filter(item => item.str?.length);
+          const fonts = await toolbox.readPageFonts(page, items);
+          pageFontItems.set(page, { items, fonts }); refresh();
+        }).catch(() => pageFontItems.delete(page));
+      }
+      const data = pageFontItems.get(page), items = data?.items || [];
+      const spans = (view?._textHighlighter?.textDivs || [...layer.querySelectorAll('span[role="presentation"]')]).filter(span => span.textContent);
+      const names = new Map();
+      if (spans.length === items.length && spans.every((span, i) => span.textContent === items[i].str))
+        spans.forEach((span, i) => names.set(span, items[i]));
+      return element => {
+        const css = element.ownerDocument.defaultView.getComputedStyle(element), family = css.fontFamily;
+        const item = names.get(element);
+        const observed = item && toolbox.textItemFont(data?.fonts, item);
+        if (observed) return observed;
+        const id = item?.fontName || element.dataset?.fontName;
+        const key = `${id}:${family}:${css.fontStyle}:${css.fontWeight}`;
+        if (!fonts.has(key)) {
+          const font = id && objects?.has(id) ? objects.get(id) : objects && [...objects].map(([, value]) => value)
+            .find(value => value.loadedName && family.includes(value.loadedName));
+          const style = data?.fonts.get(id) || toolbox.fontStyle(font, family, css);
+          fonts.set(key, page?.getTextContent && !data?.fonts.has(id)
+            ? { ...style, bold: null, italic: null, reason: '字体渲染模式检查中' } : style);
+        }
+        return fonts.get(key);
+      };
+    },
     selectionRange(editor, event, range) {
       // A text drag owns its full range, even when it ends on a diff marker.
       if (!event?.lineRange && !range.isEmpty?.()) return null;
@@ -983,16 +817,18 @@ function createReviewHost(toolbox) {
   };
   // The independent selection module publishes data, never review UI calls.
   let listeningWindow = null;
-  let dismissed = null;
+  let dismissed = null, differenceRequest = 0;
   function onClose(event) {
     if (!['pdf-ocr', 'pdf-font'].includes(event.detail.id)) return;
     const { editor, model } = event.detail;
     dismissed = { editor, model, version: model.getVersionId?.(), range: editor.getSelection()?.toString(), interaction: selection()?.interactionId };
   }
   window.addEventListener('replacement-review-closed', onClose);
-  function onDifference(event) {
+  async function onDifference(event) {
     if (!enabled && !fontEnabled) return;
     const data = event.detail, editor = data.editor, model = editor?.getModel();
+    const request = ++differenceRequest, version = model?.getVersionId?.();
+    if (request !== differenceRequest || editor?.getModel() !== model || model?.getVersionId?.() !== version) return;
     const readerHost = listeningWindow?.ReplacementReview;
     const destination = ['pdf-ocr', 'pdf-font'].some(id => readerHost?.isOpenFor(id, editor)) ? readerHost
       : editor?.getDomNode()?.ownerDocument.defaultView.ReplacementReview || readerHost;
@@ -1000,20 +836,18 @@ function createReviewHost(toolbox) {
     if (dismissed?.editor === editor && dismissed.model === model && dismissed.version === model?.getVersionId?.()
       && dismissed.range === editor?.getSelection()?.toString() && dismissed.interaction === data.interactionId) return;
     dismissed = null;
-    const notices = data.notices.map(value => cachedNotice(value, data.pdf)).filter(Boolean);
-    const changed = notices.find(value => typeof value.html === 'string' && typeof value.pdf === 'string'
-      && comparisonParts(value).some(part => part.changed));
-    const mapping = changed || notices.find(value => value.source) || notices[0];
+    const changed = data.notices.find(value => typeof value.html === 'string' && typeof value.pdf === 'string'
+      && toolbox.textDiff(value.html, value.pdf, true)?.parts.some(part => part.changed));
+    const mapping = changed || data.notices.find(value => value.source) || data.notices[0];
     const notice = mapping?.target ? { ...mapping,
       fonts: toolbox.fontRuns(mapping.target.index, mapping.target.start, mapping.target.end),
       text: mapping.target.index.raw.slice(mapping.target.start, mapping.target.end) } : mapping;
-    if (notice && mapping !== notice && comparisonCache.has(mapping)) comparisonCache.set(notice, comparisonCache.get(mapping));
-    if (!notice || notice.source && model && notice.source.index.source !== model.getValue()) return;
+    if (!notice) return;
     const textDifference = !!changed;
     if (!textDifference) {
       if (notice.source && model && notice.source.index.source === model.getValue()) {
         const index = notice.source.index;
-        const targets = [getLocator().getDocumentIndex(data.pdf)].filter(Boolean);
+        const targets = [...new Set([notice.target?.index, ...(data.targets || [])].filter(Boolean))];
         // Compare the selected PDF layer even before background page mapping
         // has populated the source's connections (including exact text hits).
         if (notice.target && getLocator().normalized(index.raw.slice(notice.source.start, notice.source.end)).text
@@ -1066,8 +900,7 @@ function createReviewHost(toolbox) {
       previousApi = api; previousEnabled = state; host.refreshMenu();
     }
   }, 500);
-  window.addEventListener('pagehide', () => { clearInterval(poll); clearHighlights(); clearHighlights(true); clearMarks(); window.removeEventListener('pdf-selection-sources', onSources); window.removeEventListener('pdf-selection-reset', clearMarks); listeningWindow?.removeEventListener('pdf-selection-difference', onDifference); window.removeEventListener('replacement-review-closed', onClose); unregister.forEach(dispose => dispose()); });
+  window.addEventListener('pagehide', () => { clearInterval(poll); clearMarks(); window.removeEventListener('pdf-selection-sources', onSources); window.removeEventListener('pdf-selection-reset', clearMarks); listeningWindow?.removeEventListener('pdf-selection-difference', onDifference); window.removeEventListener('replacement-review-closed', onClose); unregister.forEach(dispose => dispose()); });
 })();
 
-  return window.PdfReviewProvider;
 })();
