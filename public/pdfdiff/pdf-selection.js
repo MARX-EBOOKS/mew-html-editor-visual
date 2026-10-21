@@ -7,11 +7,12 @@
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
-// Standalone reader attachment; configuration and usage: pdf-selection.md.
+// Reader selection attachment; review owns loading and rendering. See pdf-selection.md.
 (async () => {
   "use strict";
   if (typeof window === "undefined" || window.PdfSelection) return;
   await window.PdfReviewReady;
+  const review = window.PdfReviewProvider;
   if (window.PdfSelection) return;
   const options = {
     viewerModuleUrl: "/vendor/pdfjs/web/pdf_viewer.mjs",
@@ -20,7 +21,7 @@
   };
   const cleanup = [], editors = new WeakSet(), selectionDocuments = new WeakSet();
   let selecting = false, pendingDifference = null;
-  const overlays = new Map(), layers = new Map();
+  const layers = new Map();
   const pageResults = new WeakMap();
   const preparationPages = new Set();
   const editIdleDelay = 350;
@@ -39,7 +40,7 @@
   } catch {}
   let visualDocument = null, detachVisual = () => {};
   let pairedWindow = null, pairedSession = "";
-  const diff = window.PdfSelectionDiff.createLocator(options, {
+  const diff = review.createLocator(options, {
     document, getPdf: () => viewer?.pdfDocument,
     getTargets: () => [...layers.values()].filter(page => page.pdf === viewer?.pdfDocument),
     getVisiblePages: () => visiblePages().map(number => ({ number, index: layerIndex(viewer.getPageView(number - 1)?.div) })),
@@ -53,7 +54,7 @@
         lastIndexYield = performance.now();
       }
     },
-    onIndexed: () => { if (window.PdfReviewProvider) queueWarm(); }
+    onIndexed: () => queueWarm()
   });
   const { sourceIndex, editorSourceIndex, normalized, lowerBound } = diff;
   cleanup.push(() => detachVisual());
@@ -62,30 +63,67 @@
     status, locator: diff, attachEditor, attachViewer,
     highlight: text => select(Array.isArray(text) ? text : [text]),
     clear: () => select([]),
-    highlightRects() {
-      return [...overlays, ...(reviewPointer?.overlays || [])].flatMap(([div, painted]) => {
-        if (!painted.node.isConnected) return [];
-        const page = painted.node.getBoundingClientRect();
-        return painted.boxes.map(box => ({ left: page.left + box.x * page.width, right: page.left + (box.x + box.w) * page.width,
-          top: page.top + box.y * page.height, bottom: page.top + (box.y + box.h) * page.height }));
-      });
+    popupPlacement(anchor, viewport, width, height) {
+      const boxes = [];
+      for (const number of visiblePages()) {
+        const div = viewer.getPageView(number - 1)?.div;
+        const painted = div ? [review.getHighlight(div), review.getHighlight(div, true)].filter(area => area?.node.isConnected) : [];
+        if (!painted.length) continue;
+        const page = div.getBoundingClientRect(), sx = page.width / div.offsetWidth, sy = page.height / div.offsetHeight;
+        const pageLeft = page.left + div.clientLeft * sx, pageTop = page.top + div.clientTop * sy,
+          pageWidth = div.clientWidth * sx, pageHeight = div.clientHeight * sy;
+        for (const mark of painted.flatMap(area => area.boxes)) {
+          const left = pageLeft + mark.x * pageWidth, top = pageTop + mark.y * pageHeight;
+          const box = { left, top, right: left + mark.w * pageWidth,
+            bottom: top + mark.h * pageHeight, height: mark.h * pageHeight };
+          if (!box.height || box.bottom <= viewport.top || box.top >= viewport.bottom) continue;
+          const previous = boxes.at(-1);
+          // Gaps narrower than the popup cannot hold it; treat adjoining words as one obstacle.
+          if (previous && Math.abs(previous.top - box.top) < .5 && Math.abs(previous.bottom - box.bottom) < .5
+            && box.left <= previous.right + width && box.right >= previous.left - width) {
+            previous.left = Math.min(previous.left, box.left); previous.right = Math.max(previous.right, box.right);
+          } else boxes.push({ left: box.left, right: box.right, top: box.top, bottom: box.bottom });
+        }
+      }
+      // A multiline anchor spans the gaps too; use the actual marks when painted.
+      if (!boxes.length) boxes.push({ ...anchor, right: anchor.right ?? anchor.left + 2 });
+      const candidates = [];
+      for (const box of boxes) {
+        const left = Math.max(viewport.left, Math.min(viewport.right - width, box.left));
+        const obstacles = boxes.filter(other => other.left < left + width && other.right > left);
+        for (const above of [true, false]) {
+          const edge = above ? box.top - 8 : box.bottom + 8;
+          if (edge < viewport.top || edge > viewport.bottom) continue;
+          // Find the free vertical interval directly adjoining this highlight.
+          let start = above ? viewport.top : edge, end = above ? edge : viewport.bottom;
+          for (const other of obstacles) {
+            if (above && other.top < edge) start = Math.max(start, other.bottom + 8);
+            if (!above && other.bottom > edge) end = Math.min(end, other.top - 8);
+          }
+          const available = Math.min(height, end - start);
+          if (available < 40) continue;
+          const top = above ? end - available : start;
+          candidates.push({ left, top, height: available,
+            distance: Math.abs((above ? end : start) - (above ? anchor.top : anchor.bottom)) });
+        }
+      }
+      // Prefer a complete popup, then the closest highlight; shrink only if necessary.
+      candidates.sort((a, b) => b.height - a.height || a.distance - b.distance);
+      return candidates[0] || null;
     },
-    showReviewPointer(editor, item) {
-      const model = editor?.getModel();
-      const needed = model && item && !item.font && !(item.comparison?.pdf?.trim() && item.comparison?.html?.trim()) && diffHighlight;
-      if (needed && reviewPointer?.editor === editor && reviewPointer.model === model && reviewPointer.version === model?.getVersionId?.()
-        && reviewPointer.item === item) return;
+    showReviewPointer(editor, items) {
       api.clearReviewPointer();
-      if (!needed) return;
-      const { index, start, end } = item.pdfSource || { index: editorSourceIndex(model), start: item.sourceStart, end: item.sourceEnd };
-      const entry = { index, start, end, marked: true, text: index.raw.slice(start, end),
-        before: index.raw.slice(Math.max(0, start - 160), start), after: index.raw.slice(end, end + 160) };
-      reviewPointer = { editor, model, version: model.getVersionId?.(), pdf: viewer?.pdfDocument, item, entry, overlays: new Map() };
+      const model = editor?.getModel();
+      if (!model || !items?.length || !diffHighlight) return;
+      const index = editorSourceIndex(model), entries = items.map(({ sourceStart: start, sourceEnd: end }) => ({
+        index, start, end, marked: true, text: index.raw.slice(start, end),
+        before: index.raw.slice(Math.max(0, start - 160), start), after: index.raw.slice(end, end + 160) }));
+      reviewPointer = { editor, model, version: model.getVersionId?.(), pdf: viewer?.pdfDocument, entries };
       schedule();
     },
     clearReviewPointer(editor) {
       if (!reviewPointer || editor && reviewPointer.editor !== editor) return;
-      reviewPointer.overlays.forEach(removeOverlay);
+      review.clearHighlights(true);
       reviewPointer = null;
     },
     setDiffHighlight(enabled) {
@@ -137,8 +175,7 @@
     diffButton.setAttribute('aria-pressed', String(diffHighlight));
     listen(diffButton, 'click', () => api.setDiffHighlight(!diffHighlight));
   }
-  function removeOverlay(painted) { painted?.node.remove(); }
-  function clearOverlays() { overlays.forEach(removeOverlay); overlays.clear(); }
+  function clearOverlays() { review.clearHighlights(); }
   function clearLayers() { for (const div of layers.keys()) clearLayer(div); }
   function clearLayer(div) { layers.get(div)?.observer.disconnect(); layers.delete(div); pageResults.delete(div); }
   function resetPdf() {
@@ -150,7 +187,7 @@
     window.dispatchEvent(new CustomEvent('pdf-selection-reset'));
   }
   function select(texts, surroundings = [], plain = false) {
-    if (!selectionHighlight && !diffHighlight && texts.length) return;
+    if (!selectionHighlight && texts.length) return;
     ++selectionRevision;
     lastInteraction = performance.now();
     const decode = text => (plain ? String(text || "") : sourceIndex(String(text || "")).raw).trim();
@@ -199,7 +236,7 @@
     let readTimer = null;
     cleanup.push(() => clearTimeout(readTimer));
     const read = event => {
-      if (syncingPdf || (!selectionHighlight && !diffHighlight)) return;
+      if (syncingPdf || !selectionHighlight) return;
       if (event?.changes || readTimer !== null) {
         lastEdit = performance.now();
         if (readTimer === null) select([]);
@@ -211,7 +248,7 @@
       const model = editor.getModel();
       let marked = false;
       const ranges = model ? (editor.getSelections() || []).map(range => {
-        const mark = window.PdfReviewProvider?.selectionRange(editor, event, range);
+        const mark = review.selectionRange(editor, event, range);
         if (mark) { marked = true; return mark; }
         return range;
       }) : [];
@@ -228,13 +265,7 @@
 
     };
     for (const name of ["onDidChangeCursorSelection", "onDidChangeModel", "onDidChangeModelContent"]) {
-      const subscription = editor[name]?.(event => {
-        if (name !== 'onDidChangeCursorSelection') {
-          activeEditor = editor;
-          if (viewer) queueWarm();
-        }
-        read(event);
-      });
+      const subscription = editor[name]?.(read);
       if (subscription) cleanup.push(() => subscription.dispose());
     }
     const click = editor.onMouseUp?.(event => {
@@ -281,7 +312,7 @@
         if (viewer !== instance) return;
         if (event === "textlayerrendered") clearLayer(instance.getPageView(data?.pageNumber - 1)?.div);
         if (["pagesinit", "scalechanging", "rotationchanging"].includes(event)) { clearLayers(); clearOverlays(); }
-        if (event !== "updateviewarea") queueWarm(data?.pageNumber);
+        if (event !== "updateviewarea" && event !== "pagechanging") queueWarm(data?.pageNumber);
         if (contexts.length || reviewPointer) schedule();
       };
       instance.eventBus.on(event, update);
@@ -308,15 +339,15 @@
       warm([...new Set(numbers)]);
       if (contexts.length) { locationSearch = null; schedule(); }
       else if (reviewPointer) schedule();
-    }, Math.max(0, 100 - (performance.now() - lastInteraction), editIdleDelay - (performance.now() - lastEdit)));
+    }, 100);
   }
   function warm(numbers = visiblePages()) {
     const pdf = viewer?.pdfDocument, model = activeEditor?.getModel(), source = model && editorSourceIndex(model);
+    if (pdf && !diff.getDocumentIndex(pdf)) void diff.indexDocument(pdf).catch(() => {});
     for (const div of layers.keys()) if (!div.isConnected) clearLayer(div);
     const pages = numbers.map(number => layerIndex(viewer.getPageView(number - 1)?.div));
     diff.prepareSource(source, pages, pdf);
     publishSources();
-    if (pdf && !diff.getDocumentIndex(pdf)) void diff.indexDocument(pdf).catch(() => {});
   }
   function publishSources() {
     if (performance.now() - lastEdit < editIdleDelay) return;
@@ -398,7 +429,7 @@
     listen(doc.defaultView, 'blur', release);
   }
   function selectFromPdf() {
-    if (stopped || syncingPdf || (!selectionHighlight && !diffHighlight) || !viewer) return;
+    if (stopped || syncingPdf || !selectionHighlight || !viewer) return;
     const native = document.getSelection();
     if (!native?.rangeCount || native.isCollapsed) { if (status.mode === "pdf-selection") select([]); return; }
     const range = native.getRangeAt(0), chunks = [];
@@ -428,12 +459,10 @@
     select([]);
     for (const chunk of chunks) {
       const result = nativeBoxes(chunk.div, [], [{ range: { start: chunk.start, end: chunk.end }, difference }]);
-      const notices = result.notices.map(notice => ({ ...notice, source: hit && { index, start: hit.start, end: hit.end } }));
-      if (selectionHighlight) paint(chunk.div, result.boxes, notices);
-      else publishDifferences(chunk.div, null, notices);
+      paint(chunk.div, result.boxes, result.notices.map(notice => ({ ...notice, source: hit && { index, start: hit.start, end: hit.end } })));
     }
     report("idle", { mode: "pdf-selection", differences: difference ? [difference] : [] });
-    if (!hit || !selectionHighlight) return; // An ambiguous match must not move the editor selection.
+    if (!hit) return; // An ambiguous match must not move the editor selection.
     publishSources();
     const start = model.getPositionAt(index.starts[hit.start]), end = model.getPositionAt(index.ends[hit.end - 1]);
     const target = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
@@ -467,21 +496,25 @@
     const spans = (view?._textHighlighter?.textDivs || [...layer.querySelectorAll('span[role="presentation"]')]).filter(span => span.textContent);
     const spanSet = new Set(spans);
     const pdf = viewer?.pdfDocument;
-    const fontAt = window.PdfReviewProvider?.layerFonts(view, layer, () => {
+    const fontAt = review.layerFonts(view, layer, () => {
       if (stopped || viewer?.pdfDocument !== pdf) return;
       clearLayer(div); queueWarm(number);
       if (!document.getSelection()?.isCollapsed) selectFromPdf();
       else if (contexts.length || reviewPointer) schedule();
     });
-    const measurement = document.createRange(), elementFonts = new Map();
+    const measurement = document.createRange(), elementFonts = new Map(), nodes = [];
     let raw = "", previous = null, previousElement = null, node;
     while ((node = walker.nextNode())) {
-      if (!node.textContent) continue;
+      if (!node.textContent.trim()) continue;
       let element = node;
       while (element !== layer && !spanSet.has(element)) element = element.parentNode;
       if (element === layer) element = node.parentElement;
       measurement.selectNodeContents(node);
       const box = measurement.getBoundingClientRect();
+      nodes.push({ node, element, box });
+    }
+    for (const { node, element, box } of nodes.sort((a, b) =>
+      Math.round((a.box.top - b.box.top) / Math.max(a.box.height, b.box.height)) || a.box.left - b.box.left)) {
       if (previous && element !== previousElement) {
         const lineBreak = Math.abs(box.top - previous.top) > Math.min(box.height, previous.height) * 0.5;
         if (lineBreak) raw += "\n";
@@ -504,7 +537,6 @@
   function nativeBoxes(div, queries, targets = []) {
     const index = layerIndex(div);
     if (!index) return { boxes: [], count: 0, pending: true };
-    const { parts } = index;
     const key = JSON.stringify([queries, targets.map(target =>
       [target.text, target.before, target.after, target.difference, target.range, target.start, target.end, target.marked])]);
     let cached = pageResults.get(div);
@@ -514,104 +546,24 @@
     }
     if (cached.results.has(key)) return cached.results.get(key);
     const { hits, focusHit } = diff.locateLayer(index, queries, targets);
-    const boxes = [], notices = [];
-    let focus = null;
-    for (const hit of hits) {
-      let noticeBox = null;
-      const caret = hit.start === hit.end || hit.difference && !index.raw.slice(hit.start, hit.end).trim();
-      // One DOM Range covers the selection across spans; measure layout once.
-      const first = parts[Math.min(parts.length - 1, lowerBound(parts, hit.start + 1, part => part.end))];
-      const last = caret ? first : parts[lowerBound(parts, hit.end, part => part.end)];
-      if (first && last && (first.start < hit.end || caret)) {
-        const range = document.createRange();
-        range.setStart(first.node, Math.max(0, Math.min(first.node.length, hit.start - first.start)));
-        range.setEnd(last.node, Math.max(0, Math.min(last.node.length, (caret ? hit.start : hit.end) - last.start)));
-        let measured = [...range.getClientRects()];
-        if (caret && !measured.some(box => box.height)) {
-          // Some text layers omit rectangles for a collapsed range. Measure
-          // the adjacent glyph without inserting anything into the PDF text.
-          const offset = range.startOffset, text = first.node.textContent;
-          const following = offset < text.length;
-          range.setStart(first.node, following ? offset : Math.max(0, offset - ([...text].at(-1)?.length || 0)));
-          range.setEnd(first.node, following ? offset + ([...text.slice(offset)][0]?.length || 0) : offset);
-          measured = [...range.getClientRects()].map(box => ({ left: following ? box.left : box.right, top: box.top, height: box.height }));
-        }
-        for (let box of measured) if ((box.width || caret) && box.height) {
-          // Collapsed ranges can have a fractional width in Chromium. Always
-          // draw HTML-only text as a visible caret at the PDF insertion point.
-          if (caret) box = { left: box.left, right: box.left + 2, top: box.top, width: 2, height: box.height, caret: true };
-          const previous = boxes.at(-1);
-          // Range rects can include both a span and its text, or adjoining spans.
-          if (previous && !previous.caret && !box.caret && Math.abs(previous.top - box.top) < .5 && Math.abs(previous.height - box.height) < .5
-            && box.left >= previous.left && box.left <= previous.right + .5) {
-            boxes[boxes.length - 1] = { left: previous.left, top: previous.top, width: Math.max(previous.right, box.right) - previous.left,
-              height: previous.height, right: Math.max(previous.right, box.right) };
-          } else boxes.push(box);
-          if (hit.difference || window.PdfReviewProvider) noticeBox = noticeBox ? { left: Math.min(noticeBox.left, box.left), top: Math.min(noticeBox.top, box.top),
-            width: Math.max(noticeBox.right, box.right) - Math.min(noticeBox.left, box.left), right: Math.max(noticeBox.right, box.right),
-            height: Math.max(noticeBox.top + noticeBox.height, box.top + box.height) - Math.min(noticeBox.top, box.top) } : box;
-          if (hit === focusHit && !focus) focus = box;
-        }
-      }
-      if (noticeBox) notices.push({ box: noticeBox, ...hit.difference, target: { index, start: hit.start, end: hit.end }, source: hit.source });
-    }
-    const pageBox = div.getBoundingClientRect();
-    const sx = pageBox.width / div.offsetWidth, sy = pageBox.height / div.offsetHeight;
-    const relative = box => ({
-      x: (box.left - pageBox.left - div.clientLeft * sx) / (div.clientWidth * sx),
-      y: (box.top - pageBox.top - div.clientTop * sy) / (div.clientHeight * sy),
-      w: box.width / (div.clientWidth * sx), h: box.height / (div.clientHeight * sy), caret: !!box.caret
-    });
-    const result = { count: hits.length, focus: focus && relative(focus), boxes: boxes.map(relative), notices: notices.map(notice => ({ ...notice, box: relative(notice.box) })) };
+    const result = review.measureHighlights(div, index, hits, focusHit);
     cached.results.set(key, result);
     if (cached.results.size > 32) cached.results.delete(cached.results.keys().next().value);
     return result;
   }
-  function paint(div, boxes, notices = [], store = overlays) {
-    const notify = store === overlays;
-    const previous = store.get(div);
-    if (previous?.boxes === boxes && previous.node.isConnected) { if (notify) publishDifferences(div, previous, notices); return; }
-    if (!boxes.length) {
-      removeOverlay(previous);
-      store.delete(div);
-      return;
-    }
-    const overlay = previous?.node.isConnected ? previous.node : document.createElement("div");
-    if (!overlay.isConnected) {
-      overlay.className = notify ? "mew-pdf-selection-highlight" : "mew-pdf-selection-highlight mew-pdf-review-pointer";
-      overlay.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden;contain:strict;";
-      div.append(overlay);
-    }
-    for (let i = 0; i < boxes.length; i++) {
-      const box = boxes[i];
-      let mark = overlay.children[i];
-      if (!mark) {
-        mark = document.createElement("div");
-        mark.setAttribute("aria-hidden", "true");
-        overlay.append(mark);
-      }
-      mark.style.cssText = `position:absolute;left:${box.x * 100}%;top:${box.y * 100}%;width:${box.w * 100}%;height:${box.h * 100}%;border-radius:2px;pointer-events:none;`;
-      mark.style.background = box.caret ? '#d58b24' : options.color;
-      mark.style.boxShadow = box.caret ? '0 0 0 1px rgba(255,255,255,.85)' : '';
-      mark.classList.toggle('mew-pdf-selection-caret', box.caret);
-    }
-    while (overlay.children.length > boxes.length) overlay.lastElementChild.remove();
-    const painted = { node: overlay, boxes };
-    store.set(div, painted);
-    window.dispatchEvent(new Event('pdf-selection-highlight-change'));
-    if (notify) publishDifferences(div, painted, notices);
+  function paint(div, boxes, notices = [], pointer = false) {
+    const painted = review.paintHighlight(div, boxes, options.color, pointer);
+    if (!pointer && painted) publishDifferences(div, painted, notices);
   }
   async function refreshReviewPointer() {
     const pointer = reviewPointer;
     if (!pointer) return;
     if (stopped || pointer.pdf !== viewer?.pdfDocument || pointer.model !== pointer.editor.getModel()
       || pointer.version !== pointer.model.getVersionId?.()) { api.clearReviewPointer(pointer.editor); return; }
-    const locations = await diff.findLocations(pointer.pdf, [pointer.entry]);
+    const locations = await diff.findLocations(pointer.pdf, pointer.entries);
     if (reviewPointer !== pointer) return;
     if (pointer.pdf !== viewer?.pdfDocument || pointer.model !== pointer.editor.getModel()
       || pointer.version !== pointer.model.getVersionId?.()) { api.clearReviewPointer(pointer.editor); return; }
-    const target = locations.flatMap(location => location.targets)[0];
-    if (!pointer.positioned && target && !visiblePages().includes(target.pageNumber)) viewer.scrollPageIntoView({ pageNumber: target.pageNumber });
     const visible = new Set();
     for (const number of visiblePages()) {
       const div = viewer.getPageView(number - 1)?.div;
@@ -623,26 +575,22 @@
       // could reopen the popup on its previous side during a window switch.
       // A text layer can be temporarily unavailable while PDF.js updates it.
       // Keep the last mapped pointer until its replacement can be measured.
-      if (!result.pending) paint(div, result.boxes, [], pointer.overlays);
+      if (result.boxes.length) paint(div, result.boxes, [], true);
     }
-    const mark = [...pointer.overlays.values()][0]?.node.firstElementChild, box = mark?.getBoundingClientRect(), viewport = viewer.container.getBoundingClientRect();
-    if (!pointer.positioned && box) { pointer.positioned = true; if (box.top < viewport.top || box.bottom > viewport.bottom || box.left < viewport.left || box.right > viewport.right) mark.scrollIntoView({ block: 'center', inline: 'nearest' }); }
-    for (const [div, painted] of pointer.overlays) if (!visible.has(div)) {
-      removeOverlay(painted); pointer.overlays.delete(div);
-    }
+    review.clearHighlights(true, visible);
   }
-  function publishDifferences(div, painted, notices = []) {
+  function publishDifferences(div, painted, notices) {
     // Publish mapping data only. The review adapter chooses where and how to show it.
     const editor = activeEditor, model = editor?.getModel(), selected = selectionRevision;
     if (notices.length) setTimeout(function publish() {
-      if (!diffHighlight || stopped || selected !== selectionRevision || notifiedSelection === selected
-        || painted && (!painted.node.isConnected || overlays.get(div) !== painted)) return;
+      if (!diffHighlight || !selectionHighlight || stopped || selected !== selectionRevision || notifiedSelection === selected
+        || !painted.node.isConnected || review.getHighlight(div) !== painted) return;
       // Opening review selects its candidate; wait until the user's drag ends.
       if (selecting) { pendingDifference = publish; return; }
       notifiedSelection = selected;
-      const box = notices[0].box, page = div?.getBoundingClientRect();
-      const anchor = box && page ? { left: page.left + box.x * page.width, top: page.top + box.y * page.height,
-        bottom: page.top + (box.y + box.h) * page.height } : null;
+      const box = notices[0].box, page = div.getBoundingClientRect();
+      const anchor = { left: page.left + box.x * page.width, top: page.top + box.y * page.height,
+        bottom: page.top + (box.y + box.h) * page.height };
       window.dispatchEvent(new CustomEvent('pdf-selection-difference', { detail: {
         editor, model, pdf: viewer?.pdfDocument, notices, anchor, anchorElement: div, anchorBox: box, interactionId,
         targets: [diff.getDocumentIndex(viewer?.pdfDocument), ...layers.values()].filter(Boolean)
@@ -669,9 +617,10 @@
       });
     }
     const locations = locationSearch.locations;
+    publishSources();
     const exact = locations?.flatMap(location => location.targets) || [];
     const queries = locations?.filter(location => !location.targets.length).flatMap(location => location.queries || [location.entry.text]) || [];
-    if (selectionHighlight && !positioned && exact.length) {
+    if (!positioned && exact.length) {
       await Promise.resolve();
       if (!current()) return;
       const target = exact[0], view = instance.getPageView(target.pageNumber - 1);
@@ -703,23 +652,17 @@
       if (!current()) return;
     }
     const numbers = visiblePages(), visible = new Set(numbers.map(number => instance.getPageView(number - 1)?.div));
-    for (const [div, painted] of overlays) if (!visible.has(div)) { removeOverlay(painted); overlays.delete(div); }
+    review.clearHighlights(false, visible);
     for (const number of numbers) {
       const view = instance.getPageView(number - 1);
       if (!view?.div) continue;
       if (!current()) return;
       const result = nativeBoxes(view.div, queries, locations ? exact.filter(target => target.pageNumber === number) : contexts);
-      if (selectionHighlight || diffHighlight) paint(view.div, selectionHighlight ? result.boxes : result.boxes.filter(box => box.caret), result.notices);
-      else publishDifferences(view.div, null, result.notices);
+      paint(view.div, result.boxes, result.notices);
       results.push({ pageNumber: number, source: "pdf-text", matches: result.count, pending: !!result.pending });
     }
-    // Confirmed mappings can open review before PDF.js renders their text layer.
-    if (current()) publishDifferences(null, null, exact.filter(target => target.source).map(target => ({
-      ...target.difference, source: target.source, target: target.target
-    })));
     if (current()) report(locations ? "idle" : "searching", { pages: results, mode: exact.length ? (queries.length ? "mixed" : "exact") : "fallback",
       differences: exact.filter(target => target.difference).map(target => ({ pageNumber: target.pageNumber, ...target.difference })),
       matches: results.reduce((sum, page) => sum + page.matches, 0) });
-    if (current()) publishSources();
   }
 })().catch(error => console.error(error));
