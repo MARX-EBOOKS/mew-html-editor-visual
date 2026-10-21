@@ -657,16 +657,28 @@ window.PdfReviewReady = (async () => {
       range: item?.range || (ranges.length ? toolbox.rangeAt(state.model, Math.min(...ranges.map(edit => edit.start)), Math.max(...ranges.map(edit => edit.end))) : null),
       options: [], applyLabel: item?.font ? '替换格式' : '替换', advance: false, expanded: false };
   }
-  const patterns = new WeakMap();
-  const pattern = value => {
-    if (!patterns.has(value)) patterns.set(value, JSON.stringify([!!value.font, ...(value.font ? [value.text,
-      ...['italic', 'bold'].flatMap(key => [value.htmlFont[key], value.font[key]])] : [value.comparison?.html, value.comparison?.pdf])]));
-    return patterns.get(value);
+  const pattern = (value, index) => {
+    // Without source context, only the selected candidate may match itself.
+    if (!index || !Number.isInteger(value.sourceStart) || !Number.isInteger(value.sourceEnd)) return value;
+    const { raw } = index, start = value.sourceStart, end = value.sourceEnd;
+    let before = start, after = end;
+    const word = /^[\p{L}\p{M}\p{N}_'’\-]+$/u;
+    while (before > 0 && word.test(raw.slice(before - (raw.codePointAt(before - 2) > 0xffff ? 2 : 1), before)))
+      before -= raw.codePointAt(before - 2) > 0xffff ? 2 : 1;
+    while (after < raw.length && word.test(String.fromCodePoint(raw.codePointAt(after))))
+      after += raw.codePointAt(after) > 0xffff ? 2 : 1;
+    const prefix = raw.slice(before, start), suffix = raw.slice(end, after);
+    if ([...raw.slice(before, after)].length < 2
+      && [...(prefix + (value.comparison?.pdf ?? value.text ?? '') + suffix)].length < 2) return value;
+    return JSON.stringify([!!value.font, ...(value.font ? [value.text,
+      ...['italic', 'bold'].flatMap(key => [value.htmlFont[key], value.font[key]])] : [value.comparison?.html, value.comparison?.pdf]),
+      prefix, suffix]);
   };
   function apply(state, all) {
     const item = state.items[state.position];
     if (all || item?.font) getLocator().prepareSource(state.context.index, state.context.targets, state.context.pdf);
-    const key = item && pattern(item), selected = all ? state.items : state.items.filter(value => pattern(value) === key);
+    const key = item && pattern(item, state.context.index), selected = all ? state.items
+      : state.items.filter(value => pattern(value, state.context.index) === key);
     const edits = selected.filter(value => !value.font)
       .flatMap(value => value.options.find(option => option.id === state.choices.get(value.id)).edits);
     if (selected.some(value => value.font)) edits.push(...formatItems(state.context.index, state.context.targets)
@@ -687,7 +699,8 @@ window.PdfReviewReady = (async () => {
   const review = {
     compact: true, content, apply, presentation, isCurrent, provide,
     refreshAfterEdit: refreshCandidates,
-    onSelect(item, context, items) { const key = pattern(item); selection()?.showReviewPointer(context.editor, items.filter(value => pattern(value) === key)); },
+    onSelect(item, context, items) { const key = pattern(item, context.index);
+      selection()?.showReviewPointer(context.editor, items.filter(value => pattern(value, context.index) === key)); },
     onClose(context) { selection()?.clearReviewPointer(context.editor); }
   };
   const unregister = [host.register({
