@@ -583,6 +583,22 @@
       });
       pdfLinkService.setViewer(pdfViewer); scrollMode = viewerModule.ScrollMode;
       eventBus.on("pagesinit", () => {
+        for (let i = 0; i < pdfViewer.pagesCount; i++) {
+          const view = pdfViewer.getPageView(i), drawCanvas = view._drawCanvas;
+          view._drawCanvas = async function (...args) {
+            const layer = this.textLayer, viewport = this.viewport;
+            // Lay out OCR before starting the scan's operator list and image decoding.
+            if (layer) {
+              try {
+                await layer.render({ viewport });
+                if (this.textLayer === layer && this.viewport === viewport && this.renderingState === pdfRenderingStates.RUNNING)
+                  eventBus.dispatch("textlayerrendered", { source: this, pageNumber: this.id, error: null });
+              } catch { /* The normal PDF.js text render retries and reports errors. */ }
+            }
+            if (this.viewport !== viewport || this.renderingState !== pdfRenderingStates.RUNNING) return;
+            return drawCanvas.apply(this, args);
+          };
+        }
         pdfViewer.setPageLabels(pdfPageLabels);
         pdfViewer.currentScaleValue = pdfSettings.scale;
         applyPdfSettings();
