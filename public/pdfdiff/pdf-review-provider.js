@@ -456,7 +456,7 @@ window.PdfReviewReady = (async () => {
       for (const span of raw ? raw.parts : connection.spans) {
         const left = cursorA, right = cursorA += span[reverse ? 'pdf' : 'html'].length,
           targetLeft = cursorB, targetRight = cursorB += span[reverse ? 'html' : 'pdf'].length;
-        if (raw && a === b ? !span.changed || right !== a || left !== a
+        if (raw && a === b ? !span.changed || a < left || a > right || left !== right
           && !(marked && !span.html.trim() && significantText(span.pdf)) : right <= a || left >= b) continue;
         // A changed run has no reliable per-character correspondence; include its whole counterpart.
         first = Math.min(first, span.changed ? targetLeft : targetLeft + Math.max(a, left) - left);
@@ -834,7 +834,7 @@ window.PdfReviewReady = (async () => {
           const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
           const segments = toolbox.sourceSegments(index, cursor, end);
           const insertion = !segments.length;
-          if (insertion) segments.push(toolbox.insertionSegment(index, end));
+          if (insertion) segments.push(toolbox.insertionSegment(index, cursor));
           add(segments, '', {
             description: 'PDF OCR text difference',
             inlineClassName: insertion ? undefined : 'mew-ocr-diff-text',
