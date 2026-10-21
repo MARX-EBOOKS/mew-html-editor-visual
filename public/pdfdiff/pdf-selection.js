@@ -455,7 +455,7 @@
     const model = editor?.getModel();
     if (!model || !editor.setSelection) return;
     activeEditor = editor;
-    const index = editorSourceIndex(model), { hit, difference } = diff.locateSource(index, chunks);
+    const index = editorSourceIndex(model), { hit, difference } = locateSource(index, chunks);
     select([]);
     for (const chunk of chunks) {
       const result = nativeBoxes(chunk.div, [], [{ range: { start: chunk.start, end: chunk.end }, difference }]);
@@ -534,6 +534,89 @@
     layers.set(div, index);
     return index;
   }
+  function findLocations(pdf, entries) {
+    const documentIndex = diff.getDocumentIndex(pdf);
+    const visible = visiblePages().map(number => ({ number, index: layerIndex(viewer.getPageView(number - 1)?.div) }));
+    for (const source of new Set(entries.map(entry => entry.index).filter(Boolean)))
+      diff.prepareSource(source, visible.map(page => page.index), pdf);
+    const locations = entries.map(entry => {
+      let index = documentIndex, hit = null, number;
+      for (const page of visible) {
+        hit = page.index && entry.index && diff.connectedRange(entry.index, page.index, entry.start, entry.end, false, undefined, entry.marked);
+        if (hit) {
+          index = page.index;
+          number = page.number;
+          break;
+        }
+      }
+      if (!hit && index) hit = (entry.index && diff.connectedRange(entry.index, index, entry.start, entry.end, false, undefined, entry.marked)) || diff.locate(index.raw, entry, index.normalized);
+      if (!hit) return { entry, targets: [], queries: index ? diff.patchedWords(entry, index) : [entry.text] };
+      const connection = hit.connection || (entry.index && diff.rememberConnection(entry.index, entry.start, entry.end, index, hit));
+      const pages = index.pages || [{ number, start: 0, end: index.raw.length, parts: index.parts }];
+      const targets = pages.filter(page => hit.start === hit.end ? hit.start >= page.start && hit.start <= page.end
+        : hit.start < page.end && hit.end > page.start).map(page => {
+        const start = Math.max(hit.start, page.start), end = Math.min(hit.end, page.end);
+        const target = { pageNumber: page.number, item: page.parts.find(part => part.end > start)?.item,
+          difference: hit.approximate || entry.marked && entry.text !== index.raw.slice(hit.start, hit.end)
+            ? { html: entry.text, pdf: index.raw.slice(hit.start, hit.end) } : null,
+          marked: entry.marked, text: index.raw.slice(start, end), before: index.raw.slice(Math.max(page.start, start - 160), start),
+          after: index.raw.slice(end, Math.min(page.end, end + 160)) };
+        if (target.difference && entry.index) target.source = { index: entry.index, start: entry.start, end: entry.end };
+        const sourceRange = entry.marked || entry.start === entry.end ? entry : connection && diff.connectedRange(entry.index, index, start, end, true, connection);
+        if (sourceRange || hit.start === hit.end) Object.assign(target, { index: entry.index,
+          start: sourceRange?.start ?? entry.start, end: sourceRange?.end ?? entry.end });
+        return target;
+      });
+      return { entry, targets };
+    });
+    if (documentIndex || locations.every(location => location.targets.length)) return locations;
+    return diff.indexDocument(pdf).then(index => index ? findLocations(pdf, entries) : locations);
+  }
+  function locateSource(index, chunks) {
+    const first = chunks[0], last = chunks.at(-1);
+    diff.prepareSource(index, chunks.map(chunk => chunk.index), viewer?.pdfDocument);
+    const entry = {
+      text: chunks.map(({ index, start, end }) => index.raw.slice(start, end)).join("\n"),
+      before: first.index.raw.slice(Math.max(0, first.start - 160), first.start),
+      after: last.index.raw.slice(last.end, last.end + 160)
+    };
+    const left = diff.sourcePageScope(index, first.index, true), right = diff.sourcePageScope(index, last.index, true);
+    let hit = chunks.length === 1 && diff.connectedRange(index, first.index, first.start, first.end, true);
+    if (!hit) {
+      const scope = left && right && left.start <= right.start ? { start: left.start, end: right.end } : null;
+      const local = scope && diff.locate(index.raw.slice(scope.start, scope.end), entry, left === right ? left.normalized : undefined);
+      hit = local ? { ...local, start: local.start + scope.start, end: local.end + scope.start }
+        : scope ? null : diff.locate(index.raw, entry, index.normalized);
+    }
+    const html = hit && index.raw.slice(hit.start, hit.end);
+    const differs = hit && (hit.connection ? hit.approximate
+      : window.PdfSelectionDiff.significantText(html) !== window.PdfSelectionDiff.significantText(entry.text));
+    const difference = !hit ? { message: "No reliable HTML match" } : differs ? { html, pdf: entry.text } : null;
+    if (chunks.length === 1 && hit && !hit.connection)
+      diff.rememberConnection(index, hit.start, hit.end, first.index, { start: first.start, end: first.end });
+    return { hit, difference };
+  }
+  function locateLayer(index, queries, targets = []) {
+    const { raw } = index;
+    const hits = [];
+    let focusHit = null;
+    for (const target of targets) {
+      const connection = target.index && diff.connectedRange(target.index, index, target.start, target.end, false, undefined, target.marked);
+      const hit = target.range || connection || diff.locate(raw, target, index.normalized);
+      if (hit) {
+        if (target.index && !connection) diff.rememberConnection(target.index, target.start, target.end, index, hit);
+        hit.difference = target.difference || (hit.approximate ? { html: target.text, pdf: raw.slice(hit.start, hit.end) } : null);
+        hit.source = target.source || target.index && { index: target.index, start: target.start, end: target.end };
+        if (!focusHit) focusHit = hit;
+      }
+      // Retain exact fallback highlights when rendered spacing prevents confirmation.
+      for (const match of hit ? [hit] : diff.matches(raw, target.index ? diff.patchedWords(target, index) : [target.text], index.normalized))
+        if (!hits.some(other => other.start === match.start && other.end === match.end)) hits.push(match);
+    }
+    for (const match of diff.matches(raw, queries, index.normalized))
+      if (!hits.some(hit => hit.start === match.start && hit.end === match.end)) hits.push(match);
+    return { hits, focusHit };
+  }
   function nativeBoxes(div, queries, targets = []) {
     const index = layerIndex(div);
     if (!index) return { boxes: [], count: 0, pending: true };
@@ -545,7 +628,7 @@
       pageResults.set(div, cached);
     }
     if (cached.results.has(key)) return cached.results.get(key);
-    const { hits, focusHit } = diff.locateLayer(index, queries, targets);
+    const { hits, focusHit } = locateLayer(index, queries, targets);
     const result = review.measureHighlights(div, index, hits, focusHit);
     cached.results.set(key, result);
     if (cached.results.size > 32) cached.results.delete(cached.results.keys().next().value);
@@ -560,7 +643,7 @@
     if (!pointer) return;
     if (stopped || pointer.pdf !== viewer?.pdfDocument || pointer.model !== pointer.editor.getModel()
       || pointer.version !== pointer.model.getVersionId?.()) { api.clearReviewPointer(pointer.editor); return; }
-    const locations = await diff.findLocations(pointer.pdf, pointer.entries);
+    const locations = await findLocations(pointer.pdf, pointer.entries);
     if (reviewPointer !== pointer) return;
     if (pointer.pdf !== viewer?.pdfDocument || pointer.model !== pointer.editor.getModel()
       || pointer.version !== pointer.model.getVersionId?.()) { api.clearReviewPointer(pointer.editor); return; }
@@ -604,7 +687,7 @@
     if (!locationSearch || locationSearch.pdf !== pdf) {
       report("searching", { error: null });
       const entries = contexts.slice();
-      const found = diff.findLocations(pdf, entries);
+      const found = findLocations(pdf, entries);
       const search = locationSearch = { pdf, locations: Array.isArray(found) ? found : null };
       const complete = locations => {
         if (stopped || locationSearch !== search || viewer?.pdfDocument !== pdf) return;
