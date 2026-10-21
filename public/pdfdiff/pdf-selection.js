@@ -22,6 +22,7 @@
   const cleanup = [], editors = new WeakSet(), selectionDocuments = new WeakSet();
   let selecting = false, pendingDifference = null;
   const layers = new Map();
+  const maxLayerCache = 24, maxPageResults = 32;
   const pageResults = new WeakMap();
   const preparationPages = new Set();
   const editIdleDelay = 350;
@@ -30,6 +31,7 @@
   let reviewPointer = null;
   let viewer = null, revision = 0, timer, stopped = false, hooking = false, diffHighlight = true, selectionHighlight = true;
   let preferenceWrites = Promise.resolve(), selectionRevision = 0, notifiedSelection = -1, interactionId = 0;
+  let lastPdfSelection = [];
   try {
     const response = await fetch('/api/reader/settings');
     if (response.ok) {
@@ -42,6 +44,7 @@
   let pairedWindow = null, pairedSession = "";
   const diff = review.createLocator(options, {
     document, getPdf: () => viewer?.pdfDocument,
+    reviewAnchor: review.reviewAnchor,
     getTargets: () => [...layers.values()].filter(page => page.pdf === viewer?.pdfDocument),
     getVisiblePages: () => visiblePages().map(number => ({ number, index: layerIndex(viewer.getPageView(number - 1)?.div) })),
     isCurrent: pdf => !stopped && viewer?.pdfDocument === pdf,
@@ -344,9 +347,9 @@
   function warm(numbers = visiblePages()) {
     const pdf = viewer?.pdfDocument, model = activeEditor?.getModel(), source = model && editorSourceIndex(model);
     if (pdf && !diff.getDocumentIndex(pdf)) void diff.indexDocument(pdf).catch(() => {});
-    for (const div of layers.keys()) if (!div.isConnected) clearLayer(div);
-    const pages = numbers.map(number => layerIndex(viewer.getPageView(number - 1)?.div));
-    diff.prepareSource(source, pages, pdf);
+    for (const [div, index] of layers) if (!div.isConnected || !index.layer.isConnected) clearLayer(div);
+    for (const number of numbers) layerIndex(viewer.getPageView(number - 1)?.div);
+    diff.prepareSource(source, [...layers.values()], pdf);
     publishSources();
   }
   function publishSources() {
@@ -431,7 +434,11 @@
   function selectFromPdf() {
     if (stopped || syncingPdf || !selectionHighlight || !viewer) return;
     const native = document.getSelection();
-    if (!native?.rangeCount || native.isCollapsed) { if (status.mode === "pdf-selection") select([]); return; }
+    if (!native?.rangeCount || native.isCollapsed) {
+      lastPdfSelection = [];
+      if (status.mode === "pdf-selection") select([]);
+      return;
+    }
     const range = native.getRangeAt(0), chunks = [];
     const ancestor = range.commonAncestorContainer;
     const page = (ancestor.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor.parentElement)?.closest(".page");
@@ -440,16 +447,12 @@
       const layer = div.querySelector(".textLayer");
       if (!layer || !range.intersectsNode(layer)) continue;
       const index = layerIndex(div);
-      let start = null, end = null;
-      for (const part of index.parts) {
-        if (!range.intersectsNode(part.node)) continue;
-        const a = range.startContainer === part.node ? range.startOffset : 0, b = range.endContainer === part.node ? range.endOffset : part.node.length;
-        if (a >= b) continue;
-        start ??= part.start + a; end = part.start + b;
-      }
-      if (start !== null) chunks.push({ div, index, start, end });
+      const offsets = index && review.selectionOffsets(index, range);
+      if (offsets) chunks.push({ div, index, ...offsets });
     }
     if (!chunks.length) return;
+    if (chunks.length === lastPdfSelection.length && chunks.every((chunk, i) =>
+      chunk.index === lastPdfSelection[i].index && chunk.start === lastPdfSelection[i].start && chunk.end === lastPdfSelection[i].end)) return;
     let editor = activeEditor;
     try { editor = (!pairedWindow?.closed && pairedWindow?.mewWorkbench?.editor) || editor; } catch { /* editor is navigating */ }
     const model = editor?.getModel();
@@ -457,6 +460,7 @@
     activeEditor = editor;
     const index = editorSourceIndex(model), { hit, difference } = diff.locateSource(index, chunks);
     select([]);
+    lastPdfSelection = chunks;
     for (const chunk of chunks) {
       const result = nativeBoxes(chunk.div, [], [{ range: { start: chunk.start, end: chunk.end }, difference }]);
       paint(chunk.div, result.boxes, result.notices.map(notice => ({ ...notice, source: hit && { index, start: hit.start, end: hit.end } })));
@@ -488,50 +492,42 @@
     const layer = div?.querySelector(".textLayer");
     if (!layer) return null;
     const cached = layers.get(div);
-    if (cached?.layer === layer && cached.pdf === viewer?.pdfDocument && cached.width === div.clientWidth && cached.height === div.clientHeight && !cached.observer.takeRecords().length) return cached;
+    if (cached?.layer === layer && cached.pdf === viewer?.pdfDocument && cached.width === div.clientWidth
+      && cached.height === div.clientHeight && cached.savedIndex === diff.getDocumentIndex(viewer?.pdfDocument)
+      && !cached.observer.takeRecords().length) {
+      layers.delete(div);
+      layers.set(div, cached);
+      return cached;
+    }
     clearLayer(div);
-    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT), parts = [];
+    const parts = [];
     const number = Number(div.dataset.pageNumber) || viewer?.currentPageNumber;
     const view = viewer?.getPageView(number - 1);
-    const spans = (view?._textHighlighter?.textDivs || [...layer.querySelectorAll('span[role="presentation"]')]).filter(span => span.textContent);
-    const spanSet = new Set(spans);
+    const highlighter = view?._textHighlighter;
+    if (!highlighter?.textContentItemsStr || !highlighter.textDivs) return null;
     const pdf = viewer?.pdfDocument;
+    const savedIndex = diff.getDocumentIndex(pdf);
+    const savedPage = savedIndex?.pages.find(page => page.number === number);
     const fontAt = review.layerFonts(view, layer, () => {
       if (stopped || viewer?.pdfDocument !== pdf) return;
       clearLayer(div); queueWarm(number);
       if (!document.getSelection()?.isCollapsed) selectFromPdf();
       else if (contexts.length || reviewPointer) schedule();
+    }, savedPage, savedIndex);
+    let raw = "";
+    highlighter.textContentItemsStr.forEach((text, divIdx) => {
+      parts.push({ divIdx, start: raw.length, end: raw.length + text.length, font: fontAt?.(highlighter.textDivs[divIdx]) });
+      raw += text;
     });
-    const measurement = document.createRange(), elementFonts = new Map(), nodes = [];
-    let raw = "", previous = null, previousElement = null, node;
-    while ((node = walker.nextNode())) {
-      if (!node.textContent.trim()) continue;
-      let element = node;
-      while (element !== layer && !spanSet.has(element)) element = element.parentNode;
-      if (element === layer) element = node.parentElement;
-      measurement.selectNodeContents(node);
-      const box = measurement.getBoundingClientRect();
-      nodes.push({ node, element, box });
-    }
-    for (const { node, element, box } of nodes.sort((a, b) =>
-      Math.round((a.box.top - b.box.top) / Math.max(a.box.height, b.box.height)) || a.box.left - b.box.left)) {
-      if (previous && element !== previousElement) {
-        const lineBreak = Math.abs(box.top - previous.top) > Math.min(box.height, previous.height) * 0.5;
-        if (lineBreak) raw += "\n";
-        else if (box.left - previous.right > Math.min(box.height, previous.height) * 0.08) raw += " ";
-      }
-      if (!elementFonts.has(element)) elementFonts.set(element, fontAt?.(element));
-      parts.push({ node, start: raw.length, end: raw.length + node.textContent.length, font: elementFonts.get(element) });
-      raw += node.textContent; previous = box; previousElement = element;
-    }
     const observer = new MutationObserver(() => {
       clearLayer(div);
       queueWarm(number);
       if (contexts.length || reviewPointer) schedule();
     });
     observer.observe(layer, { subtree: true, childList: true, characterData: true, attributes: true });
-    const index = { layer, raw, parts, normalized: normalized(raw), observer, pdf: viewer?.pdfDocument, width: div.clientWidth, height: div.clientHeight };
+    const index = { layer, raw, parts, highlighter, number, savedIndex, normalized: normalized(raw), observer, pdf: viewer?.pdfDocument, width: div.clientWidth, height: div.clientHeight };
     layers.set(div, index);
+    while (layers.size > maxLayerCache) clearLayer(layers.keys().next().value);
     return index;
   }
   function nativeBoxes(div, queries, targets = []) {
@@ -539,16 +535,17 @@
     if (!index) return { boxes: [], count: 0, pending: true };
     const key = JSON.stringify([queries, targets.map(target =>
       [target.text, target.before, target.after, target.difference, target.range, target.start, target.end, target.marked])]);
+    const source = targets.find(target => target.index)?.index || contexts[0]?.index;
     let cached = pageResults.get(div);
-    if (cached?.index !== index || cached.source !== contexts[0]?.index) {
-      cached = { index, source: contexts[0]?.index, results: new Map() };
+    if (cached?.index !== index || cached.source !== source) {
+      cached = { index, source, results: new Map() };
       pageResults.set(div, cached);
     }
     if (cached.results.has(key)) return cached.results.get(key);
     const { hits, focusHit } = diff.locateLayer(index, queries, targets);
     const result = review.measureHighlights(div, index, hits, focusHit);
     cached.results.set(key, result);
-    if (cached.results.size > 32) cached.results.delete(cached.results.keys().next().value);
+    if (cached.results.size > maxPageResults) cached.results.delete(cached.results.keys().next().value);
     return result;
   }
   function paint(div, boxes, notices = [], pointer = false) {
@@ -643,11 +640,9 @@
           });
         }
       } else if (!scrolled && (!visiblePages().includes(target.pageNumber)
-        || target.item && !view?.div?.querySelector(".textLayer")?.textContent)) {
+        || !view?.div?.querySelector(".textLayer")?.textContent)) {
         scrolled = true;
-        const item = target.item;
-        instance.scrollPageIntoView({ pageNumber: target.pageNumber,
-          destArray: item ? [null, { name: "XYZ" }, item.transform[4], item.transform[5] + item.height, null] : null });
+        instance.scrollPageIntoView({ pageNumber: target.pageNumber });
       }
       if (!current()) return;
     }
