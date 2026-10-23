@@ -3,8 +3,10 @@ from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import gzip
 import json
+import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -46,18 +48,87 @@ class ReaderBackendTests(unittest.TestCase):
         self.library = backend.Library(self.config)
 
     def start(self):
-        generate_pdf_text(self.pdf, self.root)
-        server = backend.ThreadingHTTPServer(('127.0.0.1', 0), backend.handler(self.library))
-        server.daemon_threads = True
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        self.base = f'http://127.0.0.1:{server.server_port}'
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        port = listener.getsockname()[1]
+        server = backend.uvicorn.Server(backend.uvicorn.Config(
+            backend.create_app(self.library), log_level='error'))
+        worker = threading.Thread(target=server.run, kwargs={'sockets': [listener]}, daemon=True)
+        worker.start()
+
+        def close():
+            server.should_exit = True
+            worker.join(timeout=5)
+            listener.close()
+        self.addCleanup(close)
+        deadline = time.monotonic() + 5
+        while not server.started:
+            if not worker.is_alive() or time.monotonic() > deadline:
+                self.fail('FastAPI server did not start')
+            time.sleep(0.01)
+        self.base = f'http://127.0.0.1:{port}'
 
     def request(self, path, data=None, method=None, headers=None):
         request = Request(self.base + path, data=json.dumps(data).encode() if data is not None else None,
                           method=method, headers=headers or {})
         return urlopen(request)
+
+    def test_js_and_fastapi_http_contracts_match(self):
+        self.start()
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            port = listener.getsockname()[1]
+        process = subprocess.Popen(['node', str(ROOT / 'reader-server.js'), '-c', str(self.config),
+                                    '-p', str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+        def close():
+            process.terminate()
+            process.wait(timeout=5)
+            process.stderr.close()
+        self.addCleanup(close)
+        node_base = f'http://127.0.0.1:{port}'
+        deadline = time.monotonic() + 5
+        while True:
+            if process.poll() is not None:
+                self.fail(process.stderr.read().decode('utf-8', errors='replace'))
+            try:
+                with urlopen(node_base + '/api/reader/config', timeout=0.2):
+                    break
+            except OSError:
+                if time.monotonic() > deadline:
+                    self.fail('Node reader did not start')
+                time.sleep(0.02)
+
+        for path in ('/api/reader/config', '/api/reader/page/1/1', '/api/reader/link/1/1',
+                     '/api/reader/locate?path=pages%2FME01-001.html', '/api/tree',
+                     '/api/file?path=pages%2FME01-001.html',
+                     '/api/reader/resource/1/ME01-001.html', '/raw/pages/ME01-001.html',
+                     '/mewde.css', '/', '/monaco/min/vs/loader.js', '/api/reader/pdf/1'):
+            with self.subTest(path=path):
+                for method, headers in [('GET', {}), ('HEAD', {})] if path == '/api/reader/pdf/1' else [('GET', {})]:
+                    with urlopen(Request(node_base + path, method=method, headers=headers)) as node, \
+                            self.request(path, method=method, headers=headers) as python:
+                        self.assertEqual(python.status, node.status)
+                        self.assertEqual(python.headers['Content-Type'], node.headers['Content-Type'])
+                        self.assertEqual(python.headers['Cache-Control'], node.headers['Cache-Control'])
+                        expected, actual = node.read(), python.read()
+                        if method != 'HEAD' and 'application/json' in node.headers['Content-Type']:
+                            actual, expected = json.loads(actual), json.loads(expected)
+                            # Path.resolve() restores disk casing on Windows; Node keeps input casing.
+                            for key in ('configPath', 'editorRoot', 'root'):
+                                if key in actual and actual[key] is not None:
+                                    actual[key] = os.path.normcase(actual[key])
+                                    expected[key] = os.path.normcase(expected[key])
+                            self.assertEqual(actual, expected)
+                        else:
+                            self.assertEqual(actual, expected)
+        for byte_range in ('bytes=0-9', 'bytes=10-'):
+            with self.subTest(byte_range=byte_range):
+                with urlopen(Request(node_base + '/api/reader/pdf/1', headers={'Range': byte_range})) as node, \
+                        self.request('/api/reader/pdf/1', headers={'Range': byte_range}) as python:
+                    self.assertEqual(python.status, node.status)
+                    self.assertEqual(python.headers['Content-Range'], node.headers['Content-Range'])
+                    self.assertEqual(python.read(), node.read())
 
     def test_existing_routes_ranges_and_write_conflicts(self):
         self.start()
@@ -170,41 +241,17 @@ class ReaderBackendTests(unittest.TestCase):
             generate_pdf_text(self.pdf, self.root)
         self.assertEqual(target.stat().st_mtime_ns, unchanged)
 
-    def test_startup_requires_prepared_volumes_and_never_extracts(self):
-        second = self.root / 'second.pdf'
-        shutil.copy2(self.pdf, second)
-        config = json.loads(self.config.read_text('utf-8'))
-        config['volumes'].append({**config['volumes'][0], 'id': '2', 'pdf': second.name})
-        self.config.write_text(json.dumps(config), 'utf-8')
-
-        with patch.object(sys, 'argv', ['reader-server.py', '-c', str(self.config)]), \
+    def test_startup_is_standalone_and_never_extracts(self):
+        with patch.object(sys, 'argv', ['reader-server.py', '-c', str(self.config), '-p', '17000']), \
                 patch.object(PdfTextIndex, 'extract', side_effect=AssertionError('Reader extracted PDF')), \
-                patch.object(backend, 'ThreadingHTTPServer') as server, \
-                patch('sys.stderr'):
-            with self.assertRaises(SystemExit) as exit:
-                backend.main()
-            self.assertEqual(exit.exception.code, 2)
-            server.assert_not_called()
-        self.assertFalse(cache_path(self.pdf, self.root).exists())
-        for pdf in (self.pdf, second):
-            generate_pdf_text(pdf, self.root)
-
-        class Listening(Exception):
-            pass
-
-        def listen(*args):
-            for pdf in (self.pdf, second):
-                self.assertTrue(cache_path(pdf, self.root).is_file())
-                self.assertIn('Normal', PdfTextIndex(pdf, cache_dir=self.root).text)
-            raise Listening
-
-        with patch.object(sys, 'argv', ['reader-server.py', '-c', str(self.config)]), \
-                patch.object(backend.threading.Thread, 'start'), \
-                patch.object(PdfTextIndex, 'extract', side_effect=AssertionError('Reader extracted PDF')), \
-                patch.object(backend, 'ThreadingHTTPServer', side_effect=listen), \
+                patch.object(backend.uvicorn.Server, 'run') as run, \
                 patch('builtins.print'):
-            with self.assertRaises(Listening):
-                backend.main()
+            backend.main()
+            run.assert_called_once()
+        self.assertFalse((self.root / 'OCR_DATA').exists())
+        self.start()
+        with self.request('/api/reader/config') as response:
+            self.assertEqual(json.load(response)['volumes'][0]['pages'], [1])
 
     def test_browser_offsets_are_utf16_and_canonical_runs_keep_font_indexes(self):
         generate_pdf_text(self.pdf, self.root)
@@ -233,51 +280,18 @@ class ReaderBackendTests(unittest.TestCase):
         self.assertEqual(PdfTextIndex(self.pdf, cache_dir=self.root).text, index.text)
 
 
-    def test_frontend_json_url_serves_exact_generated_bytes(self):
+    def test_reader_matches_js_config_without_pdf_text_backend(self):
         self.start()
         with self.request('/api/reader/config') as response:
-            text_url = json.load(response)['volumes'][0]['pdfTextUrl']
-        self.assertTrue(text_url.startswith('/OCR_DATA/'))
-        self.assertTrue(text_url.endswith('/manifest.json'))
-        saved = browser_path(self.pdf, self.root).read_bytes()
-        with patch('fitz.open', side_effect=AssertionError('HTTP opened PDF')), \
-                patch.object(backend.json, 'loads', side_effect=AssertionError('HTTP parsed JSON')), \
-                patch.object(backend.json, 'dumps', side_effect=AssertionError('HTTP serialized JSON')):
-            with self.request(text_url) as response:
-                self.assertIn('application/json', response.headers['Content-Type'])
-                body = response.read()
-            with self.request(text_url, method='HEAD') as response:
-                self.assertEqual(int(response.headers['Content-Length']), len(saved))
-                self.assertEqual(response.read(), b'')
-        self.assertEqual(body, saved)
-        for url in ('/OCR_DATA/private.ocr.json',
-                    '/OCR_DATA/%2e%2e/reader.settings.json', '/api/reader/pdf-text/1'):
+            volume = json.load(response)['volumes'][0]
+        self.assertEqual(volume['pdfUrl'], '/api/reader/pdf/1')
+        self.assertNotIn('pdfTextUrl', volume)
+        self.assertFalse((self.root / 'OCR_DATA').exists())
+        for url in ('/OCR_DATA/private.ocr.json', '/api/reader/pdf-text/1'):
             with self.assertRaises(HTTPError) as error:
                 self.request(url)
             self.assertEqual(error.exception.code, 404)
             error.exception.close()
-        data = json.loads(body)
-        self.assertEqual(data['schema'], 7)
-        self.assertNotIn('text', data)
-        self.assertEqual(cache_path(self.pdf, self.root), browser_path(self.pdf, self.root))
-        self.assertEqual(len(list(cache_path(self.pdf, self.root).parent.iterdir())), 2)
-        entry = data['pages'][0]
-        with self.request(text_url.replace('manifest.json', entry['file'])) as response:
-            self.assertEqual(response.headers['Content-Encoding'], 'gzip')
-            page = json.loads(gzip.decompress(response.read()))
-        self.assertEqual(page['page_index'], 0)
-        self.assertEqual(page['document_id'], data['document_id'])
-        self.assertTrue(page['parsing_res_list'])
-        prepared = PdfTextIndex(self.pdf, cache_dir=self.root).browser()
-        self.assertEqual(page['comparison']['raw'], prepared['raw'])
-        for key in ('start', 'end', 'parts'):
-            self.assertEqual(page['comparison'][key], prepared['pages'][0][key])
-        for block in page['parsing_res_list']:
-            self.assertEqual(block['block_label'], 'text')
-            self.assertIsNone(block['block_bbox'])
-            for line in block['lines']:
-                for span in line['spans']:
-                    self.assertIn('italic', data['fonts'][span['font_index']])
 
     def test_old_cache_rebuilds_and_same_font_at_different_sizes_keeps_its_style(self):
         with fitz.open(self.pdf) as book:
@@ -352,10 +366,6 @@ class ReaderBackendTests(unittest.TestCase):
 
     def test_external_changes_publish_existing_event_contract(self):
         self.start()
-        stop = threading.Event()
-        worker = threading.Thread(target=self.library.watch, args=(stop,), daemon=True)
-        worker.start()
-        self.addCleanup(stop.set)
         with self.request('/api/events') as response:
             self.assertEqual(json.loads(response.readline().decode()[6:])['event'], 'ready')
             response.readline()

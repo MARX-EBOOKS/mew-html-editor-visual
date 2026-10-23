@@ -70,27 +70,44 @@ native character geometry from the requested PDF pages; extracted text must matc
 the stored sequence. This geometry is never persisted. Original PDFs and scans
 remain unchanged. Restart the reader and reload the page after changing schemas.
 
-`pdf-selection-diff.js` owns normalization, source/PDF indexes,
-page scopes, contextual and OCR search, and cached bidirectional character maps.
-`pdf-review-provider.js` loads the combined diff/alignment engine and owns
-the reusable review session, popup shell, navigation and saving.
-`pdf-selection-diff.js` contains normalization/search, edit transactions, and both
-text comparison implementations in the same closure as format comparison and alignment.
-Bounded OCR changes use the embedded local comparison; larger changes use Monaco
-when available and fall back locally on failure. There is no separate text-helper import.
+`pdf-review-provider.js` is the runtime entry. It owns normalization, source/PDF
+indexes, page scopes, contextual search, cached bidirectional connections, review
+candidate generation, provider actions and highlights. It loads
+`pdf-selection-diff.js` for font reading, text comparison and edit helpers,
+`replacement-review.js` for reusable highlight/selection tools and the shared
+popup, session, navigation and saving.
+Each script keeps its implementation in a private closure. The font/text script
+receives prepared connection comparisons for format differences and never calls
+back into the provider. The provider reuses each connection's cached text diff.
+Text comparisons use Monaco with the local fallback inside `pdf-selection-diff.js`.
 `PdfReviewReady` resolves after review initialization;
 `pdf-selection.js` waits for it and obtains its locator through the provider.
-Its `PdfSelectionDiff.createLocator(options, environment)` API creates a locator
-with reader-local caches. Selection exposes this locator as `PdfSelection.locator`;
+Its `new PdfReviewProvider.PdfLocator(options, environment)` API creates a locator
+with reader-local caches. Options, environment, document, source/document caches,
+review anchors, and the no-PDF key belong to each instance; locator methods live
+on the prototype. Selection exposes this locator as `PdfSelection.locator`;
 review, including the split editor window, consumes the same locator. Each Monaco
-model/PDF pair owns one current source snapshot. The environment supplies the current PDF, rendered page
-indexes, idle scheduling, and cancellation checks. `findLocations()` returns PDF
+model/PDF pair owns one current `PdfSourceIndex` snapshot. Each snapshot exposes
+`source`, `raw`, normalized text, offsets, fonts, and connection caches. Mapping
+methods operate on their owning snapshot: `index.connectedRange(target, ...)`,
+`index.rememberConnection(...)`, `index.locate(entry, scope)`, and `index.matches(queries)`.
+Scoped locations already return absolute offsets. Editor, full-PDF, and rendered-page
+indexes use the same class; `rawRange()` and `partsInRange()` own coordinate lookups.
+The reader locator retains model/PDF caches, indexing, and preparation. Its HTML
+entity-decoding template is reused across source snapshots.
+The environment supplies the current PDF, rendered page
+indexes, idle scheduling, and cancellation checks. Selection keeps `findLocations()`,
+`locateSource()`, and `locateLayer()` as private functions using that shared locator.
+`findLocations()` returns PDF
 page targets, `locateSource()` returns a source hit and any difference notice, and
 `locateLayer()` returns character ranges for the rendered text layer.
 `pdf-selection.js` captures selections, supplies that environment, and uses its
-results to scroll and publish selection mappings. `pdf-review-provider.js` owns
-DOM range measurement, merged highlight rectangles, painting and cleanup for
-selection overlays and review pointers, plus Monaco decorations and popups.
+results to scroll and publish selection mappings. `pdf-review-provider.js` supplies
+PDF ranges and source decorations to its own `ReviewHighlights` instance.
+`replacement-review.js` owns DOM range measurement, merged highlight rectangles,
+overlay painting/cleanup, Monaco decoration caches and marker selection through
+`ReviewHighlights`, alongside the shared popup. Highlight instances remain
+independent and have no PDF or review-provider dependency.
 
 The provider supplies PDF content and actions to the shared popup host, documented in [replacement-review.md](replacement-review.md).
 The “审阅 / 批量替换” submenu has separate switches for PDF review and bidirectional
@@ -120,7 +137,7 @@ markup-only edits. Selection, decorations and review prepare mappings from the n
 snapshot. Manual edits and replacements rediscover review candidates instead of
 only shifting the previous list; unchanged candidates keep their selected choices. Shared text significance and changed-range rules live
 in `pdf-selection-diff.js`; settings persistence and DOM measurement live in
-`pdf-review-provider.js`, together with popup session state.
+`pdf-review-provider.js`; popup session state lives in `replacement-review.js`.
 Rendered layer indexes use a 24-page LRU; evicted layer observers are disconnected.
 Each retained page keeps at most 32 geometry results. Per-target transient selection
 mappings keep at most 128 entries, while required prepared passage mappings remain

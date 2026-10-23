@@ -2,11 +2,18 @@
 
 `index.html` 和 `reader.html` 共用“审阅 / 批量替换”菜单。
 
-- `public/pdfdiff/pdf-review-provider.js`：统一加载入口，管理共用弹窗、会话、前后条导航、保存、分窗切换、PDF 文字/格式候选、差异标记和替换操作；保留 `ReplacementReview` 注册接口，供各功能提交展示数据和操作。
-- `public/pdfdiff/pdf-selection-diff.js`：文字比较、规范化搜索、映射、字体元数据、统一差异遍历及编辑事务都在同一个脚本中。读取 OCR 页数据时同步启动字体探测；源码与 PDF 文字完成对齐后才比较样式。文字候选、格式候选与高亮共用遍历结果；替换直接使用已生成的候选编辑。
+- `public/pdfdiff/pdf-review-provider.js`：统一加载入口；管理源码索引、定位、双向连接、PDF 文字/格式候选、差异标记和替换操作，向共用弹窗提供数据与动作。
+- `public/pdfdiff/pdf-selection-diff.js`：字体读取、文字与格式比较，以及编辑事务。格式比较接收 provider 已缓存的文字比较结果，不反向调用 provider。
+- `public/pdfdiff/replacement-review.js`：共用弹窗、会话、前后条导航、保存和分窗切换，以及通用文字范围测量、叠层绘制、Monaco 标记缓存、选区命中与清理；提供 `ReplacementReview` 注册接口和 `ReviewHighlights.create()`，每个高亮调用方创建独立实例。
 - `public/pdfdiff/pdf-selection.js`：PDF 与源码选区的双向定位、选区跟踪和滚动；发布已准备好的映射数据，不创建弹窗或判断字体差异。
 
-Provider 统一管理 PDF 高亮区域的测量、合并、绘制、缓存与清理；选区模块仅传入映射后的范围。
+Provider 提供 PDF 高亮数据，由独立的 `ReviewHighlights` 实例测量、合并、绘制、缓存与清理；选区模块仅传入映射后的范围。
+
+其他功能可以载入 `replacement-review.js`，调用 `ReviewHighlights.create({ document, lowerBound, classes })`。
+`lowerBound(values, value, key)` 是调用方已有的有序索引查找函数；`classes` 可配置 `selection/pointer/caret` 类名。
+`measureHighlights(container, index, hits, focusHit)` 接收 `index.raw`、按文字顺序排列的 `index.parts: [{ node, start, end }]` 和文字范围，返回相对坐标。
+实例提供 `paintHighlight/clearHighlights/getHighlight`；`updateSource(editor, key, decorations, css)` 按调用方的版本键缓存 Monaco 标记，`decorations` 只在缓存失效时调用。
+`selectionRange(editor, event, range)` 查询当前标记，`dispose()` 清理该实例的叠层、样式和订阅。
 
 各功能只提交展示数据与操作回调，不创建自己的弹窗。PDF 紧凑弹窗保留对照、替换和前后条；分窗时仍可切换“查看PDF / 查看HTML”，携带当前候选与选择，不重新计算、不替换内容。
 
@@ -35,6 +42,10 @@ ReplacementReview.register({
   }
 });
 ```
+
+`context.toolbox` 提供 `PdfSelectionDiff` 的文字、字体和编辑工具；源码定位与候选接口使用 `new PdfReviewProvider.PdfLocator()`、`reviewCandidates()` 和 `connectionDiff()`。调用前等待 `PdfReviewReady` 完成初始化。`PdfLocator` 管理读取和缓存，每个 `PdfSourceIndex` 保存自己的公开 `source/raw`、坐标和连接；定位调用改为 `index.locate()`、`index.connectedRange()` 等实例方法。
+
+`ReviewHighlights.measureHighlights()` 通过索引的 `partsInRange(start, end)` 获取文字节点范围，复用弹窗锚点的坐标查找；`ReviewHighlights.create()` 不再接收 `lowerBound`。公共高亮模块只依赖这个索引接口，不导入 PDF 类。
 
 `provide(context)` 接收 `editor/model/source/version/signal/toolbox/request`，返回候选数组或 `{ items }`。每个候选有唯一字符串 `id`，每个选项有唯一字符串 `id`。首项默认选中，选择保存于 `state.choices`。
 
