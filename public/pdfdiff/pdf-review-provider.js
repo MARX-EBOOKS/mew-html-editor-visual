@@ -1,20 +1,7 @@
 // PDF mapping, review candidates, provider actions and highlights.
 'use strict';
 // Source/PDF mapping and candidate generation.
-function connectionDiff(source, target, connection) {
-  return connection.editorDiff ||= toolbox.textDiff(source.raw.slice(connection.start, connection.end),
-    target.raw.slice(connection.targetStart, connection.targetEnd), true);
-}
-function* textDifferences(index, start, parts, pdfStart = 0) {
-  for (const part of parts || []) {
-    const end = start + part.html.length;
-    if (part.changed && toolbox.significantText(part.html, index, start) !== toolbox.significantText(part.pdf))
-      yield { start, end, pdfStart, part };
-    start = end;
-    pdfStart += part.pdf.length;
-  }
-}
-function reviewCandidates(index, targets = [], notice = null, selectedParts = null) {
+function reviewCandidates(index, targets = [], notice = null) {
   const items = [], seen = [];
   function claim(start, end) {
     let low = 0, high = seen.length;
@@ -46,8 +33,10 @@ function reviewCandidates(index, targets = [], notice = null, selectedParts = nu
       if (offset <= hit.right) return hit.left;
       return endBias || offset === hit.stop ? hit.left + hit.part.html.length : hit.left;
     };
-    for (const { start: from, end, pdfStart: at, part } of textDifferences(index, start, parts, pdfStart)) {
-      if (claim(from, end)) {
+    for (const part of parts || []) {
+      const from = start, end = start += part.html.length, at = pdfStart;
+      pdfStart += part.pdf.length;
+      if (part.changed && significantText(part.html, index, from) !== significantText(part.pdf) && claim(from, end)) {
         const lineStart = pdfRaw.lastIndexOf('\n', Math.max(0, at - 1)) + 1;
         const nextLine = pdfRaw.indexOf('\n', at + part.pdf.length);
         const lineEnd = nextLine < 0 ? pdfRaw.length : nextLine;
@@ -56,8 +45,9 @@ function reviewCandidates(index, targets = [], notice = null, selectedParts = nu
         if (b < 0) b = index.raw.length;
         a = Math.max(0, a);
         b = Math.min(index.raw.length, b);
-        const html = index.raw.slice(a, b);
-        const preview = { html, pdf: index.raw.slice(a, from) + part.pdf + index.raw.slice(end, b) };
+        const before = index.raw.slice(a, from), after = index.raw.slice(end, b);
+        const preview = { html: index.raw.slice(a, b), pdf: before + part.pdf + after };
+        index.locator.comparisonParts(preview, [{ html: before, pdf: before, changed: false }, part, { html: after, pdf: after, changed: false }]);
         items.push({
           id: `${from}:${end}`, sourceStart: from, sourceEnd: end, preview,
           comparison: { html: part.html, pdf: part.pdf }, options: [
@@ -68,10 +58,9 @@ function reviewCandidates(index, targets = [], notice = null, selectedParts = nu
     }
   };
   for (const target of targets.filter(Boolean)) for (const connection of index.connections.get(target) || [])
-    add(connection.start, connectionDiff(index, target, connection)?.parts, target.raw, connection.targetStart);
-  if (notice?.source && index.raw.slice(notice.source.start, notice.source.end) === notice.html) {
-    add(notice.source.start, selectedParts || toolbox.textDiff(notice.html, notice.pdf, true)?.parts);
-  }
+    add(connection.start, textDiff(index, target, connection)?.parts, target.raw, connection.targetStart);
+  if (notice?.source && index.raw.slice(notice.source.start, notice.source.end) === notice.html)
+    add(notice.source.start, index.locator.comparisonParts(notice));
   return items.sort((a, b) => a.sourceStart - b.sourceStart || a.sourceEnd - b.sourceEnd);
 }
 class PdfSourceIndex {
@@ -115,7 +104,7 @@ class PdfSourceIndex {
           const reused = this.connectedRange(page, range.hit.start, range.hit.end), previous = confirmed.at(-1);
           const limit = Math.min(32, Math.max(12, Math.floor(left.length * .08)));
           if (left.length > 2048) continue;
-          const distance = reused?.start === range.start && reused.end === range.end ? 0 : toolbox.textDiff(left, right, false, limit).distance;
+          const distance = reused?.start === range.start && reused.end === range.end ? 0 : textDiff(left, right, false, limit).distance;
           if (distance > limit) continue;
           if (previous && previous.end >= range.start && previous.hit.end >= range.hit.start && previous.distance + distance <= 96) {
             previous.end = range.end;
@@ -209,7 +198,7 @@ class PdfSourceIndex {
     const left = alignment?.left || this.normalizedRange(start, end),
       right = alignment?.right || target.normalizedRange(hit.start, hit.end);
     if (!left.text && !right.text) return null;
-    const diff = alignment?.diff || toolbox.textDiff(left.text, right.text, true, 128);
+    const diff = alignment?.diff || textDiff(left.text, right.text, true, 128);
     if (diff.distance > 128) return null;
     const connection = { start, end, targetStart: hit.start, targetEnd: hit.end, left, right, distance: diff.distance, spans: diff.parts, patches: [] };
     let a = 0;
@@ -240,7 +229,7 @@ class PdfSourceIndex {
       && end <= (reverse ? item.targetEnd : item.end));
     if (!connection || start > end) return null;
     const needsRaw = (marked || start === end) && !reverse;
-    const raw = needsRaw && connectionDiff(this, target, connection);
+    const raw = needsRaw && textDiff(this, target, connection);
     if (needsRaw && !raw) return null;
     const from = reverse ? connection.right : connection.left, to = reverse ? connection.left : connection.right;
     const offset = reverse ? connection.targetStart : connection.start,
@@ -251,7 +240,7 @@ class PdfSourceIndex {
       const left = cursorA, right = cursorA += span[reverse ? 'pdf' : 'html'].length,
         targetLeft = cursorB, targetRight = cursorB += span[reverse ? 'html' : 'pdf'].length;
       if (raw && a === b ? !span.changed || a < left || a > right || left !== right
-        && !(marked && !span.html.trim() && toolbox.significantText(span.pdf)) : right <= a || left >= b) continue;
+        && !(marked && !span.html.trim() && significantText(span.pdf)) : right <= a || left >= b) continue;
       // A changed run has no reliable per-character correspondence; include its whole counterpart.
       first = Math.min(first, span.changed ? targetLeft : targetLeft + Math.max(a, left) - left);
       last = Math.max(last, span.changed ? targetRight : targetLeft + Math.min(b, right) - left);
@@ -263,8 +252,8 @@ class PdfSourceIndex {
     if (last <= first) return null;
     const hit = { start: targetOffset + (raw ? first : to.starts[first]), end: targetOffset + (raw ? last : to.ends[last - 1]), connection };
     // Search alignment folds case; review must compare the original mapped text.
-    return { ...hit, approximate: toolbox.significantText((reverse ? target : this).raw.slice(start, end))
-      !== toolbox.significantText((reverse ? this : target).raw.slice(hit.start, hit.end)) };
+    return { ...hit, approximate: significantText((reverse ? target : this).raw.slice(start, end))
+      !== significantText((reverse ? this : target).raw.slice(hit.start, hit.end)) };
   }
 }
 class PdfLocator {
@@ -279,6 +268,35 @@ class PdfLocator {
     this.document = environment.document || window.document;
   }
 
+  comparisonParts(value, parts) {
+    const { html, pdf } = value;
+    if (value.comparisonDiff?.html !== html || value.comparisonDiff.pdf !== pdf)
+      value.comparisonDiff = { html, pdf, parts: parts || toolbox.textDiff(html, pdf, true)?.parts || [{ html, pdf, changed: false }] };
+    return value.comparisonDiff.parts;
+  }
+  comparisonRows(value, compact = true) {
+    if (typeof value?.html !== 'string' || typeof value?.pdf !== 'string') return [];
+    let parts = this.comparisonParts(value);
+    if (compact) {
+      const first = parts.findIndex(part => part.changed), last = parts.findLastIndex(part => part.changed);
+      if (first >= 0) {
+        // Keep every changed run, including unchanged text between distant edits.
+        // Reuse the original character diff rather than computing it again on a crop.
+        const before = parts.slice(0, first).map(part => part.html).join('');
+        const after = parts.slice(last + 1).map(part => part.html).join('');
+        const prefix = (before.length > 45 ? '…' : '') + before.slice(-45);
+        const suffix = after.slice(0, 45) + (after.length > 45 ? '…' : '');
+        parts = [...(prefix ? [{ html: prefix, pdf: prefix, changed: false }] : []),
+        ...parts.slice(first, last + 1), ...(suffix ? [{ html: suffix, pdf: suffix, changed: false }] : [])];
+      }
+    }
+    return ['html', 'pdf'].map(side => ({
+      label: side.toUpperCase(), parts: parts.map(part => {
+        const missing = part.changed && !part[side].trim() && !!part[side === 'html' ? 'pdf' : 'html'].trim();
+        return { text: missing ? '' : part[side], changed: part.changed };
+      })
+    }));
+  }
   sourceIndex(source) {
     const template = this.template ||= this.document.createElement("template");
     const starts = [], ends = [], formats = [];
@@ -467,7 +485,7 @@ class PdfLocator {
           || begin < 0 || end > text.length || text[begin] === ' ' || text[end - 1] === ' ') continue;
         // Never cut a normalized glyph (e.g. a ligature or a surrogate pair).
         if ((begin && haystack.starts[begin] === haystack.starts[begin - 1]) || (end < text.length && haystack.starts[end] === haystack.starts[end - 1])) continue;
-        const distance = toolbox.textDiff(needle, text.slice(begin, end), false, limit).distance;
+        const distance = textDiff(needle, text.slice(begin, end), false, limit).distance;
         if (size && !distance || distance > limit) continue;
         const start = haystack.starts[begin], stop = size ? haystack.ends[end - 1] : start;
         found.set(`${start}:${stop}`, { start, end: stop, approximate: true, distance });
@@ -589,7 +607,7 @@ class PdfLocator {
 // Shared popup and session initialization.
 
 // PDF comparison is one review provider. Selection synchronization remains independent.
-let host, toolbox, fallbackLocator, highlights;
+let host, toolbox, textDiff, significantText, formatDifferences, fallbackLocator, highlights;
 let enabled = true, fontEnabled = true;
 function readerWindow() {
   if (window.ReaderUI?.getPdfViewer) return window;
@@ -614,43 +632,6 @@ function presentation(context, item) {
     side, switchable: split, switchLabel: side === 'pdf' ? '查看HTML' : '查看PDF', host: destination.ReplacementReview, window: destination,
     container: viewer()?.container, eventBus: viewer()?.eventBus, anchor
   };
-}
-const comparisonCache = new WeakMap();
-function comparisonParts(value) {
-  let cached = comparisonCache.get(value);
-  if (!cached || cached.html !== value.html || cached.pdf !== value.pdf) {
-    cached = { html: value.html, pdf: value.pdf, parts: toolbox.textDiff(value.html, value.pdf, true)?.parts || [{ ...value, changed: false }] };
-    comparisonCache.set(value, cached);
-  }
-  return cached.parts;
-}
-function comparisonRows(value, compact = true) {
-  if (typeof value?.html !== 'string' || typeof value?.pdf !== 'string') return [];
-  let parts = comparisonParts(value);
-  if (compact) {
-    const first = parts.findIndex(part => part.changed), last = parts.findLastIndex(part => part.changed);
-    if (first >= 0) {
-      // Keep every changed run, including unchanged text between distant edits.
-      // Reuse the original character diff rather than computing it again on a crop.
-      const before = parts.slice(0, first).map(part => part.html).join('');
-      const after = parts.slice(last + 1).map(part => part.html).join('');
-      const prefix = (before.length > 45 ? '…' : '') + before.slice(-45);
-      const suffix = after.slice(0, 45) + (after.length > 45 ? '…' : '');
-      parts = [...(prefix ? [{ html: prefix, pdf: prefix, changed: false }] : []),
-      ...parts.slice(first, last + 1), ...(suffix ? [{ html: suffix, pdf: suffix, changed: false }] : [])];
-    }
-  }
-  return ['html', 'pdf'].map(side => ({
-    label: side.toUpperCase(), parts: parts.map(part => {
-      const missing = part.changed && !part[side].trim() && !!part[side === 'html' ? 'pdf' : 'html'].trim();
-      return { text: missing ? '' : part[side], changed: part.changed };
-    })
-  }));
-}
-function formatItems(index, targets = []) {
-  if (!fontEnabled) return [];
-  return toolbox.formatDifferences(index, targets.filter(Boolean)
-    .flatMap(target => (index.connections.get(target) || []).map(connection => [connection, target, connectionDiff(index, target, connection)])));
 }
 function isCurrent(context) { return context.pdf === viewer()?.pdfDocument; }
 async function provide(context) {
@@ -689,7 +670,8 @@ function reviewItems(index, targets, notice, model) {
   const selected = enabled && selectionCandidate(index, notice, model);
   if (selected) text = [...text.filter(item => item.sourceEnd <= selected.sourceStart && item.sourceStart < selected.sourceStart
     || item.sourceStart >= selected.sourceEnd && item.sourceEnd > selected.sourceEnd), selected].sort((a, b) => a.sourceStart - b.sourceStart);
-  const formats = formatItems(index, targets);
+  const formats = fontEnabled ? formatDifferences(index, (targets || []).filter(Boolean)
+    .flatMap(target => (index.connections.get(target) || []).map(connection => [connection, target]))) : [];
   const positions = new Map();
   let cursor = 0;
   for (const item of formats) {
@@ -705,7 +687,7 @@ function reviewItems(index, targets, notice, model) {
 function selectionCandidate(index, notice, model) {
   const source = notice?.source;
   if (!source) return null;
-  const selected = reviewCandidates(index, [], notice, comparisonParts(notice));
+  const selected = reviewCandidates(index, [], notice);
   if (!selected.length) return null;
   return {
     id: `${source.start}:${source.end}`, sourceStart: source.start, sourceEnd: source.end,
@@ -723,7 +705,7 @@ function content(state, item) {
     : item ? '文字不一致' : state.items.length ? '已到末尾，可返回上一条。' : '没有可审阅的差异。';
   return {
     message,
-    comparison: item?.font ? [] : comparisonRows(item?.preview || item?.comparison, !item?.selection),
+    comparison: item?.font ? [] : getLocator().comparisonRows(item?.preview || item?.comparison, !item?.selection),
     apply: !item?.font || !!edits.length,
     range: item?.range || (edits.length ? toolbox.rangeAt(state.model, Math.min(...edits.map(edit => edit.start)), Math.max(...edits.map(edit => edit.end))) : null),
     options: [], applyLabel: item?.font ? '替换格式' : '替换', advance: false, expanded: false
@@ -756,7 +738,8 @@ function apply(state, all) {
     if (value.font) formats.push(value);
     else edits.push(...value.options[0].edits);
   }
-  if (formats.length) for (const candidate of formatItems(state.context.index, state.context.targets))
+  if (fontEnabled && formats.length) for (const candidate of formatDifferences(state.context.index, (state.context.targets || []).filter(Boolean)
+    .flatMap(target => (state.context.index.connections.get(target) || []).map(connection => [connection, target]))))
     if (formats.some(value => candidate.sourceStart < value.sourceEnd && candidate.sourceEnd > value.sourceStart))
       edits.push(...candidate.options[0].edits);
   const checked = toolbox.validateEdits(state.source, edits);
@@ -780,43 +763,36 @@ const review = {
   onClose(context) { selection()?.clearReviewPointer(context.editor); }
 };
 function sourceDecorations(index, connections, model) {
-  const decorations = [], seen = new Set(), comparisons = [];
-  const add = (segments, prefix, options) => {
+  const decorations = [], seen = new Map();
+  const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
+  let previous;
+  for (const { start: from, end: to, part, font, htmlFont } of toolbox.comparisonRanges(index, connections)) {
+    const segments = toolbox.sourceSegments(index, from, to, !!font);
+    const insertion = !segments.length;
+    if (insertion) segments.push(toolbox.insertionSegment(index, from));
+    const message = (part ? 'HTML: ' + escape(part.html) + '\n\nOCR: ' + escape(part.pdf) : '')
+      + (font ? `${part ? '\n\n' : ''}HTML ${toolbox.fontSummary([htmlFont])}\n\nPDF ${toolbox.fontSummary([font])}` : '');
     for (const { start, end } of segments) {
-      const key = `${prefix}${start}:${end}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      decorations.push({
-        range: toolbox.rangeAt(model, start, end), options: {
-          linesDecorationsClassName: 'mew-ocr-diff-line', stickiness: 1, ...options
-        }
-      });
+      const key = `${start}:${end}`;
+      let mark = seen.get(key) || (!insertion && previous && start >= previous.start && start <= previous.end ? previous : null);
+      if (!mark) {
+        mark = { start, end, decoration: { range: toolbox.rangeAt(model, start, end), options: {
+          linesDecorationsClassName: 'mew-ocr-diff-line', stickiness: 1,
+          description: 'PDF OCR text difference', inlineClassName: insertion ? undefined : 'mew-ocr-diff-text',
+          beforeContentClassName: insertion ? 'mew-ocr-diff-insert' : undefined,
+          hoverMessage: { value: message, isTrusted: false }, linesDecorationsTooltip: 'Text differs from PDF OCR'
+        } } };
+        decorations.push(mark.decoration);
+      } else {
+        mark.end = Math.max(mark.end, end);
+        mark.decoration.range = toolbox.rangeAt(model, mark.start, mark.end);
+        if (!mark.decoration.options.hoverMessage.value.includes(message)) mark.decoration.options.hoverMessage.value += '\n\n' + message;
+      }
+      if (font) Object.assign(mark.decoration.options, { description: 'PDF font difference',
+        inlineClassName: 'mew-ocr-diff-text mew-font-diff-text', linesDecorationsTooltip: '粗体／斜体与 PDF 不一致' });
+      seen.set(key, mark);
+      if (!insertion) previous = mark;
     }
-  };
-  for (const [connection, target] of connections) {
-    const diff = connectionDiff(index, target, connection);
-    comparisons.push([connection, target, diff]);
-    for (const { start, end, part } of textDifferences(index, connection.start, diff?.parts)) {
-      const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
-      const segments = toolbox.sourceSegments(index, start, end);
-      const insertion = !segments.length;
-      if (insertion) segments.push(toolbox.insertionSegment(index, start));
-      add(segments, '', {
-        description: 'PDF OCR text difference',
-        inlineClassName: insertion ? undefined : 'mew-ocr-diff-text',
-        beforeContentClassName: insertion ? 'mew-ocr-diff-insert' : undefined,
-        hoverMessage: { value: 'HTML: ' + escape(part.html) + '\n\nOCR: ' + escape(part.pdf), isTrusted: false },
-        linesDecorationsTooltip: 'Text differs from PDF OCR'
-      });
-    }
-  }
-  for (const item of toolbox.formatDifferences(index, comparisons)) {
-    const formats = item.formats || [item];
-    add(toolbox.sourceSegments(index, item.sourceStart, item.sourceEnd, true), 'font:', {
-      description: 'PDF font difference', inlineClassName: 'mew-ocr-diff-text mew-font-diff-text',
-      hoverMessage: { value: `HTML ${toolbox.fontSummary(formats.map(value => value.htmlFont))}\n\nPDF ${toolbox.fontSummary(formats.map(value => value.font))}`, isTrusted: false },
-      linesDecorationsTooltip: '粗体／斜体与 PDF 不一致'
-    });
   }
   return decorations;
 }
@@ -848,7 +824,7 @@ function onDifference(event) {
     && dismissed.range === editor?.getSelection()?.toString() && dismissed.interaction === data.interactionId) return;
   dismissed = null;
   const changed = data.notices.find(value => typeof value.html === 'string' && typeof value.pdf === 'string'
-    && comparisonParts(value).some(part => part.changed));
+    && getLocator().comparisonParts(value).some(part => part.changed));
   const notice = changed || data.notices.find(value => value.source) || data.notices[0];
   if (!notice || notice.source && model && notice.source.index.source !== model.getValue()) return;
   if (!changed) {
@@ -861,7 +837,8 @@ function onDifference(event) {
         === getLocator().normalized(notice.target.index.raw.slice(notice.target.start, notice.target.end)).text) {
         index.rememberConnection(notice.source.start, notice.source.end, notice.target.index, { start: notice.target.start, end: notice.target.end });
       }
-      const differences = formatItems(index, targets);
+      const differences = fontEnabled ? formatDifferences(index, targets
+        .flatMap(target => (index.connections.get(target) || []).map(connection => [connection, target]))) : [];
       const item = differences.find(item => item.sourceStart < notice.source.end && item.sourceEnd > notice.source.start);
       if (item) {
         void host.openForSelection(enabled ? 'pdf-ocr' : 'pdf-font', editor, item.id,
@@ -873,7 +850,7 @@ function onDifference(event) {
   if (!enabled) return;
   if (!notice.source || !model) {
     host.showNotice({
-      title: 'PDF 文字差异', message: '文字不一致', comparison: comparisonRows(notice, false), anchor: data.anchor,
+      title: 'PDF 文字差异', message: '文字不一致', comparison: getLocator().comparisonRows(notice, false), anchor: data.anchor,
       layout: presentation({ editor, request: data })
     }); return;
   }
@@ -899,6 +876,7 @@ window.PdfReviewReady = (async () => {
   if (!window.PdfSelectionDiff) await import('./pdf-selection-diff.js');
   await window.PdfSelectionDiff.loadMonaco();
   toolbox = window.PdfSelectionDiff;
+  ({ textDiff, significantText, formatDifferences } = toolbox);
   if (!window.ReplacementReview || !window.ReviewHighlights) await import('./replacement-review.js');
   host = window.ReplacementReview;
   try { enabled = localStorage.getItem('mew.pdf-review.enabled') !== 'false'; } catch { }
@@ -958,7 +936,7 @@ window.PdfReviewReady = (async () => {
     setEnabled(value) { selection()?.setSelectionHighlight(value); }
   })];
   window.PdfReviewProvider = {
-    PdfLocator, PdfSourceIndex, connectionDiff, textDifferences, reviewCandidates, sourceDecorations,
+    PdfLocator, PdfSourceIndex, reviewCandidates, sourceDecorations,
     measureHighlights: highlights.measureHighlights, paintHighlight: highlights.paintHighlight, clearHighlights: highlights.clearHighlights,
     getHighlight: highlights.getHighlight,
     readPageFonts: toolbox.readPageFonts,

@@ -162,38 +162,50 @@ function fontEdits(index, start, end, font) {
   if (right.length) { b += after.length; text += after + right.map(tag => tag.opening).join(''); }
   return [{ start: a, end: b, expected: index.source.slice(a, b), text }];
 }
-// Compare formatting only where unchanged text confirms character correspondence.
-function formatDifferences(index, connections) {
-  if (!index.formats) return [];
-  const items = new Map();
+// Stream text and font discrepancies together over disjoint source spans.
+function* comparisonRanges(index, connections) {
   for (const [connection, target, diff] of connections) {
     const runs = fontRuns(target, connection.targetStart, connection.targetEnd);
     let left = connection.start, right = connection.targetStart, run = 0;
-    for (const part of diff?.parts || []) {
-      while (run < runs.length && runs[run].end <= right) run++;
-      if (!part.changed) for (let i = run; i < runs.length && runs[i].start < right + part.pdf.length; i++) {
-        const font = runs[i];
-        const a = Math.max(right, font.start), b = Math.min(right + part.pdf.length, font.end);
-        if (a >= b) continue;
-        let start = left + a - right;
-        const end = left + b - right;
-        while (start < end) {
-          const htmlFont = index.formats[start];
-          let stop = start + 1;
-          while (stop < end && index.formats[stop] === htmlFont) stop++;
-          const differs = htmlFont && ['italic', 'bold'].some(key => typeof font[key] === 'boolean' && font[key] !== htmlFont[key]);
-          if (differs) {
-            const text = index.raw.slice(start, stop), a = start + (text.match(/^\s*/)?.[0].length || 0),
-              b = stop - (text.match(/\s*$/)?.[0].length || 0), id = `font:${a}:${b}`;
-            if (a < b && !items.has(id)) items.set(id, { sourceStart: a, sourceEnd: b, font, htmlFont,
-              formats: [{ font, htmlFont }] });
+    for (const part of (diff || textDiff(index, target, connection))?.parts || []) {
+      const changed = part.changed && significantText(part.html, index, left) !== significantText(part.pdf);
+      if (changed && !part.html.trim()) yield { start: left, end: left, part };
+      else {
+        let covered = false;
+        while (run < runs.length && runs[run].end <= right) run++;
+        for (let i = run; i < runs.length && runs[i].start < right + part.pdf.length; i++) {
+          const font = runs[i];
+          if (part.changed && (font.start > right || font.end < right + part.pdf.length)) continue;
+          const a = Math.max(right, font.start), b = Math.min(right + part.pdf.length, font.end);
+          if (a >= b) continue;
+          covered = true;
+          let start = part.changed ? left : left + a - right;
+          const end = part.changed ? left + part.html.length : left + b - right;
+          while (start < end) {
+            const htmlFont = index.formats?.[start];
+            let stop = start + 1;
+            while (stop < end && index.formats?.[stop] === htmlFont) stop++;
+            const differs = htmlFont && ['italic', 'bold'].some(key => typeof font[key] === 'boolean' && font[key] !== htmlFont[key])
+              && !!index.raw.slice(start, stop).trim();
+            if (changed || differs) yield { start, end: stop, part: changed ? part : null, font: differs ? font : null, htmlFont };
+            start = stop;
           }
-          start = stop;
         }
+        if (changed && (!covered || !part.html.length)) yield { start: left, end: left + part.html.length, part };
       }
       left += part.html.length;
       right += part.pdf.length;
     }
+  }
+}
+function formatDifferences(index, connections) {
+  const items = new Map();
+  for (const { start, end, font, htmlFont } of comparisonRanges(index, connections)) {
+    if (!font) continue;
+    const text = index.raw.slice(start, end), a = start + (text.match(/^\s*/)?.[0].length || 0),
+      b = end - (text.match(/\s*$/)?.[0].length || 0), id = `font:${a}:${b}`;
+    if (a < b && !items.has(id)) items.set(id, { sourceStart: a, sourceEnd: b, font, htmlFont,
+      formats: [{ font, htmlFont }] });
   }
   // Merge adjacent format changes, or bridge punctuation with the same mismatch.
   const merged = [];
@@ -329,6 +341,12 @@ function applyEdits(editor, model, version, source, edits, origin = 'review-repl
   if (applied === false) throw new Error('编辑器未能应用替换');
 }
 function textDiff(left, right, details = false, limit = Infinity) {
+  // Index pairs reuse the connection's original-text alignment for review and highlights.
+  if (details && typeof details === 'object') {
+    const connection = details;
+    return connection.editorDiff ||= textDiff(left.raw.slice(connection.start, connection.end),
+      right.raw.slice(connection.targetStart, connection.targetEnd), true);
+  }
   if (left === right) return { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
   // A bounded match cannot span more extra characters than its edit limit.
   if (Number.isFinite(limit) && Math.abs(Array.from(left).length - Array.from(right).length) > limit)
@@ -452,7 +470,7 @@ async function loadMonaco() {
     }).catch(() => false);
 }
 window.PdfSelectionDiff = {
-  textDiff, sourceSegments, insertionSegment, layerFonts, fontStyle, fontRuns, fontSummary, formatDifferences, readPageFonts, readPageText, textItemFont,
+  textDiff, sourceSegments, insertionSegment, layerFonts, fontStyle, fontRuns, fontSummary, comparisonRanges, formatDifferences, readPageFonts, readPageText, textItemFont,
   textEdits, fontEdits, validateEdits, previewEdits, applyEdits, rangeAt, significantText, changedRange, htmlFontDefinition,
   get monacoAvailable() { return !!computer; },
   useMonaco, loadMonaco
