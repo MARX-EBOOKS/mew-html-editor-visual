@@ -162,50 +162,40 @@ function fontEdits(index, start, end, font) {
   if (right.length) { b += after.length; text += after + right.map(tag => tag.opening).join(''); }
   return [{ start: a, end: b, expected: index.source.slice(a, b), text }];
 }
-// Stream text and font discrepancies together over disjoint source spans.
-function* comparisonRanges(index, connections) {
+// Compare formatting only where unchanged text confirms character correspondence.
+function formatDifferences(index, connections) {
+  if (!index.formats) return [];
+  const items = new Map();
   for (const [connection, target, diff] of connections) {
     const runs = fontRuns(target, connection.targetStart, connection.targetEnd);
     let left = connection.start, right = connection.targetStart, run = 0;
     for (const part of (diff || textDiff(index, target, connection))?.parts || []) {
-      const changed = part.changed && significantText(part.html, index, left) !== significantText(part.pdf);
-      if (changed && !part.html.trim()) yield { start: left, end: left, part };
-      else {
-        let covered = false;
-        while (run < runs.length && runs[run].end <= right) run++;
-        for (let i = run; i < runs.length && runs[i].start < right + part.pdf.length; i++) {
-          const font = runs[i];
-          if (part.changed && (font.start > right || font.end < right + part.pdf.length)) continue;
-          const a = Math.max(right, font.start), b = Math.min(right + part.pdf.length, font.end);
-          if (a >= b) continue;
-          covered = true;
-          let start = part.changed ? left : left + a - right;
-          const end = part.changed ? left + part.html.length : left + b - right;
-          while (start < end) {
-            const htmlFont = index.formats?.[start];
-            let stop = start + 1;
-            while (stop < end && index.formats?.[stop] === htmlFont) stop++;
-            const differs = htmlFont && ['italic', 'bold'].some(key => typeof font[key] === 'boolean' && font[key] !== htmlFont[key])
-              && !!index.raw.slice(start, stop).trim();
-            if (changed || differs) yield { start, end: stop, part: changed ? part : null, font: differs ? font : null, htmlFont };
-            start = stop;
+      while (run < runs.length && runs[run].end <= right) run++;
+      for (let i = run; i < runs.length && runs[i].start < right + part.pdf.length; i++) {
+        const font = runs[i];
+        const a = Math.max(right, font.start), b = Math.min(right + part.pdf.length, font.end);
+        if (a >= b) continue;
+        // Changed text has no character alignment; compare its complete span only with a uniform PDF font.
+        if (part.changed && (font.start > right || font.end < right + part.pdf.length)) continue;
+        let start = part.changed ? left : left + a - right;
+        const end = part.changed ? left + part.html.length : left + b - right;
+        while (start < end) {
+          const htmlFont = index.formats[start];
+          let stop = start + 1;
+          while (stop < end && index.formats[stop] === htmlFont) stop++;
+          const differs = htmlFont && ['italic', 'bold'].some(key => typeof font[key] === 'boolean' && font[key] !== htmlFont[key]);
+          if (differs) {
+            const text = index.raw.slice(start, stop), a = start + (text.match(/^\s*/)?.[0].length || 0),
+              b = stop - (text.match(/\s*$/)?.[0].length || 0), id = `font:${a}:${b}`;
+            if (a < b && !items.has(id)) items.set(id, { sourceStart: a, sourceEnd: b, font, htmlFont,
+              formats: [{ font, htmlFont }] });
           }
+          start = stop;
         }
-        if (changed && (!covered || !part.html.length)) yield { start: left, end: left + part.html.length, part };
       }
       left += part.html.length;
       right += part.pdf.length;
     }
-  }
-}
-function formatDifferences(index, connections) {
-  const items = new Map();
-  for (const { start, end, font, htmlFont } of comparisonRanges(index, connections)) {
-    if (!font) continue;
-    const text = index.raw.slice(start, end), a = start + (text.match(/^\s*/)?.[0].length || 0),
-      b = end - (text.match(/\s*$/)?.[0].length || 0), id = `font:${a}:${b}`;
-    if (a < b && !items.has(id)) items.set(id, { sourceStart: a, sourceEnd: b, font, htmlFont,
-      formats: [{ font, htmlFont }] });
   }
   // Merge adjacent format changes, or bridge punctuation with the same mismatch.
   const merged = [];
@@ -301,6 +291,67 @@ function sourceSegments(index, start, end, includeWhitespace = false) {
 function insertionSegment(index, start) {
   const at = index.starts[start] ?? index.ends[start - 1] ?? 0;
   return { start: at, end: at };
+}
+function sourceDecorations(index, connections, model) {
+  const differences = [], comparisons = [];
+  for (const [connection, target] of connections) {
+    const diff = textDiff(index, target, connection);
+    comparisons.push([connection, target, diff]);
+    let end = connection.start;
+    for (const part of diff?.parts || []) {
+      const start = end;
+      end += part.html.length;
+      if (!part.changed || significantText(part.html, index, start) === significantText(part.pdf)) continue;
+      const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
+      differences.push({
+        start, end, text: true,
+        insertions: sourceSegments(index, start, end).length ? [] : [start],
+        messages: ['HTML: ' + escape(part.html) + '\n\nOCR: ' + escape(part.pdf)]
+      });
+    }
+  }
+  for (const item of formatDifferences(index, comparisons)) {
+    const formats = item.formats || [item];
+    differences.push({
+      start: item.sourceStart, end: item.sourceEnd, font: true, insertions: [],
+      messages: [`HTML ${fontSummary(formats.map(value => value.htmlFont))}\n\nPDF ${fontSummary(formats.map(value => value.font))}`]
+    });
+  }
+  // Group visible ranges first so touching changes also join across HTML tags.
+  const merged = [];
+  for (const item of differences.sort((a, b) => a.start - b.start || b.end - a.end)) {
+    const previous = merged.at(-1);
+    if (!previous || previous.end < item.start) { merged.push(item); continue; }
+    previous.end = Math.max(previous.end, item.end);
+    previous.text ||= item.text;
+    previous.font ||= item.font;
+    previous.messages.push(...item.messages);
+    previous.insertions.push(...item.insertions);
+  }
+  const decorations = [];
+  for (const item of merged) {
+    let description = 'PDF OCR text difference';
+    if (item.text && item.font) description = 'PDF text and font difference';
+    else if (item.font) description = 'PDF font difference';
+    const tooltips = [];
+    if (item.text) tooltips.push('Text differs from PDF OCR');
+    if (item.font) tooltips.push('粗体／斜体与 PDF 不一致');
+    const options = {
+      description, linesDecorationsClassName: 'mew-ocr-diff-line', stickiness: 1,
+      inlineClassName: item.font ? 'mew-ocr-diff-text mew-font-diff-text' : 'mew-ocr-diff-text',
+      hoverMessage: { value: [...new Set(item.messages)].join('\n\n'), isTrusted: false },
+      linesDecorationsTooltip: tooltips.join('；')
+    };
+    for (const segment of sourceSegments(index, item.start, item.end, Boolean(item.font))) {
+      decorations.push({ ...segment, options });
+    }
+    for (const start of new Set(item.insertions)) {
+      decorations.push({ ...insertionSegment(index, start),
+        options: { ...options, inlineClassName: undefined, beforeContentClassName: 'mew-ocr-diff-insert' } });
+    }
+  }
+  decorations.sort((a, b) => a.start - b.start || b.end - a.end);
+  return decorations.map(({ start, end, options }) => ({ range: rangeAt(model, start, end), options }));
 }
 function textEdits(index, start, end, replacement) {
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start
@@ -470,7 +521,7 @@ async function loadMonaco() {
     }).catch(() => false);
 }
 window.PdfSelectionDiff = {
-  textDiff, sourceSegments, insertionSegment, layerFonts, fontStyle, fontRuns, fontSummary, comparisonRanges, formatDifferences, readPageFonts, readPageText, textItemFont,
+  textDiff, sourceDecorations, sourceSegments, insertionSegment, layerFonts, fontStyle, fontRuns, fontSummary, formatDifferences, readPageFonts, readPageText, textItemFont,
   textEdits, fontEdits, validateEdits, previewEdits, applyEdits, rangeAt, significantText, changedRange, htmlFontDefinition,
   get monacoAvailable() { return !!computer; },
   useMonaco, loadMonaco

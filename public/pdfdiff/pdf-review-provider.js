@@ -762,58 +762,14 @@ const review = {
   },
   onClose(context) { selection()?.clearReviewPointer(context.editor); }
 };
-function sourceDecorations(index, connections, model, incremental = false) {
-  const steps = sourceDecorationSteps(index, connections, model);
-  if (incremental) return steps;
-  let step;
-  do { step = steps.next(); } while (!step.done);
-  return step.value;
-}
-function* sourceDecorationSteps(index, connections, model) {
-  const decorations = [], seen = new Map(), messages = new Map();
-  const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
-  let previous, processed = 0;
-  for (const { start: from, end: to, part, font, htmlFont } of toolbox.comparisonRanges(index, connections)) {
-    const segments = toolbox.sourceSegments(index, from, to, !!font);
-    const insertion = !segments.length;
-    if (insertion) segments.push(toolbox.insertionSegment(index, from));
-    // A changed passage may span many tags; escape its full text only once.
-    if (part && !messages.has(part)) messages.set(part, 'HTML: ' + escape(part.html) + '\n\nOCR: ' + escape(part.pdf));
-    const message = (part ? messages.get(part) : '')
-      + (font ? `${part ? '\n\n' : ''}HTML ${toolbox.fontSummary([htmlFont])}\n\nPDF ${toolbox.fontSummary([font])}` : '');
-    for (const { start, end } of segments) {
-      const key = `${start}:${end}`;
-      let mark = seen.get(key) || (!insertion && previous && start >= previous.start && start <= previous.end ? previous : null);
-      if (!mark) {
-        mark = { start, end, decoration: { range: toolbox.rangeAt(model, start, end), options: {
-          linesDecorationsClassName: 'mew-ocr-diff-line', stickiness: 1,
-          description: 'PDF OCR text difference', inlineClassName: insertion ? undefined : 'mew-ocr-diff-text',
-          beforeContentClassName: insertion ? 'mew-ocr-diff-insert' : undefined,
-          hoverMessage: { value: message, isTrusted: false }, linesDecorationsTooltip: 'Text differs from PDF OCR'
-        } } };
-        decorations.push(mark.decoration);
-      } else {
-        mark.end = Math.max(mark.end, end);
-        mark.decoration.range = toolbox.rangeAt(model, mark.start, mark.end);
-        if (!mark.decoration.options.hoverMessage.value.includes(message)) mark.decoration.options.hoverMessage.value += '\n\n' + message;
-      }
-      if (font) Object.assign(mark.decoration.options, { description: 'PDF font difference',
-        inlineClassName: 'mew-ocr-diff-text mew-font-diff-text', linesDecorationsTooltip: '粗体／斜体与 PDF 不一致' });
-      seen.set(key, mark);
-      if (!insertion) previous = mark;
-      if (++processed % 128 === 0) yield;
-    }
-  }
-  return decorations;
-}
 function onSources(event) {
   const { editor, index, targets, enabled } = event.detail;
   if (!editor?.createDecorationsCollection) return;
   if (index) getLocator().prepareSource(index, targets, event.detail.pdf);
   const connections = index ? targets.flatMap(target => (index.connections.get(target) || []).map(item => [item, target])) : [];
   const key = [index, enabled, editor.getModel(), ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
-  void highlights.updateSource(editor, key, () => enabled && index ? sourceDecorations(index, connections, editor.getModel(), true) : [],
-    '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{border-left:2px solid #d58b24;margin-left:-1px;cursor:pointer}').catch(console.error);
+  highlights.updateSource(editor, key, () => enabled && index ? toolbox.sourceDecorations(index, connections, editor.getModel()) : [],
+    '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{border-left:2px solid #d58b24;margin-left:-1px;cursor:pointer}');
 }
 // The independent selection module publishes data, never review UI calls.
 let listeningWindow = null;
@@ -946,7 +902,7 @@ window.PdfReviewReady = (async () => {
     setEnabled(value) { selection()?.setSelectionHighlight(value); }
   })];
   window.PdfReviewProvider = {
-    PdfLocator, PdfSourceIndex, reviewCandidates, sourceDecorations,
+    PdfLocator, PdfSourceIndex, reviewCandidates,
     measureHighlights: highlights.measureHighlights, paintHighlight: highlights.paintHighlight, clearHighlights: highlights.clearHighlights,
     getHighlight: highlights.getHighlight,
     readPageFonts: toolbox.readPageFonts,
