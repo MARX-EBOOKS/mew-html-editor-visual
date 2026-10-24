@@ -318,8 +318,8 @@
     }
     const request = ++generation, controller = pending = new AbortController();
     const model = target.getModel(), source = model.getValue(), version = model.getVersionId?.();
-    const context = { editor: target, model, source, version, signal: controller.signal, toolbox: window.PdfSelectionDiff, request: requestData };
-    if (requestData?.snapshot) Object.assign(context, requestData.snapshot.context, { editor: target, model, source, version, signal: controller.signal, toolbox: window.PdfSelectionDiff, request: requestData });
+    const context = { ...requestData?.snapshot?.context, editor: target, model, source, version,
+      signal: controller.signal, toolbox: window.PdfSelectionDiff, request: requestData };
     const modelChange = target.onDidChangeModel(() => close());
     const contentChange = target.onDidChangeModelContent(event => {
       if (event.isFlush || !session) close();

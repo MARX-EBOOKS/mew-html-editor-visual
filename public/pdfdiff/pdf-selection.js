@@ -14,7 +14,7 @@
   if (!window.PdfReviewReady) await import('./pdf-review-provider.js');
   const review = await window.PdfReviewReady;
   if (window.PdfSelection) return;
-  const { significantText } = window.PdfSelectionDiff;
+  const { significantText, PdfSourceIndex } = window.PdfSelectionDiff;
   const options = {
     viewerModuleUrl: "/vendor/pdfjs/web/pdf_viewer.mjs",
     color: "rgba(255, 196, 0, 0.42)", wholeWords: false,
@@ -496,7 +496,7 @@
     const spans = (view?._textHighlighter?.textDivs || [...layer.querySelectorAll('span[role="presentation"]')]).filter(span => span.textContent);
     const spanSet = new Set(spans);
     const pdf = viewer?.pdfDocument;
-    const fontAt = review.layerFonts(view, layer, () => {
+    const fontAt = locator.layerFonts(view, layer, () => {
       if (stopped || viewer?.pdfDocument !== pdf) return;
       clearLayer(div); queueWarm(number);
       if (!document.getSelection()?.isCollapsed) selectFromPdf();
@@ -530,7 +530,7 @@
       if (contexts.length || reviewPointer) schedule();
     });
     observer.observe(layer, { subtree: true, childList: true, characterData: true, attributes: true });
-    const index = new review.PdfSourceIndex(locator, { layer, raw, parts, observer, pdf, width: div.clientWidth, height: div.clientHeight });
+    const index = new PdfSourceIndex(locator, { layer, raw, parts, observer, pdf, width: div.clientWidth, height: div.clientHeight });
     layers.set(div, index);
     return index;
   }
