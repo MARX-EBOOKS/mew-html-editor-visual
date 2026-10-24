@@ -255,17 +255,21 @@ function htmlFontDefinition(name, text, rawStart, openStart) {
 }
 // Text indexing, matching and confirmed HTML/PDF range alignment.
 class PdfSourceIndex {
+  connections = new WeakMap();
+  pageScopes = new WeakMap();
   constructor(locator, values) {
-    Object.assign(this, { locator, connections: new WeakMap(), pageScopes: new WeakMap(), comparisons: new WeakMap(), fontKeys: ['italic', 'bold'] }, values);
+    Object.assign(this, { locator, comparisons: new WeakMap() }, values);
     this.normalized ||= normalized(this.raw);
   }
   connectionPairs(targets = []) {
     return targets.filter(Boolean).flatMap(target => (this.connections.get(target) || []).map(connection => [connection, target]));
   }
   connectionDiff(target, connection) {
-    return connection.editorDiff ||= textDiff(this.raw.slice(connection.start, connection.end),
+    const diff = connection.editorDiff ||= textDiff(this.raw.slice(connection.start, connection.end),
       target.raw.slice(connection.targetStart, connection.targetEnd), true);
+    return diff.distance > 128 ? null : diff;
   }
+  // Classify each text alignment once; candidates and highlights reuse its mapped spans.
   comparisonData(target, connection, diff = this.connectionDiff(target, connection)) {
     const cached = this.comparisons.get(connection);
     if (cached && cached.target === target && cached.diff === diff && cached.fontVersion === target?.fontVersion
@@ -280,22 +284,35 @@ class PdfSourceIndex {
       if (part.pdf.length) data.projection.push(span);
       if (part.changed && significantText(part.html, this, left) !== significantText(part.pdf)) data.text.push(span);
       while (run < runs.length && runs[run].end <= right) run++;
-      for (let i = run; i < runs.length && runs[i].start < stop; i++) {
-        const font = runs[i], a = Math.max(right, font.start), b = Math.min(stop, font.end);
-        if (a >= b || part.changed && (font.start > right || font.end < stop)) continue;
-        // Changed text has no character alignment; require a uniform PDF font.
+      const compared = [];
+      let uniform = null;
+      // Changed text needs style agreement; HTML-only text checks both touching runs.
+      for (let i = Math.max(0, run - Number(part.changed)); i < runs.length && runs[i].start <= stop; i++) {
+        const font = runs[i];
+        if (part.pdf.length ? font.end <= right || font.start >= stop
+          : !part.changed || font.start > right || font.end < right) continue;
+        if (!part.changed) compared.push(font);
+        else if (!uniform) uniform = { ...font, start: right, end: stop };
+        else for (const key of ['italic', 'bold']) if (uniform[key] !== font[key]) uniform[key] = null;
+      }
+      if (uniform) compared.push(uniform);
+      for (const font of compared) {
+        const a = Math.max(right, font.start), b = Math.min(right + part.pdf.length, font.end);
+        if (!part.changed && a >= b) continue;
         let start = part.changed ? left : left + a - right;
-        const limit = part.changed ? end : left + b - right;
-        while (start < limit) {
+        const end = part.changed ? left + part.html.length : left + b - right;
+        while (start < end) {
           const htmlFont = this.formats[start];
-          let until = start + 1;
-          while (until < limit && this.formats[until] === htmlFont) until++;
-          if (htmlFont && this.fontKeys.some(key => typeof font[key] === 'boolean' && font[key] !== htmlFont[key])) {
-            const text = this.raw.slice(start, until), a = start + (text.match(/^\s*/)?.[0].length || 0),
-              b = until - (text.match(/\s*$/)?.[0].length || 0);
-            if (a < b) data.fonts.push({ sourceStart: a, sourceEnd: b, font, htmlFont, formats: [{ font, htmlFont }] });
+          let stop = start + 1;
+          while (stop < end && this.formats[stop] === htmlFont) stop++;
+          const differs = htmlFont && ['italic', 'bold'].some(key => typeof font[key] === 'boolean' && font[key] !== htmlFont[key]);
+          if (differs) {
+            const text = this.raw.slice(start, stop), a = start + (text.match(/^\s*/)?.[0].length || 0),
+              b = stop - (text.match(/\s*$/)?.[0].length || 0);
+            if (a < b) data.fonts.push({ sourceStart: a, sourceEnd: b, font, htmlFont,
+              formats: [{ font, htmlFont }] });
           }
-          start = until;
+          start = stop;
         }
       }
       left = end; right = stop;
@@ -311,11 +328,7 @@ class PdfSourceIndex {
   reviewCandidates(targets = [], notice = null) {
     const items = [], seen = [];
     function claim(start, end) {
-      let low = 0, high = seen.length;
-      while (low < high) {
-        const middle = (low + high) >>> 1;
-        if (seen[middle].start < start) low = middle + 1; else high = middle;
-      }
+      const low = lowerBound(seen, start, item => item.start);
       if (seen[low]?.start === start || low && seen[low - 1].end > start
         || seen[low] && seen[low].start < end && seen[low].end > start) return false;
       seen.splice(low, 0, { start, end });
@@ -324,12 +337,7 @@ class PdfSourceIndex {
     const add = (data, pdfRaw = '') => {
       const { projection } = data;
       const project = (offset, endBias) => {
-        let low = 0, high = projection.length;
-        while (low < high) {
-          const middle = (low + high) >>> 1;
-          if (projection[middle].stop < offset) low = middle + 1; else high = middle;
-        }
-        const hit = projection[low];
+        const hit = projection[lowerBound(projection, offset, item => item.stop)];
         if (!hit) return data.end;
         if (!hit.part.changed) return hit.left + Math.max(0, offset - hit.right);
         if (offset <= hit.right) return hit.left;
@@ -379,7 +387,7 @@ class PdfSourceIndex {
     while (start < end && /\s/u.test(this.raw[start])) start++;
     while (end > start && /\s/u.test(this.raw[end - 1])) end--;
     if (start >= end) return [];
-    const keys = this.fontKeys.filter(key => typeof font[key] === 'boolean'
+    const keys = ['italic', 'bold'].filter(key => typeof font[key] === 'boolean'
       && this.formats.slice(start, end).some((style, i) => !/\s/u.test(this.raw[start + i])
         && (style[key] !== font[key] || !font[key] && style.tags?.some(tag => typeof tag[key] === 'boolean'))));
     if (!keys.length) return [];
@@ -441,7 +449,7 @@ class PdfSourceIndex {
     return [{ start: a, end: b, expected: this.source.slice(a, b), text }];
   }
   // Reuse text alignment; changed spans require agreement on each PDF style.
-  formatDifferences(connections) {
+  formatDifferences(connections, edits = true) {
     if (!this.formats) return [];
     const items = new Map();
     for (const [connection, target, diff] of connections) for (const item of this.comparisonData(target, connection, diff || undefined).fonts) {
@@ -454,8 +462,8 @@ class PdfSourceIndex {
       const previous = merged.at(-1), gap = previous && this.raw.slice(previous.sourceEnd, item.sourceStart);
       const joins = previous && item.sourceStart >= previous.sourceEnd && !/[\r\n]/.test(gap)
         && previous.htmlFont.tags === item.htmlFont.tags
-        && this.fontKeys.every(key => previous.font[key] === item.font[key] && previous.htmlFont[key] === item.htmlFont[key])
-        && (!gap.trim() || !(/\s/u.test(gap) && /[\p{L}\p{N}]/u.test(gap)) && this.fontKeys.some(key =>
+        && ['italic', 'bold'].every(key => previous.font[key] === item.font[key] && previous.htmlFont[key] === item.htmlFont[key])
+        && (!gap.trim() || !(/\s/u.test(gap) && /[\p{L}\p{N}]/u.test(gap)) && ['italic', 'bold'].some(key =>
           typeof previous.font[key] === 'boolean'
           && this.formats.slice(previous.sourceEnd, item.sourceStart).every((style, i) =>
             /\s/u.test(gap[i]) || (style && style[key] !== previous.font[key]))));
@@ -465,7 +473,7 @@ class PdfSourceIndex {
     }
     return merged.map(item => ({ ...item, id: `font:${item.sourceStart}:${item.sourceEnd}`,
       text: this.raw.slice(item.sourceStart, item.sourceEnd),
-      options: [{ id: 'format', edits: this.fontEdits(item.sourceStart, item.sourceEnd, item.font) }] }));
+      options: edits ? [{ id: 'format', edits: this.fontEdits(item.sourceStart, item.sourceEnd, item.font) }] : [] }));
   }
   sourceSegments(start, end, includeWhitespace = false) {
     const segments = [];
@@ -483,19 +491,19 @@ class PdfSourceIndex {
     return { start: at, end: at };
   }
   sourceDecorations(connections, model) {
-    const differences = [], comparisons = [];
+    const differences = [];
     for (const [connection, target] of connections) {
-      comparisons.push([connection, target]);
-      for (const { part, left: start, end } of this.comparisonData(target, connection).text) {
+      const data = this.comparisonData(target, connection);
+      for (const { part, left: start, end } of data.text) {
         const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
         differences.push({
           start, end, text: true,
-          insertions: this.sourceSegments(start, end).length ? [] : [start],
+          insertions: start === end ? [start] : [],
           messages: ['HTML: ' + escape(part.html) + '\n\nOCR: ' + escape(part.pdf)]
         });
       }
     }
-    for (const item of this.formatDifferences(comparisons)) {
+    for (const item of this.formatDifferences(connections, false)) {
       const formats = item.formats || [item];
       differences.push({
         start: item.sourceStart, end: item.sourceEnd, font: true, insertions: [],
@@ -527,7 +535,9 @@ class PdfSourceIndex {
         hoverMessage: { value: [...new Set(item.messages)].join('\n\n'), isTrusted: false },
         linesDecorationsTooltip: tooltips.join('；')
       };
-      for (const segment of this.sourceSegments(item.start, item.end, Boolean(item.font))) {
+      const segments = this.sourceSegments(item.start, item.end, Boolean(item.font));
+      if (!segments.length && item.text) item.insertions.push(item.start);
+      for (const segment of segments) {
         decorations.push({ ...segment, options });
       }
       for (const start of new Set(item.insertions)) {
@@ -593,6 +603,20 @@ class PdfSourceIndex {
           let a = lowerBound(from.starts, range.start), b = lowerBound(from.ends, range.end) + 1,
             x = lowerBound(to.starts, range.hit.start), y = lowerBound(to.ends, range.hit.end) + 1;
           // Extend confirmed passages through matching edges, never estimated context padding.
+          while (a && x && from.text[a - 1] === to.text[x - 1]) { a--; x--; }
+          while (b < from.text.length && y < to.text.length && from.text[b] === to.text[y]) { b++; y++; }
+          // Keep OCR errors at anchor edges inside the same confirmed word.
+          let aa = a, xx = x, bb = b, yy = y;
+          while (aa && a - aa < 32 && /[\p{L}\p{N}]/u.test(from.text[aa - 1])) aa--;
+          while (xx && x - xx < 32 && /[\p{L}\p{N}]/u.test(to.text[xx - 1])) xx--;
+          if (a > aa && x > xx && !/[\p{L}\p{N}]/u.test(from.text[aa - 1] || '')
+            && !/[\p{L}\p{N}]/u.test(to.text[xx - 1] || '')
+            && textDiff(from.text.slice(aa, a), to.text.slice(xx, x), false, 2).distance <= 2) { a = aa; x = xx; }
+          while (bb < from.text.length && bb - b < 32 && /[\p{L}\p{N}]/u.test(from.text[bb])) bb++;
+          while (yy < to.text.length && yy - y < 32 && /[\p{L}\p{N}]/u.test(to.text[yy])) yy++;
+          if (bb > b && yy > y && !/[\p{L}\p{N}]/u.test(from.text[bb] || '')
+            && !/[\p{L}\p{N}]/u.test(to.text[yy] || '')
+            && textDiff(from.text.slice(b, bb), to.text.slice(y, yy), false, 2).distance <= 2) { b = bb; y = yy; }
           while (a && x && from.text[a - 1] === to.text[x - 1]) { a--; x--; }
           while (b < from.text.length && y < to.text.length && from.text[b] === to.text[y]) { b++; y++; }
           this.rememberConnection(to.starts[x], to.ends[y - 1], page, { start: from.starts[a], end: from.ends[b - 1] });
