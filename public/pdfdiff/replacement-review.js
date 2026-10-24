@@ -93,7 +93,7 @@
       for (const state of marks.values()) { state.collection.clear(); state.dispose?.(); state.style.remove(); }
       marks.clear();
     }
-    function updateSource(editor, key, decorations, css) {
+    async function updateSource(editor, key, decorations, css) {
       let state = marks.get(editor);
       if (!state) {
         const doc = editor.getDomNode()?.ownerDocument || document, style = doc.createElement('style');
@@ -105,8 +105,33 @@
         marks.set(editor, state);
       }
       if (state.key?.length === key.length && key.every((value, i) => value === state.key[i])) return;
-      state.collection.set(decorations());
       state.key = key;
+      const model = editor.getModel?.(), version = model?.getVersionId?.();
+      const current = () => marks.get(editor) === state && state.key === key
+        && editor.getModel?.() === model && model?.getVersionId?.() === version;
+      let result;
+      try {
+        result = decorations();
+        if (result?.next) {
+          let step, deadline = performance.now() + 4;
+          while (!(step = result.next()).done) {
+            if (!current()) return;
+            if (performance.now() >= deadline) {
+              await new Promise(resolve => setTimeout(resolve, 0));
+              if (!current()) return;
+              deadline = performance.now() + 4;
+            }
+          }
+          result = step.value;
+        }
+        if (current()) state.collection.set(result);
+      } catch (error) {
+        if (state.key === key) state.key = null;
+        throw error;
+      } finally {
+        result?.return?.();
+        if (!current() && state.key === key) state.key = null;
+      }
     }
     function selectionRange(editor, event, range) {
       // A text drag owns its full range, even when it ends on a diff marker.

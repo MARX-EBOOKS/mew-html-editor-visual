@@ -762,15 +762,24 @@ const review = {
   },
   onClose(context) { selection()?.clearReviewPointer(context.editor); }
 };
-function sourceDecorations(index, connections, model) {
-  const decorations = [], seen = new Map();
+function sourceDecorations(index, connections, model, incremental = false) {
+  const steps = sourceDecorationSteps(index, connections, model);
+  if (incremental) return steps;
+  let step;
+  do { step = steps.next(); } while (!step.done);
+  return step.value;
+}
+function* sourceDecorationSteps(index, connections, model) {
+  const decorations = [], seen = new Map(), messages = new Map();
   const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
-  let previous;
+  let previous, processed = 0;
   for (const { start: from, end: to, part, font, htmlFont } of toolbox.comparisonRanges(index, connections)) {
     const segments = toolbox.sourceSegments(index, from, to, !!font);
     const insertion = !segments.length;
     if (insertion) segments.push(toolbox.insertionSegment(index, from));
-    const message = (part ? 'HTML: ' + escape(part.html) + '\n\nOCR: ' + escape(part.pdf) : '')
+    // A changed passage may span many tags; escape its full text only once.
+    if (part && !messages.has(part)) messages.set(part, 'HTML: ' + escape(part.html) + '\n\nOCR: ' + escape(part.pdf));
+    const message = (part ? messages.get(part) : '')
       + (font ? `${part ? '\n\n' : ''}HTML ${toolbox.fontSummary([htmlFont])}\n\nPDF ${toolbox.fontSummary([font])}` : '');
     for (const { start, end } of segments) {
       const key = `${start}:${end}`;
@@ -792,6 +801,7 @@ function sourceDecorations(index, connections, model) {
         inlineClassName: 'mew-ocr-diff-text mew-font-diff-text', linesDecorationsTooltip: '粗体／斜体与 PDF 不一致' });
       seen.set(key, mark);
       if (!insertion) previous = mark;
+      if (++processed % 128 === 0) yield;
     }
   }
   return decorations;
@@ -802,8 +812,8 @@ function onSources(event) {
   if (index) getLocator().prepareSource(index, targets, event.detail.pdf);
   const connections = index ? targets.flatMap(target => (index.connections.get(target) || []).map(item => [item, target])) : [];
   const key = [index, enabled, editor.getModel(), ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
-  highlights.updateSource(editor, key, () => enabled && index ? sourceDecorations(index, connections, editor.getModel()) : [],
-    '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{border-left:2px solid #d58b24;margin-left:-1px;cursor:pointer}');
+  void highlights.updateSource(editor, key, () => enabled && index ? sourceDecorations(index, connections, editor.getModel(), true) : [],
+    '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{border-left:2px solid #d58b24;margin-left:-1px;cursor:pointer}').catch(console.error);
 }
 // The independent selection module publishes data, never review UI calls.
 let listeningWindow = null;
