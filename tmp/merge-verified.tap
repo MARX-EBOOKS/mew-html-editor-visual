@@ -1,0 +1,78 @@
+✔ concurrent font indexing shares page work while cancellation stays caller-local (7.2778ms)
+✔ prepared page reuse invalidates when connections or target pages change (3.2463ms)
+✔ candidate interval lookup retains overlap and insertion boundary rules (2.5592ms)
+✔ large selected passages share one comparison between replacement edits and popup rendering (21.9504ms)
+✔ review navigation reuses comparison diffs and invalidates changed readings (2.5246ms)
+✔ popup anchor reuses mappings and text geometry while following scrolling and changed connections (5.1033ms)
+✔ review popup navigates immediately without full model reads and coalesces scroll layout (1972.2773ms)
+✔ font detection preserves unknown attributes and merges only compatible UTF-16 runs (1.9635ms)
+✔ OCR text indexing starts shared font detection and retains unavailable metadata as unknown (1.7423ms)
+✔ uniform page styles are unknown even while later pages are pending (1.6937ms)
+✔ native selections suppress page-uniform styles without checking other pages (1735.8073ms)
+✔ font edits move nearby bold and italic boundaries instead of duplicating wrappers (3.4369ms)
+✔ retained OCR font declarations participate in style comparison even when invisible or not embedded (1.0304ms)
+✔ mixed visibility retains font declarations but failed inspection remains unknown (1.052ms)
+✔ review font loading uses metadata without reading scan pixels (7.5182ms)
+✔ Tesseract placeholder fonts remain unknown and cannot produce surplus HTML style differences (1.4946ms)
+✔ PDF.js detects four actual PDF faces in file review and native selections (7942.4444ms)
+✔ locator returns page targets and rendered/source ranges without the highlight script (4.1532ms)
+✔ source/PDF pairs reuse one snapshot and rebuild all mappings after edits (1.854ms)
+✔ native decorations split changes around tags, map entities, and mark missing HTML text (2.2792ms)
+✔ ME04-117 case-only differences survive selection mapping in both directions (1.5221ms)
+✔ ME07-073 and ME07-074 alignment excludes neighboring pages and preserves the final punctuation (476.2923ms)
+✔ ME07-066 missing page-end text maps before whole-document indexing (90.7707ms)
+✔ concurrent page extraction is shared across locators and failures can retry (1.5848ms)
+✔ equal text skips Monaco computation and batch preview preserves all untouched text (0.93ms)
+✔ compact review keeps distant differences without computing a second diff (1.525ms)
+✔ browser uses the embedded local substitute without another script when Monaco is unavailable (7559.1557ms)
+✔ text candidates, font candidates and decorations reuse one traversal and refresh font metadata (2.3821ms)
+✔ transient mapping eviction preserves every prepared passage and recent selections (5.1732ms)
+✔ passage pruning matches pairwise containment and ignores cache recency order (45.9513ms)
+✔ OCR page reads publish font styles into the same aligned spans without a separate font pass (2.1647ms)
+✔ source edits rebuild mappings before either selection direction consumes them (6.0719ms)
+✔ context distinguishes repeated words and rejects ties or conflicting context (0.872ms)
+✔ normalization preserves source offsets through ligatures and line hyphenation (0.3307ms)
+✔ incremental normalization preserves whitespace and Unicode offsets across complete lines (1.4325ms)
+✔ bounded distance agrees with full alignment for Unicode, insertions and deletions (55.0011ms)
+✔ compact traceback agrees with an independent edit-distance oracle across wider bands (74.8457ms)
+✔ connections reuse whole-text indexes and alignments while respecting partial-range boundaries (1.125ms)
+15 KB complete character diff latency: [
+  {
+    kind: 'substitutions',
+    bytes: 15000,
+    edits: 87,
+    p50: 1.5,
+    max: 3.5
+  },
+  {
+    kind: 'mixed edits',
+    bytes: 15000,
+    edits: 87,
+    p50: 1,
+    max: 1.900000000372529
+  },
+  {
+    kind: 'substitutions',
+    bytes: 15000,
+    edits: 47,
+    p50: 0.7000000001862645,
+    max: 2.2000000001862645
+  },
+  {
+    kind: 'mixed edits',
+    bytes: 15000,
+    edits: 47,
+    p50: 0.7000000001862645,
+    max: 1.7999999998137355
+  }
+]
+✔ 15 KB character diffs complete within 50 ms with complete Unicode traceback (1571.7615ms)
+✔ scrolling across retained PDF pages bounds DOM caches and revisits rebuild current highlights (1596.0498ms)
+ℹ tests 40
+ℹ suites 0
+ℹ pass 40
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 24200.6857

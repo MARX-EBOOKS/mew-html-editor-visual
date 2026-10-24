@@ -1,0 +1,339 @@
+✔ diff engine stays within 930 physical lines (2.4662ms)
+✔ real provider API and callbacks: pdf-review-provider.js → pdf-selection.js (10517.6586ms)
+✔ real provider API and callbacks: replacement-review.js → pdf-review-provider.js → pdf-selection.js (8984.4688ms)
+✔ real provider API and callbacks: pdf-selection.js (8073.075ms)
+✖ review popup navigates immediately without full model reads and coalesces scroll layout (2161.957ms)
+✔ native selections suppress page-uniform styles without checking other pages (1826.4076ms)
+✖ PDF.js detects four actual PDF faces in file review and native selections (8120.635ms)
+✖ format notices suppress matching and unknown styles and stay compact over PDF in combined view (7523.2614ms)
+✖ Monaco standalone renders native source-line and exact character decorations (8341.8743ms)
+✔ provider loads font/text and popup scripts before selection consumes its mapping API (7464.7546ms)
+✖ browser draws selected ranges and nearby diffs for tolerant matches (2171.6349ms)
+✖ review highlights all supplied occurrences across PDF pages and clears them together (31626.2081ms)
+✖ browser draws HTML-only text as a visible PDF caret between text spans (1331.7641ms)
+✖ Monaco decorations appear on open and on cached PDF page changes without a selection (31552.793ms)
+✖ browser prepares diffs before selection and rebuilds mappings after source or PDF changes (1801.1743ms)
+✖ browser reveals a bottom-of-page selection without exposing the next page (1386.8917ms)
+✖ browser selects one contextual occurrence, scrolls offscreen, and retains ambiguous fallback (1363.8046ms)
+✖ PDF selection reveals matching Monaco source without stealing focus or feeding back (1403.8802ms)
+✖ ready OCR layer highlights partial words through full-file selections within 10 ms without rebuilding text mappings (1363.8746ms)
+15 KB complete character diff latency: [
+  {
+    kind: 'substitutions',
+    bytes: 15000,
+    edits: 87,
+    p50: 1.3999999999068677,
+    max: 3.9000000001396984
+  },
+  {
+    kind: 'mixed edits',
+    bytes: 15000,
+    edits: 87,
+    p50: 1.3000000000465661,
+    max: 2.3999999999068677
+  },
+  {
+    kind: 'substitutions',
+    bytes: 15000,
+    edits: 47,
+    p50: 0.7000000001862645,
+    max: 3.4000000001396984
+  },
+  {
+    kind: 'mixed edits',
+    bytes: 15000,
+    edits: 47,
+    p50: 0.6999999999534339,
+    max: 1.6999999999534339
+  }
+]
+✔ 15 KB character diffs complete within 50 ms with complete Unicode traceback (1431.2287ms)
+✖ ME34-010 and ME34-014 prepared OCR differences highlight before whole-PDF extraction (1553.7317ms)
+✖ native PDF and text scrolling stays free and cancels late automatic positioning (1545.2499ms)
+✖ scrolling across retained PDF pages bounds DOM caches and revisits rebuild current highlights (31477.548ms)
+✔ highlight tool works without PDF modules and keeps consumers and decoration caches independent (1733.5995ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 8
+ℹ fail 16
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 175405.4099
+
+✖ failing tests:
+
+test at tests\pdf-selection-diff.browser.test.mjs:10:1
+✖ review popup navigates immediately without full model reads and coalesces scroll layout (2161.957ms)
+  page.evaluate: ReferenceError: PdfReviewReady is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:2:7)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-diff.browser.test.mjs:34:16) {
+    log: []
+  }
+
+test at tests\pdf-selection-diff.browser.test.mjs:118:1
+✖ PDF.js detects four actual PDF faces in file review and native selections (8120.635ms)
+  page.evaluate: SyntaxError: Unexpected end of input
+      at new Function (<anonymous>)
+      at eval (eval at evaluate (:311:30), <anonymous>:29:7)
+      at async <anonymous>:337:30
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-diff.browser.test.mjs:134:31) {
+    log: []
+  }
+
+test at tests\pdf-selection-diff.browser.test.mjs:218:1
+✖ format notices suppress matching and unknown styles and stay compact over PDF in combined view (7523.2614ms)
+  page.waitForFunction: TypeError: Cannot read properties of null (reading 'textContent')
+      at eval (eval at predicate (eval at evaluate (:311:30)), <anonymous>:1:46)
+      at predicate (eval at evaluate (:311:30), <anonymous>:7:27)
+      at next (eval at evaluate (:311:30), <anonymous>:29:33)
+      at eval (eval at evaluate (:311:30), <anonymous>:42:13)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-diff.browser.test.mjs:300:16) {
+    log: []
+  }
+
+test at tests\pdf-selection-diff.browser.test.mjs:365:1
+✖ Monaco standalone renders native source-line and exact character decorations (8341.8743ms)
+  page.evaluate: ReferenceError: PdfReviewReady is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:2:7)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-diff.browser.test.mjs:389:16) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:20:1
+✖ browser draws selected ranges and nearby diffs for tolerant matches (2171.6349ms)
+  page.evaluate: ReferenceError: PdfSelection is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:19:9)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:55:35) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:149:1
+✖ review highlights all supplied occurrences across PDF pages and clears them together (31626.2081ms)
+  page.waitForFunction: Timeout 30000ms exceeded.
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:159:16) {
+    name: 'TimeoutError',
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:193:1
+✖ browser draws HTML-only text as a visible PDF caret between text spans (1331.7641ms)
+  page.evaluate: ReferenceError: PdfSelection is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:14:9)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:201:35) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:244:1
+✖ Monaco decorations appear on open and on cached PDF page changes without a selection (31552.793ms)
+  page.waitForFunction: Timeout 30000ms exceeded.
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:251:16) {
+    name: 'TimeoutError',
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:297:1
+✖ browser prepares diffs before selection and rebuilds mappings after source or PDF changes (1801.1743ms)
+  page.evaluate: ReferenceError: PdfSelection is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:33:7)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:306:16) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:414:1
+✖ browser reveals a bottom-of-page selection without exposing the next page (1386.8917ms)
+  page.evaluate: ReferenceError: PdfSelection is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:11:7)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:424:16) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:456:1
+✖ browser selects one contextual occurrence, scrolls offscreen, and retains ambiguous fallback (1363.8046ms)
+  page.evaluate: ReferenceError: PdfSelection is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:35:7)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:466:16) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:572:1
+✖ PDF selection reveals matching Monaco source without stealing focus or feeding back (1403.8802ms)
+  page.evaluate: ReferenceError: PdfSelection is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:18:9)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:611:18) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:691:1
+✖ ready OCR layer highlights partial words through full-file selections within 10 ms without rebuilding text mappings (1363.8746ms)
+  page.evaluate: ReferenceError: PdfSelection is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:10:9)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:706:18) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:820:1
+✖ ME34-010 and ME34-014 prepared OCR differences highlight before whole-PDF extraction (1553.7317ms)
+  page.evaluate: ReferenceError: PdfSelection is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:17:9)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:831:18) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:924:1
+✖ native PDF and text scrolling stays free and cancels late automatic positioning (1545.2499ms)
+  page.evaluate: ReferenceError: PdfSelection is not defined
+      at eval (eval at evaluate (:311:30), <anonymous>:24:7)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:939:16) {
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.browser.test.mjs:1062:1
+✖ scrolling across retained PDF pages bounds DOM caches and revisits rebuild current highlights (31477.548ms)
+  page.waitForFunction: Timeout 30000ms exceeded.
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.browser.test.mjs:1079:16) {
+    name: 'TimeoutError',
+    log: []
+  }
+file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/document-browser.mjs:29
+    throw new Error(`${error.message}: ${JSON.stringify(state)}`);
+          ^
+
+Error: page.waitForFunction: Timeout 10000ms exceeded.: {"body":"Not found"}
+    at valueEquals (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/document-browser.mjs:29:11)
+    at async file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/document-browser.mjs:78:29
+
+Node.js v25.9.0
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+page.waitForFunction: TypeError: Cannot read properties of null (reading 'textContent')
+    at eval (eval at predicate (eval at evaluate (:311:30)), <anonymous>:1:42)
+    at predicate (eval at evaluate (:311:30), <anonymous>:7:27)
+    at next (eval at evaluate (:311:30), <anonymous>:29:33)
+    at eval (eval at evaluate (:311:30), <anonymous>:42:13)
+    at UtilityScript.evaluate (<anonymous>:313:16)
+    at UtilityScript.<anonymous> (<anonymous>:1:44)
+    at D:\马恩列总装\mew-html-editor-visual\tests\editor-input-browser.mjs:24:14 {
+  log: []
+}
+
+Node.js v25.9.0
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+page.waitForFunction: Timeout 15000ms exceeded.
+    at D:\马恩列总装\mew-html-editor-visual\tests\html-pattern-review-browser.mjs:66:14 {
+  log: [],
+  name: 'TimeoutError'
+}
+
+Node.js v25.9.0
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.evaluate: TypeError: Cannot read properties of null (reading 'scrollTop')
+    at eval (eval at evaluate (:311:30), <anonymous>:4:43)
+    at UtilityScript.evaluate (<anonymous>:313:16)
+    at UtilityScript.<anonymous> (<anonymous>:1:44)
+    at D:\马恩列总装\mew-html-editor-visual\tests\layout-browser.mjs:50:57 {
+  log: []
+}
+
+Node.js v25.9.0
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.fill: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator('#editorScaleInput')
+
+    at D:\马恩列总装\mew-html-editor-visual\tests\monaco-browser.mjs:32:26 {
+  log: [ "  - waiting for locator('#editorScaleInput')" ],
+  name: 'TimeoutError'
+}
+
+Node.js v25.9.0
+D:\Program Files\Python\Lib\site-packages\fitz\__init__.py:17: FutureWarning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+  warnings.warn(
+D:\Program Files\Python\Lib\site-packages\fitz\__init__.py:17: FutureWarning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+  warnings.warn(
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+page.evaluate: Error: Unexpected PDF extraction
+    at pdf.getPage (eval at evaluate (:311:30), <anonymous>:6:33)
+    at http://127.0.0.1:41886/pdfdiff/pdf-review-provider.js:353:32
+    at async PdfLocator.indexFonts (http://127.0.0.1:41886/pdfdiff/pdf-review-provider.js:350:7)
+    at async eval (eval at evaluate (:311:30), <anonymous>:9:5)
+    at async <anonymous>:337:30
+    at D:\马恩列总装\mew-html-editor-visual\tests\pdf-cache-browser.mjs:46:29 {
+  log: []
+}
+
+Node.js v25.9.0
+highlight click and discrepancy drag: linking on passed
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.waitFor: Timeout 5000ms exceeded.
+Call log:
+  - waiting for locator('.replacement-review') to be visible
+    14 × locator resolved to hidden <section hidden="" tabindex="-1" role="dialog" data-side="pdf" aria-label="审阅与批量替换" class="replacement-review compact">…</section>
+
+    at D:\马恩列总装\mew-html-editor-visual\tests\pdf-review-popup-browser.mjs:51:17 {
+  log: [
+    "  - waiting for locator('.replacement-review') to be visible",
+    '    14 × locator resolved to hidden <section hidden="" tabindex="-1" role="dialog" data-side="pdf" aria-label="审阅与批量替换" class="replacement-review compact">…</section>'
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v25.9.0
+index: anchored popup, Monaco diff, batch choices, markup/Unicode, undo, stale/readonly/overlap/cancellation passed
+PDF integration: independent selection module, selected review fields, PDF popup, file diff and replacement/undo passed
+reader: anchored popup, Monaco diff, batch choices, markup/Unicode, undo, stale/readonly/overlap/cancellation passed
+split window: editor-owned popup and source selection, reader module control, independent lifecycle passed
+┌─────────┬───────────────────────────────────┬──────────┬────────────┐
+│ (index) │ name                              │ exitCode │ durationMs │
+├─────────┼───────────────────────────────────┼──────────┼────────────┤
+│ 0       │ 'browser contracts'               │ 1        │ 175616     │
+│ 1       │ 'document-browser.mjs'            │ 1        │ 12318      │
+│ 2       │ 'editor-input-browser.mjs'        │ 1        │ 3329       │
+│ 3       │ 'html-pattern-review-browser.mjs' │ 1        │ 19536      │
+│ 4       │ 'layout-browser.mjs'              │ 1        │ 4738       │
+│ 5       │ 'monaco-browser.mjs'              │ 1        │ 33479      │
+│ 6       │ 'pdf-cache-browser.mjs'           │ 1        │ 8158       │
+│ 7       │ 'pdf-review-popup-browser.mjs'    │ 1        │ 8957       │
+│ 8       │ 'replacement-review-browser.mjs'  │ 0        │ 14132      │
+└─────────┴───────────────────────────────────┴──────────┴────────────┘

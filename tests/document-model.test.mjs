@@ -3,33 +3,31 @@ import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-const sources = await Promise.all(['app.js', 'reader-app.js'].map(async name => {
-  const source = (await readFile(new URL(`../public/${name}`, import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
-  const match = source.match(/^( *)class DocumentModel \{[\s\S]*?\n\1\}/m);
-  return match[0].split('\n').map(line => line.slice(match[1].length)).join('\n');
-}));
-// The reader copy is nested two spaces deeper; compare normalized lines.
-test('both independent scripts embed the same class', () => {
-  assert.equal(sources[0], sources[1]);
-});
-const Model = vm.runInNewContext(`${sources[0]}; DocumentModel`);
+const window = {};
+vm.runInNewContext(await readFile(new URL('../public/editor-core.js', import.meta.url), 'utf8'), { window });
+const Model = window.MewEditorCore.DocumentModel;
 const defer = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 
-test('undo/redo preserves snapshots and dirty follows the saved text', async () => {
-  const d = new Model({ text: 'a', write: async () => ({ mtime: 2 }) });
-  d.remember({ text: 'a', start: 1, end: 1, scroll: { top: 42 } });
+test('loading retains disk text and version for the next save', async () => {
+  const d = await Model.load({ read: async () => ({ text: 'disk\r\n', mtime: 7 }) });
+  assert.equal(d.content, 'disk\r\n');
+  assert.equal(d.savedContent, d.content);
+  assert.equal(d.mtime, 7);
+  assert.equal(d.dirty, false);
+});
+
+test('editor normalization preserves line endings and dirty follows saved text', () => {
+  const d = new Model({ text: 'a\r\n' });
+  assert.equal(d.textFromEditor('a\n'), 'a\r\n');
   d.update('ab');
   assert.equal(d.dirty, true);
-  assert.equal(d.undo({ text: 'ab', start: 2, end: 2 }).scroll.top, 42);
-  assert.equal(d.content, 'a');
+  assert.equal(d.revision, 1);
+  assert.equal(d.textFromEditor('a\n'), 'a\r\n');
+  d.update(d.textFromEditor('a\n'));
   assert.equal(d.dirty, false);
-  d.redo({ text: 'a', start: 1, end: 1 });
-  await d.save();
-  d.undo({ text: 'ab', start: 2, end: 2 });
-  assert.equal(d.dirty, true);
-  d.remember({ text: 'a', start: 1, end: 1 });
-  d.update('ac');
-  assert.equal(d.redoStack.length, 0);
+  assert.equal(d.revision, 2);
+  d.update(d.content);
+  assert.equal(d.revision, 2, 'identical editor updates retain the revision');
 });
 
 test('queued saves use the latest acknowledged mtime and preserve newer edits', async () => {
@@ -62,14 +60,14 @@ test('saveUntilClean drains edits made during a save, failed requests can retry'
   await d.save(); assert.equal(d.dirty, false);
 });
 
-test('disk refresh preserves local edits and conflict version; clean reload clears history', async () => {
+test('disk refresh preserves local edits and conflict version; clean reload advances revision', async () => {
   let disk = { text: 'external', mtime: 2 };
   const d = new Model({ text: 'a', mtime: 1, read: async () => disk });
-  d.remember({ text: 'a' }); d.update('local');
+  d.update('local');
   assert.equal(await d.refresh(), 'conflict');
-  assert.equal(d.content, 'local'); assert.equal(d.mtime, 1); assert.equal(d.undoStack.length, 1);
+  assert.equal(d.content, 'local'); assert.equal(d.mtime, 1); assert.equal(d.reloadRevision, 0);
   d.update('a'); assert.equal(await d.refresh(), 'updated');
-  assert.equal(d.content, 'external'); assert.equal(d.undoStack.length, 0);
+  assert.equal(d.content, 'external'); assert.equal(d.reloadRevision, 1);
   d.update('same'); disk = { text: 'same', mtime: 3 };
   assert.equal(await d.refresh(), 'saved'); assert.equal(d.dirty, false);
   disk = { text: 'same', mtime: 4 }; d.update('new local');

@@ -1,0 +1,68 @@
+✖ independent text differences stay separate across tags while format runs retain their grouping (16.6571ms)
+✖ highlight hunks separate OCR boundary spaces beyond the whole-passage refinement budget (3.9461ms)
+✔ ME04-608 wrapped prose stays aligned across blank-line anchors (14.1124ms)
+✔ shared textDiff applies a one-second Monaco budget and falls back per comparison (1.8366ms)
+✖ source decorations ignore whitespace and hyphens while preserving subsequent character offsets (1.2486ms)
+✔ local textDiff replaces Monaco for review candidates and popup comparisons (3.9744ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 3
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 486.8568
+
+✖ failing tests:
+
+test at tests\pdf-selection-diff.test.mjs:79:1
+✖ independent text differences stay separate across tags while format runs retain their grouping (16.6571ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'a',
+  +   'b',
+  +   'c',
+  +   'd',
+  +   'E',
+  +   'F'
+  -   'ab cd',
+  -   'EF'
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:99:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.start (node:internal/test_runner/test:1096:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:385:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'a', 'b', 'c', 'd', 'E', 'F' ],
+    expected: [ 'ab cd', 'EF' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:922:1
+✖ highlight hunks separate OCR boundary spaces beyond the whole-passage refinement budget (3.9461ms)
+  TypeError: Cannot read properties of null (reading 'editorDiff')
+      at Object.connectionDiff (evalmachine.<anonymous>:337:5)
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:933:21)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+
+test at tests\pdf-selection-diff.test.mjs:1155:1
+✖ source decorations ignore whitespace and hyphens while preserving subsequent character offsets (1.2486ms)
+  TypeError: api.sourceDecorations is not a function
+      at decorate (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1159:38)
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1170:19)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at node:internal/test_runner/test:1133:31
+      at node:internal/process/task_queues:150:7
+      at AsyncResource.runInAsyncScope (node:async_hooks:226:14)
+      at AsyncResource.runMicrotask (node:internal/process/task_queues:147:8)

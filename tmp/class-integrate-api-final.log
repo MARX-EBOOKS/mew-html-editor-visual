@@ -1,0 +1,19 @@
+✔ diff engine stays within 930 physical lines (0.846ms)
+✔ real provider API and callbacks: pdf-review-provider.js → pdf-selection.js (7666.671ms)
+✔ real provider API and callbacks: replacement-review.js → pdf-review-provider.js → pdf-selection.js (7358.3706ms)
+✔ real provider API and callbacks: pdf-selection.js (7453.5428ms)
+✔ same-pattern text replacement matches the word across different paragraphs (14.756ms)
+✔ same-pattern insertion replacement matches the word across different paragraphs (2.8507ms)
+✔ same-pattern deletion replacement matches the word across different paragraphs (2.3409ms)
+✔ same-pattern newline replacement matches the word across different paragraphs (2.8365ms)
+✔ same-pattern format replacement matches the word across different paragraphs (3.2708ms)
+✔ same-pattern word replacement matches the word across different paragraphs (2.4601ms)
+✔ same-pattern term replacement matches the word across different paragraphs (3.0001ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 23050.8233

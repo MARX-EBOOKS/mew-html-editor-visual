@@ -1,0 +1,4 @@
+3132 before/after comparisons passed (locate, geometry/cache, candidate ordering, mixed replacements, patches, event branches).
+Event source reads across branch matrix: before 12, after 8.
+Existing suite failure names match the baseline exactly.
+Repeated-match locate, median of 7 x 40 calls: before 107.6 ms, after 102.4 ms.

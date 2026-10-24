@@ -1,0 +1,1 @@
+python -B html_pattern_scripts/html_pattern_review.py --config ../MEW_BRIEF/.mew-reader.json -p 49000

@@ -1,0 +1,29 @@
+D:\Program Files\Python\Lib\site-packages\fitz\__init__.py:17: FutureWarning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+  warnings.warn(
+test_browser_offsets_are_utf16_and_canonical_runs_keep_font_indexes (test_reader_backend.ReaderBackendTests.test_browser_offsets_are_utf16_and_canonical_runs_keep_font_indexes) ... ok
+test_cache_survives_restart_and_is_shared_with_review (test_reader_backend.ReaderBackendTests.test_cache_survives_restart_and_is_shared_with_review) ... ok
+test_existing_routes_ranges_and_write_conflicts (test_reader_backend.ReaderBackendTests.test_existing_routes_ranges_and_write_conflicts) ... D:\Program Files\Python\Lib\site-packages\websockets\legacy\__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+  warnings.warn(  # deprecated in 14.0 - 2024-11-09
+D:\Program Files\Python\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+  from websockets.server import WebSocketServerProtocol
+ok
+test_external_changes_publish_existing_event_contract (test_reader_backend.ReaderBackendTests.test_external_changes_publish_existing_event_contract) ... ok
+test_js_and_fastapi_http_contracts_match (test_reader_backend.ReaderBackendTests.test_js_and_fastapi_http_contracts_match) ... ok
+test_missing_or_corrupt_browser_data_requires_generation (test_reader_backend.ReaderBackendTests.test_missing_or_corrupt_browser_data_requires_generation) ... ok
+test_old_cache_rebuilds_and_same_font_at_different_sizes_keeps_its_style (test_reader_backend.ReaderBackendTests.test_old_cache_rebuilds_and_same_font_at_different_sizes_keeps_its_style) ... ok
+test_page_links_settings_and_exact_newlines (test_reader_backend.ReaderBackendTests.test_page_links_settings_and_exact_newlines) ... ok
+test_parallel_requests_only_load_saved_data_and_replaced_pdf_invalidates (test_reader_backend.ReaderBackendTests.test_parallel_requests_only_load_saved_data_and_replaced_pdf_invalidates) ... ok
+test_pdf_backend_and_reader_import_without_review_scripts (test_reader_backend.ReaderBackendTests.test_pdf_backend_and_reader_import_without_review_scripts) ... ok
+test_plain_json_pages_regenerate_if_missing_and_preserve_large_results (test_reader_backend.ReaderBackendTests.test_plain_json_pages_regenerate_if_missing_and_preserve_large_results) ... ok
+test_reader_matches_js_config_without_pdf_text_backend (test_reader_backend.ReaderBackendTests.test_reader_matches_js_config_without_pdf_text_backend) ... ok
+test_startup_is_standalone_and_never_extracts (test_reader_backend.ReaderBackendTests.test_startup_is_standalone_and_never_extracts) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 7.671s
+
+OK
+┌─────────┬───────────┬──────────┬────────────┐
+│ (index) │ name      │ exitCode │ durationMs │
+├─────────┼───────────┼──────────┼────────────┤
+│ 0       │ 'backend' │ 0        │ 10170      │
+└─────────┴───────────┴──────────┴────────────┘

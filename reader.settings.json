@@ -4,5 +4,7 @@
   "ink": "#2b2925",
   "invert": false,
   "horizontal": false,
-  "scale": "1.5"
+  "scale": "0.8",
+  "diffHighlight": true,
+  "selectionHighlight": true
 }

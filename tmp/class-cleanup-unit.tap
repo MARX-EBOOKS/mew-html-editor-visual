@@ -1,0 +1,166 @@
+TAP version 13
+# Subtest: prepared page reuse invalidates when connections or target pages change
+ok 1 - prepared page reuse invalidates when connections or target pages change
+  ---
+  duration_ms: 7.0961
+  type: 'test'
+  ...
+# Subtest: candidate interval lookup retains overlap and insertion boundary rules
+ok 2 - candidate interval lookup retains overlap and insertion boundary rules
+  ---
+  duration_ms: 3.3282
+  type: 'test'
+  ...
+# Subtest: large selected passages share one comparison between replacement edits and popup rendering
+ok 3 - large selected passages share one comparison between replacement edits and popup rendering
+  ---
+  duration_ms: 45.4562
+  type: 'test'
+  ...
+# Subtest: review navigation reuses comparison diffs and invalidates changed readings
+ok 4 - review navigation reuses comparison diffs and invalidates changed readings
+  ---
+  duration_ms: 2.4866
+  type: 'test'
+  ...
+# Subtest: popup anchor reuses mappings and text geometry while following scrolling and changed connections
+ok 5 - popup anchor reuses mappings and text geometry while following scrolling and changed connections
+  ---
+  duration_ms: 5.241
+  type: 'test'
+  ...
+# Subtest: PDF newline differences use a caret without highlighting adjacent letters
+ok 6 - PDF newline differences use a caret without highlighting adjacent letters
+  ---
+  duration_ms: 10.6615
+  type: 'test'
+  ...
+# Subtest: text and font differences coexist across changed text with uniform PDF fonts
+ok 7 - text and font differences coexist across changed text with uniform PDF fonts
+  ---
+  duration_ms: 4.1867
+  type: 'test'
+  ...
+# Subtest: continuous text and font highlights share both details across tags and adjacent changes
+ok 8 - continuous text and font highlights share both details across tags and adjacent changes
+  ---
+  duration_ms: 6.6971
+  type: 'test'
+  ...
+# Subtest: provider loads font/text and popup scripts before selection consumes its mapping API
+ok 9 - provider loads font/text and popup scripts before selection consumes its mapping API
+  ---
+  duration_ms: 7529.7666
+  type: 'test'
+  ...
+# Subtest: source edits rebuild mappings before either selection direction consumes them
+ok 10 - source edits rebuild mappings before either selection direction consumes them
+  ---
+  duration_ms: 7.7824
+  type: 'test'
+  ...
+# Subtest: context distinguishes repeated words and rejects ties or conflicting context
+ok 11 - context distinguishes repeated words and rejects ties or conflicting context
+  ---
+  duration_ms: 2.0485
+  type: 'test'
+  ...
+# Subtest: normalization preserves source offsets through ligatures and line hyphenation
+ok 12 - normalization preserves source offsets through ligatures and line hyphenation
+  ---
+  duration_ms: 1.7043
+  type: 'test'
+  ...
+# Subtest: incremental normalization preserves whitespace and Unicode offsets across complete lines
+ok 13 - incremental normalization preserves whitespace and Unicode offsets across complete lines
+  ---
+  duration_ms: 3.4456
+  type: 'test'
+  ...
+# Subtest: partial words retain precise offsets and context resolves overlapping occurrences
+ok 14 - partial words retain precise offsets and context resolves overlapping occurrences
+  ---
+  duration_ms: 5.6828
+  type: 'test'
+  ...
+# Subtest: Chinese selections match inside continuous text with UTF-16 offsets
+ok 15 - Chinese selections match inside continuous text with UTF-16 offsets
+  ---
+  duration_ms: 0.6205
+  type: 'test'
+  ...
+# Subtest: context locates small differences in either direction, including partial words
+ok 16 - context locates small differences in either direction, including partial words
+  ---
+  duration_ms: 5.6412
+  type: 'test'
+  ...
+# Subtest: tolerance rejects missing context, large differences, short selections and ambiguous locations
+ok 17 - tolerance rejects missing context, large differences, short selections and ambiguous locations
+  ---
+  duration_ms: 7.8354
+  type: 'test'
+  ...
+# Subtest: bounded distance agrees with full alignment for Unicode, insertions and deletions
+ok 18 - bounded distance agrees with full alignment for Unicode, insertions and deletions
+  ---
+  duration_ms: 84.9829
+  type: 'test'
+  ...
+# Subtest: compact traceback agrees with an independent edit-distance oracle across wider bands
+ok 19 - compact traceback agrees with an independent edit-distance oracle across wider bands
+  ---
+  duration_ms: 79.1082
+  type: 'test'
+  ...
+# Subtest: long German and unspaced Chinese selections align internal note markers with both boundaries
+ok 20 - long German and unspaced Chinese selections align internal note markers with both boundaries
+  ---
+  duration_ms: 4.9603
+  type: 'test'
+  ...
+# Subtest: confirmed diffs map inner selections both ways, including changed runs and deleted characters
+ok 21 - confirmed diffs map inner selections both ways, including changed runs and deleted characters
+  ---
+  duration_ms: 1.9591
+  type: 'test'
+  ...
+# Subtest: startup alignment maps a single damaged Chinese character without spaces or a prior selection
+ok 22 - startup alignment maps a single damaged Chinese character without spaces or a prior selection
+  ---
+  duration_ms: 2.8474
+  type: 'test'
+  ...
+# Subtest: connections reuse whole-text indexes and alignments while respecting partial-range boundaries
+ok 23 - connections reuse whole-text indexes and alignments while respecting partial-range boundaries
+  ---
+  duration_ms: 0.3545
+  type: 'test'
+  ...
+# Subtest: page preparation reuses retained anchor mappings without repeating comparisons
+ok 24 - page preparation reuses retained anchor mappings without repeating comparisons
+  ---
+  duration_ms: 46.4348
+  type: 'test'
+  ...
+# Subtest: failed page preparation is cached until the source or PDF layer changes
+ok 25 - failed page preparation is cached until the source or PDF layer changes
+  ---
+  duration_ms: 7.0135
+  type: 'test'
+  ...
+# Subtest: last fallback searches all patched words without changing substrings or trusting conflicting patches
+ok 26 - last fallback searches all patched words without changing substrings or trusting conflicting patches
+  ---
+  duration_ms: 1.6658
+  type: 'test'
+  ...
+1..26
+# tests 26
+# suites 0
+# pass 26
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8096.2962

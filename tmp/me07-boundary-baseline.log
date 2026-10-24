@@ -1,0 +1,97 @@
+✖ independent text differences stay separate across tags while format runs retain their grouping (16.1895ms)
+✖ highlight hunks separate OCR boundary spaces beyond the whole-passage refinement budget (3.5865ms)
+✖ source decorations ignore whitespace and hyphens while preserving subsequent character offsets (0.9946ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 0
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 462.4098
+
+✖ failing tests:
+
+test at tmp\boundary-baseline.test.mjs:79:1
+✖ independent text differences stay separate across tags while format runs retain their grouping (16.1895ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'a',
+  +   'b',
+  +   'c',
+  +   'd',
+  +   'E',
+  +   'F'
+  -   'ab cd',
+  -   'EF'
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/boundary-baseline.test.mjs:99:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.start (node:internal/test_runner/test:1096:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:385:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'a', 'b', 'c', 'd', 'E', 'F' ],
+    expected: [ 'ab cd', 'EF' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\boundary-baseline.test.mjs:922:1
+✖ highlight hunks separate OCR boundary spaces beyond the whole-passage refinement budget (3.5865ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      [
+  +     'aft',
+  +     'äft ',
+  -     'a',
+  -     'ä',
+        true
+      ],
+      [
+  +     ' der\n',
+  +     ' der\n',
+  -     'ft',
+  -     'ft',
+        false
+      ],
+      [
+  +     'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+  +     'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy',
+  -     '',
+  -     ' ',
+        true
+      ],
+  -   [
+  -     ' der\n',
+  -     ' der\n',
+  -     false
+  -   ]
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/boundary-baseline.test.mjs:935:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ [ 'aft', 'äft ', true ], [ ' der\n', ' der\n', false ], [ 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy', true ] ],
+    expected: [ [ 'a', 'ä', true ], [ 'ft', 'ft', false ], [ '', ' ', true ], [ ' der\n', ' der\n', false ] ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\boundary-baseline.test.mjs:1156:1
+✖ source decorations ignore whitespace and hyphens while preserving subsequent character offsets (0.9946ms)
+  TypeError: api.sourceDecorations is not a function
+      at decorate (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/boundary-baseline.test.mjs:1160:38)
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/boundary-baseline.test.mjs:1171:19)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)

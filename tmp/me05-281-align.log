@@ -1,0 +1,89 @@
+{
+  "raw": "* ttrâî'E t0MÂ^>#^l <fe^^ .\n^^MOftê^^CL > 6^'\n• v h)'-. SKà/, V\n^u^i ^1;%? -3 lob ThÛ'ÔPOB'X ^r^niUs. H' t\nA$j(£ AfhÔ df: ^^ S»* U\n^»rmà mâk^ttâ âlo: à F0« êÂ 1 -\n■ / \\O- S s jffg / -G M^r^îr^vy^ . '. ,Sk , . , ^^\n-y ^ ^",
+  "connections": [
+    {
+      "start": 6,
+      "end": 420,
+      "targetStart": 675046,
+      "targetEnd": 675448,
+      "source": "ichen Wohlfahrt im Wege sind und den Anforderungen",
+      "target": "der öffentlichen Wohlfahrt im Wege sind und den An",
+      "targetHead": "schiebt. Aber freilich, da würden die Frondienste vor der Freiheit der Person\nun"
+    },
+    {
+      "start": 407,
+      "end": 2701,
+      "targetStart": 675449,
+      "targetEnd": 677732,
+      "source": "nermeßlichen Kosten und zahllosen Prozessen\n\r\n\r\n\r\n",
+      "target": " unermeßlichen Kosten und zahllosen Prozessen\nKarl",
+      "targetHead": "forderungen des Zeitgeistes widersprechen, so tun es die Frondienste, Robo\nten, "
+    }
+  ],
+  "candidates": [
+    {
+      "start": 11,
+      "end": 12,
+      "comparison": {
+        "html": "h",
+        "pdf": "b"
+      }
+    },
+    {
+      "start": 408,
+      "end": 419,
+      "comparison": {
+        "html": "nforderunge",
+        "pdf": ""
+      }
+    },
+    {
+      "start": 641,
+      "end": 643,
+      "comparison": {
+        "html": "lb",
+        "pdf": "ih"
+      }
+    },
+    {
+      "start": 1255,
+      "end": 1257,
+      "comparison": {
+        "html": "tw",
+        "pdf": "^\nW"
+      }
+    },
+    {
+      "start": 1733,
+      "end": 1734,
+      "comparison": {
+        "html": "v",
+        "pdf": "V"
+      }
+    },
+    {
+      "start": 2376,
+      "end": 2377,
+      "comparison": {
+        "html": "“",
+        "pdf": ""
+      }
+    },
+    {
+      "start": 2598,
+      "end": 2598,
+      "comparison": {
+        "html": "",
+        "pdf": " und Kosten"
+      }
+    },
+    {
+      "start": 2695,
+      "end": 2701,
+      "comparison": {
+        "html": "\r\n\r\n\r\n",
+        "pdf": "Karl"
+      }
+    }
+  ]
+}

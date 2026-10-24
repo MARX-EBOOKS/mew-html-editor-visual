@@ -1,0 +1,50 @@
+✔ prepared page reuse invalidates when connections or target pages change (7.4079ms)
+✔ source edits rebuild mappings before either selection direction consumes them (8.2861ms)
+✔ context distinguishes repeated words and rejects ties or conflicting context (1.0547ms)
+✔ normalization preserves source offsets through ligatures and line hyphenation (0.3651ms)
+✔ incremental normalization preserves whitespace and Unicode offsets across complete lines (1.4826ms)
+✔ partial words retain precise offsets and context resolves overlapping occurrences (1.9523ms)
+✔ Chinese selections match inside continuous text with UTF-16 offsets (0.6198ms)
+✔ context locates small differences in either direction, including partial words (3.2602ms)
+✔ tolerance rejects missing context, large differences, short selections and ambiguous locations (1.1935ms)
+✔ long German and unspaced Chinese selections align internal note markers with both boundaries (8.3743ms)
+✔ confirmed diffs map inner selections both ways, including changed runs and deleted characters (2.3302ms)
+✔ startup alignment maps a single damaged Chinese character without spaces or a prior selection (10.3212ms)
+✔ connections reuse whole-text indexes and alignments while respecting partial-range boundaries (0.3747ms)
+✔ page preparation reuses retained anchor mappings without repeating comparisons (43.6756ms)
+✔ failed page preparation is cached until the source or PDF layer changes (6.2536ms)
+✔ last fallback searches all patched words without changing substrings or trusting conflicting patches (1.5851ms)
+✔ browser selects one contextual occurrence, scrolls offscreen, and retains ambiguous fallback (3006.4868ms)
+Ready-layer selection latency (exact, 100 selections, 100 pages, 1500 spans, up to 15 KB): {
+  p50: 0.900000000372529,
+  p95: 6.7000000001862645,
+  max: 9.199999999254942,
+  walks: 0,
+  rangeReads: 7930,
+  sourceReads: 1
+}
+✖ ready OCR layer highlights partial words through full-file selections within 10 ms without rebuilding text mappings (3049.4199ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 17
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6610.7198
+
+✖ failing tests:
+
+test at tests\pdf-selection-highlight.test.mjs:1038:1
+✖ ready OCR layer highlights partial words through full-file selections within 10 ms without rebuilding text mappings (3049.4199ms)
+  AssertionError [ERR_ASSERTION]: repeated selections reuse geometry for the 20 distinct ranges
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:1106:14)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

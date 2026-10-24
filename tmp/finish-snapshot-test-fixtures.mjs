@@ -1,0 +1,4 @@
+import fs from 'node:fs';
+let path='tests/pdf-selection-highlight.test.mjs',s=fs.readFileSync(path,'utf8');s=s.replace(/  const window = \{\};\r?\n  vm.runInNewContext\(script/, '  const window = { document: { createElement: () => ({}) } };\n  vm.runInNewContext(script');fs.writeFileSync(path,s);
+path='tests/pdf-selection-diff.test.mjs';s=fs.readFileSync(path,'utf8').replace('{ window, toolbox: api, mapping: api }','{ window, toolbox: api, mapping: api, connectionDiff: api.connectionDiff, textDifferences: api.textDifferences }');fs.writeFileSync(path,s);
+path='tests/pdf-cache-browser.mjs';s=fs.readFileSync(path,'utf8').replace("const index = new PdfReviewProvider.PdfSourceIndex(new PdfReviewProvider.PdfLocator(), { layer, highlighter, observer, raw: strings.join('') });", "const index = { layer, highlighter, observer, raw: strings.join('') };");fs.writeFileSync(path,s);

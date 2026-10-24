@@ -1,0 +1,30 @@
+[
+  {
+    "id": "278aed0eb87d5499e334",
+    "version": "c886361f43ed2e3933dc155b69b0ceafc2e27a2c93d530d9710e320625baf2ef",
+    "choice": "next",
+    "path": "16/ME16-005.html",
+    "purpose": "ocr",
+    "pattern": "ocr",
+    "old": "“",
+    "new": "“",
+    "edits": []
+  },
+  {
+    "id": "792ae37ffdeb0ea48fff",
+    "version": "c886361f43ed2e3933dc155b69b0ceafc2e27a2c93d530d9710e320625baf2ef",
+    "choice": "ocr",
+    "path": "16/ME16-005.html",
+    "purpose": "ocr",
+    "pattern": "ocr",
+    "old": "“",
+    "new": "\"",
+    "edits": [
+      [
+        1234,
+        1235,
+        "\""
+      ]
+    ]
+  }
+]

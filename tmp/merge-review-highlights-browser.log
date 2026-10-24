@@ -1,0 +1,4 @@
+index: anchored popup, Monaco diff, batch choices, markup/Unicode, undo, stale/readonly/overlap/cancellation passed
+PDF integration: independent selection module, selected review fields, PDF popup, file diff and replacement/undo passed
+reader: anchored popup, Monaco diff, batch choices, markup/Unicode, undo, stale/readonly/overlap/cancellation passed
+split window: editor-owned popup and source selection, reader module control, independent lifecycle passed

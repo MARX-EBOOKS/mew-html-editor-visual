@@ -1,0 +1,2 @@
+import {readFile,writeFile} from 'node:fs/promises';
+const h=await readFile('tests/support/pdf-harness.mjs','utf8');await writeFile('tests/support/me05-284-baseline-harness.mjs',h.replace("../../public/pdfdiff/pdf-selection-diff.js","../../tmp/me05-284-before-diff.js"));await writeFile('tests/me05-284-baseline.test.mjs',(await readFile('tests/pdf-selection-diff.test.mjs','utf8')).replace('./support/pdf-harness.mjs','./support/me05-284-baseline-harness.mjs'));

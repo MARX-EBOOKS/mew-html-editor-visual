@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTML 审阅</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/monaco/loader.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header><h1>MEW · HTML 审阅</h1><span id="root"></span><select id="theme" aria-label="主题"><option value="dark">深色</option><option value="light">浅色</option></select><button id="refresh">重新扫描</button></header>
+  <div class="layout">
+    <aside aria-label="文件与筛选">
+      <fieldset id="purpose"><legend>审阅功能（可多选）</legend><span>加载功能…</span></fieldset>
+      <section id="regex-controls" hidden aria-label="正则搜索和替换">
+        <label>搜索正则<input id="regex-query" placeholder="例如 (?P&lt;word&gt;Text)" spellcheck="false"></label>
+        <label>替换为<input id="regex-replacement" placeholder="例如 \g&lt;word&gt;；留空删除" spellcheck="false"></label>
+        <div class="regex-flags"><label class="check"><input id="regex-i" type="checkbox">忽略大小写</label><label class="check"><input id="regex-m" type="checkbox">多行 ^ $</label><label class="check"><input id="regex-s" type="checkbox">. 匹配换行</label></div>
+        <button id="regex-run">搜索 / 更新提案</button>
+        <small>Python 正则；直接替换 HTML 源码。捕获组使用 \1 或 \g&lt;name&gt;。</small>
+      </section>
+      <label>文件范围<input id="search" type="search" placeholder="例如 **/16/ME16-*.html" title="输入路径 pattern 即时过滤：*、**、?、{a,b}、[0-9]；逗号分隔多个条件，! 排除。也可直接输入文件名或目录名。"></label>
+      <details id="advanced-filters"><summary>更多筛选 <span id="filter-count"></span></summary>
+      <div class="filter-fields">
+      <label class="check"><input id="path-regex" type="checkbox">文件路径使用正则 .*</label>
+      <label>结果正则筛选<input id="result-filter" type="search" placeholder="筛选匹配文字或上下文" spellcheck="false"></label>
+      <label>匹配规则<select id="pattern"><option value="">全部规则</option></select></label>
+      <label id="kind-label">差异类型<select id="kind"><option value="">全部结果</option></select></label>
+      <label class="check"><input id="hits-only" type="checkbox"> 仅有结果的文件</label>
+      <label class="check"><input id="unreviewed" type="checkbox"> 仅未审阅的文件</label>
+      </div></details>
+      <p id="filter-error" role="alert" hidden></p>
+      <div class="filter-actions"><button id="reset-filters">清除筛选</button><button id="compare">比较当前筛选的文件</button></div>
+      <p id="summary" role="status">正在加载…</p>
+      <nav id="files" aria-label="HTML 文件"></nav>
+      <div class="file-pages"><button id="files-back" aria-label="上一页文件">←</button><span id="file-page"></span><button id="files-forward" aria-label="下一页文件">→</button></div>
+    </aside>
+    <main>
+      <div class="toolbar">
+        <button id="previous">← 上一文件</button><button id="next">下一文件 →</button>
+        <button id="toggle-findings" aria-expanded="false" aria-controls="findings">结果详情</button>
+        <button id="reviewed">标记已审阅</button><span id="position"></span>
+      </div>
+      <div class="document-heading">
+        <div class="document-info">
+          <h2 id="filename">选择文件开始审阅</h2>
+          <p id="status" role="status"></p>
+        </div>
+        <details class="scan-reference" open hidden><summary title="点击返回当前差异的坐标区域">扫描原图</summary><div id="crops"></div></details>
+      </div>
+      <div class="workspace">
+        <section id="findings" class="findings" hidden><h3>当前文件结果 <span id="match-count"></span></h3><div id="matches"></div></section>
+        <section class="document">
+          <div class="tabs" role="group" aria-label="文档视图">
+            <button id="show-review" aria-pressed="true">修改提案</button>
+            <button id="show-source" aria-pressed="false">源码</button>
+            <button id="show-preview" aria-pressed="false">页面预览</button>
+            <button id="show-originals" aria-pressed="false">整页原图</button>
+          </div>
+          <div id="review-pane" aria-label="修改提案审阅">
+            <div class="review-controls">
+              <p id="diff-location"></p>
+              <div id="hit-navigation" class="toolbar" aria-label="切换差异"></div>
+              <div class="review-actions"><button id="save" disabled>应用并保存</button><span id="save-status" role="status"></span></div>
+            </div>
+            <fieldset id="choices" disabled><legend>修改方案</legend>
+              <div id="decision-options"></div>
+              <div id="custom-source-slot"></div>
+              <textarea id="custom-text" aria-label="自定义修改文字" placeholder="输入正确文字；留空表示删除" hidden></textarea>
+            </fieldset>
+            <div class="proposal-frame">
+            <div class="proposal-header"><strong>修改提案</strong><span><span class="removed-key">− 当前代码</span> <span class="added-key">+ 建议代码</span></span></div>
+            <p id="proposal-status" role="status" aria-live="polite">选择差异以查看修改提案。</p>
+            <div id="proposal-diff" aria-label="当前代码与修改提案的行内差异"></div>
+
+            </div>
+          </div>
+          <div id="source-pane"><div id="source" aria-label="HTML source"></div></div>
+          <iframe id="preview" title="HTML preview" sandbox hidden></iframe>
+          <div id="originals-pane" aria-label="当前 HTML 对应的全部扫描原页" hidden></div>
+        </section>
+      </div>
+      <footer>F4 / Shift+F4 切换结果 · Alt+← / → 切换文件 · 应用并保存会写入 HTML，自动保留备份。</footer>
+    </main>
+  </div>
+</body>
+</html>

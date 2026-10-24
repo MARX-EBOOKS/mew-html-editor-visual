@@ -1,0 +1,282 @@
+✖ concurrent font indexing shares page work while cancellation stays caller-local (5.43ms)
+✔ prepared page reuse invalidates when connections or target pages change (3.7152ms)
+✔ popup anchor reuses mappings and text geometry while following scrolling and changed connections (5.1035ms)
+✔ font detection preserves unknown attributes and merges only compatible UTF-16 runs (1.8262ms)
+✖ independent text differences stay separate across tags while format runs retain their grouping (8.1748ms)
+✖ OCR text indexing starts shared font detection and retains unavailable metadata as unknown (1.4298ms)
+✔ text and font differences coexist across changed text with uniform PDF fonts (2.1776ms)
+✔ continuous text and font highlights share both details across tags and adjacent changes (5.1775ms)
+✖ format differences include missing, surplus and partially marked bold italic (3.9547ms)
+✔ font edits move nearby bold and italic boundaries instead of duplicating wrappers (6.2592ms)
+✔ font edits move touching tags and remove all selected bold and italic wrappers for plain text (2.1098ms)
+✖ font edits reuse source coordinates and preserve entities, attributes and inline structure (1.3315ms)
+✖ normal PDF formatting removes surplus tags and preserves formatting outside a partial correction (1.1761ms)
+✔ retained OCR font declarations participate in style comparison even when invisible or not embedded (0.8397ms)
+✔ mixed visibility retains font declarations but failed inspection remains unknown (0.9013ms)
+✔ review font loading uses metadata without reading scan pixels (4.7089ms)
+✔ Tesseract placeholder fonts remain unknown and cannot produce surplus HTML style differences (1.439ms)
+✖ format notices suppress matching and unknown styles and stay compact over PDF in combined view (7235.2817ms)
+✖ ME32-007 reverse selections reuse OCR alignment around Gewißheit (0.9111ms)
+✔ background document mapping retains page font highlights alongside text differences (4.2444ms)
+✖ ME07-073 and ME07-074 alignment excludes neighboring pages and preserves the final punctuation (0.955ms)
+✖ PDF replacement batches identical patterns and retains different text or formatting targets (3.5431ms)
+✔ provider loads font/text and popup scripts before selection consumes its mapping API (7155.0963ms)
+✖ text candidates, font candidates and decorations reuse one traversal and refresh font metadata (3.5861ms)
+✖ OCR page reads publish font styles into the same aligned spans without a separate font pass (1.9822ms)
+✖ saved font sizes and colors load without merging distinct frontend runs (0.8969ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 13
+ℹ fail 13
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14870.9352
+
+✖ failing tests:
+
+test at tmp\me05-font-baseline.test.mjs:56:1
+✖ concurrent font indexing shares page work while cancellation stays caller-local (5.43ms)
+  AssertionError [ERR_ASSERTION]: text indexing and font detection use the same PDF page read
+  
+  2 !== 1
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:74:10)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:297:1
+✖ independent text differences stay separate across tags while format runs retain their grouping (8.1748ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'a',
+  +   'b',
+  +   'c',
+  +   'd',
+  +   'E',
+  +   'F'
+  -   'ab cd',
+  -   'EF'
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:316:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'a', 'b', 'c', 'd', 'E', 'F' ],
+    expected: [ 'ab cd', 'EF' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:320:1
+✖ OCR text indexing starts shared font detection and retains unavailable metadata as unknown (1.4298ms)
+  AssertionError [ERR_ASSERTION]: the OCR page read starts font detection without a separate review pass
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:333:10)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:506:1
+✖ format differences include missing, surplus and partially marked bold italic (3.9547ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'A',
+  +   'B',
+  +   'C',
+  -   'A B C',
+      '𠀀'
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:530:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'A', 'B', 'C', '𠀀' ],
+    expected: [ 'A B C', '𠀀' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:593:1
+✖ font edits reuse source coordinates and preserve entities, attributes and inline structure (1.3315ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + '<p id="keep"><i>A</i><b>&amp;<a href="/keep">𠀀B</b><i></a>C</i></p>'
+  - '<p id="keep"><i>A</i><span style="font-weight:bold">&amp;</span><a href="/keep"><span style="font-weight:bold">𠀀B</span></a><i>C</i></p>'
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:602:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<p id="keep"><i>A</i><b>&amp;<a href="/keep">𠀀B</b><i></a>C</i></p>',
+    expected: '<p id="keep"><i>A</i><span style="font-weight:bold">&amp;</span><a href="/keep"><span style="font-weight:bold">𠀀B</span></a><i>C</i></p>',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:607:1
+✖ normal PDF formatting removes surplus tags and preserves formatting outside a partial correction (1.1761ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + '<p>Vorträge über die Grundlagen</p>'
+  - '<p><span style="color:red">Vorträge über die Grundlagen</span></p>'
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:617:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<p>Vorträge über die Grundlagen</p>',
+    expected: '<p><span style="color:red">Vorträge über die Grundlagen</span></p>',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:830:1
+✖ format notices suppress matching and unknown styles and stay compact over PDF in combined view (7235.2817ms)
+  page.waitForFunction: TypeError: Cannot read properties of null (reading 'textContent')
+      at eval (eval at predicate (eval at evaluate (:311:30)), <anonymous>:1:46)
+      at predicate (eval at evaluate (:311:30), <anonymous>:7:27)
+      at next (eval at evaluate (:311:30), <anonymous>:29:33)
+      at eval (eval at evaluate (:311:30), <anonymous>:42:13)
+      at UtilityScript.evaluate (<anonymous>:313:16)
+      at UtilityScript.<anonymous> (<anonymous>:1:44)
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tmp\me05-font-baseline.test.mjs:912:16) {
+    log: []
+  }
+
+test at tmp\me05-font-baseline.test.mjs:1010:1
+✖ ME32-007 reverse selections reuse OCR alignment around Gewißheit (0.9111ms)
+  Error: ENOENT: no such file or directory, open 'D:\马恩列总装\mew-html-editor-visual\tmp\fixtures\pdf-selection-me32.json'
+      at async open (node:internal/fs/promises:1281:25)
+      at async readFile (node:internal/fs/promises:1929:14)
+      at async TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:1011:30)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    errno: -4058,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: 'D:\\马恩列总装\\mew-html-editor-visual\\tmp\\fixtures\\pdf-selection-me32.json'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:1336:1
+✖ ME07-073 and ME07-074 alignment excludes neighboring pages and preserves the final punctuation (0.955ms)
+  Error: ENOENT: no such file or directory, open 'D:\马恩列总装\mew-html-editor-visual\tmp\fixtures\pdf-selection-me07-073-074.json'
+      at async open (node:internal/fs/promises:1281:25)
+      at async readFile (node:internal/fs/promises:1929:14)
+      at async TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:1337:31)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    errno: -4058,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: 'D:\\马恩列总装\\mew-html-editor-visual\\tmp\\fixtures\\pdf-selection-me07-073-074.json'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:1845:1
+✖ PDF replacement batches identical patterns and retains different text or formatting targets (3.5431ms)
+  AssertionError [ERR_ASSERTION]: one popup highlights every matching pattern and excludes other corrections or styles
+  + actual - expected
+  
+    [
+  -   '0',
+      '1'
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:1882:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at node:internal/test_runner/test:1133:31
+      at node:internal/process/task_queues:150:7
+      at AsyncResource.runInAsyncScope (node:async_hooks:226:14)
+      at AsyncResource.runMicrotask (node:internal/process/task_queues:147:8) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ '1' ],
+    expected: [ '0', '1' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:2004:1
+✖ text candidates, font candidates and decorations reuse one traversal and refresh font metadata (3.5861ms)
+  AssertionError [ERR_ASSERTION]: review and highlight consumers share the classified spans
+  
+  84 !== 24
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:2024:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 84,
+    expected: 24,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tmp\me05-font-baseline.test.mjs:2076:1
+✖ OCR page reads publish font styles into the same aligned spans without a separate font pass (1.9822ms)
+  TypeError: api.differences is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:2098:22)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tmp\me05-font-baseline.test.mjs:2129:1
+✖ saved font sizes and colors load without merging distinct frontend runs (0.8969ms)
+  TypeError: Cannot read properties of undefined (reading 'readDocument')
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tmp/me05-font-baseline.test.mjs:2140:49)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)

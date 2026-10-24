@@ -2,8 +2,8 @@
 
 `index.html` 和 `reader.html` 共用“审阅 / 批量替换”菜单。
 
-- `public/pdfdiff/pdf-review-provider.js`：统一加载入口；管理源码索引、定位、双向连接、PDF 文字/格式候选、差异标记和替换操作，向共用弹窗提供数据与动作。
-- `public/pdfdiff/pdf-selection-diff.js`：字体读取、文字与格式比较，以及编辑事务。格式比较接收 provider 已缓存的文字比较结果，不反向调用 provider。
+- `public/pdfdiff/pdf-review-provider.js`：统一加载入口；`PdfLocator` 负责 PDF 文字、字体元数据和渲染层样式读取、共享读取缓存及索引准备；管理 PDF 文字/格式候选、差异标记和替换操作，向共用弹窗提供数据与动作。
+- `public/pdfdiff/pdf-selection-diff.js`：`PdfSourceIndex` 对已准备的数据执行定位、双向映射、文字与格式比较、装饰和编辑计算，以及共用编辑事务；不读取 PDF 页面或 DOM 样式。
 - `public/pdfdiff/replacement-review.js`：共用弹窗、会话、前后条导航、保存和分窗切换，以及通用文字范围测量、叠层绘制、Monaco 标记缓存、选区命中与清理；提供 `ReplacementReview` 注册接口和 `ReviewHighlights.create()`，每个高亮调用方创建独立实例。
 - `public/pdfdiff/pdf-selection.js`：PDF 与源码选区的双向定位、选区跟踪和滚动；发布已准备好的映射数据，不创建弹窗或判断字体差异。
 
@@ -43,7 +43,7 @@ ReplacementReview.register({
 });
 ```
 
-`context.toolbox` 提供 `PdfSelectionDiff` 的文字、字体和编辑工具；源码定位与候选接口使用 `new PdfReviewProvider.PdfLocator()`、`reviewCandidates()` 和 `connectionDiff()`。调用前等待 `PdfReviewReady` 完成初始化。`PdfLocator` 管理读取和缓存，每个 `PdfSourceIndex` 保存自己的公开 `source/raw`、坐标和连接；定位调用改为 `index.locate()`、`index.connectedRange()` 等实例方法。
+`context.toolbox` 提供 `PdfSelectionDiff` 的文字、字体和编辑工具；源码定位与候选接口使用 `new PdfReviewProvider.PdfLocator()`、`index.reviewCandidates()`。调用前等待 `PdfReviewReady` 完成初始化。`PdfLocator` 管理读取和缓存，每个 `PdfSourceIndex` 保存自己的公开 `source/raw`、坐标和连接；完整类由 `PdfSelectionDiff.PdfSourceIndex` 导出，provider 复用同一类。定位、字体、源码装饰和编辑调用 `index.locate()`、`index.connectionPairs()`、`index.connectionDiff()`、`index.sourceRange()`、`index.connectedRange()`、`index.fontRuns()`、`index.sourceDecorations()`、`index.textEdits()`、`index.fontEdits()` 等实例方法；无实例状态的归一化和搜索工具仍是普通 toolbox 函数，不再经过 locator 包装。
 
 `ReviewHighlights.measureHighlights()` 通过索引的 `partsInRange(start, end)` 获取文字节点范围，复用弹窗锚点的坐标查找；`ReviewHighlights.create()` 不再接收 `lowerBound`。公共高亮模块只依赖这个索引接口，不导入 PDF 类。
 

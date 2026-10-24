@@ -1,0 +1,3 @@
+import {readFile} from 'node:fs/promises';import {engine} from '../tests/support/pdf-harness.mjs';
+const f=JSON.parse(await readFile('tmp/me05-284-live.json','utf8'));const a=engine(),l=new a.PdfLocator({}, {document:{createElement:()=>({})}}),i=l.sourceIndex(f.source),t=new a.PdfSourceIndex(l,{raw:f.pdf,pages:f.pages});l.prepareSource(i,[t],{});
+for(const [c]of i.connectionPairs([t])){const d=i.connectionDiff(t,c);console.log('integrity',d.parts.map(p=>p.html).join('')===i.raw.slice(c.start,c.end),d.parts.map(p=>p.pdf).join('')===t.raw.slice(c.targetStart,c.targetEnd)); console.log('tail',JSON.stringify(d.parts.slice(-14)));console.log('pdf',t.raw.slice(c.targetEnd-140,c.targetEnd));}

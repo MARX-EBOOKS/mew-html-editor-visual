@@ -1,0 +1,1 @@
+import{readFile,writeFile}from'node:fs/promises';for(const name of ['pdf-selection-highlight','pdf-review-pattern'])await writeFile('tests/me05-284-baseline-'+name+'.test.mjs',(await readFile('tests/'+name+'.test.mjs','utf8')).replaceAll('./support/pdf-harness.mjs','./support/me05-284-baseline-harness.mjs'));

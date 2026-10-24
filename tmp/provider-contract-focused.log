@@ -1,0 +1,16 @@
+✔ same-pattern text replacement matches the word across different paragraphs (17.1153ms)
+✔ same-pattern insertion replacement matches the word across different paragraphs (5.0043ms)
+✔ same-pattern deletion replacement matches the word across different paragraphs (4.4276ms)
+✔ same-pattern newline replacement matches the word across different paragraphs (3.1908ms)
+✔ same-pattern format replacement matches the word across different paragraphs (4.9017ms)
+✔ same-pattern word replacement matches the word across different paragraphs (4.6163ms)
+✔ same-pattern term replacement matches the word across different paragraphs (2.8374ms)
+✔ highlight tool works without PDF modules and keeps consumers and decoration caches independent (1435.425ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1907.4441

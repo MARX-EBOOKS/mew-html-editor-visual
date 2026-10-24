@@ -1,0 +1,12 @@
+✔ native selections suppress page-uniform styles without checking other pages (1574.9986ms)
+✔ locator returns page targets and rendered/source ranges without the highlight script (10.9401ms)
+✔ locator cancels obsolete extraction and keeps document caches per reader (1.4943ms)
+✔ OCR page reads publish font styles into the same aligned spans without a separate font pass (3.5105ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2079.6685

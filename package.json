@@ -6,7 +6,12 @@
   "scripts": {
     "start": "node reader-server.js -p 17000",
     "start:editor": "node server.js",
-    "test:monaco": "node tests/monaco-browser.mjs"
+    "test": "node tests/run.mjs unit",
+    "test:browser": "node tests/run.mjs browser",
+    "test:backend": "node tests/run.mjs backend",
+    "test:all": "node tests/run.mjs all",
+    "test:monaco": "node tests/monaco-browser.mjs",
+    "bench": "node tests/benchmark.mjs"
   },
   "dependencies": {
     "monaco-editor": "0.55.1",

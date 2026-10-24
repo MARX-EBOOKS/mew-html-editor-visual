@@ -1,0 +1,903 @@
+✔ same-pattern text replacement matches the word across different paragraphs (15.497ms)
+✔ same-pattern insertion replacement matches the word across different paragraphs (3.2209ms)
+✔ same-pattern deletion replacement matches the word across different paragraphs (2.8023ms)
+✔ same-pattern newline replacement matches the word across different paragraphs (2.4726ms)
+✔ same-pattern format replacement matches the word across different paragraphs (3.9122ms)
+✔ same-pattern word replacement matches the word across different paragraphs (4.1601ms)
+✔ same-pattern term replacement matches the word across different paragraphs (3.4727ms)
+✖ concurrent font indexing shares page work while cancellation stays caller-local (7.9672ms)
+✔ prepared page reuse invalidates when connections or target pages change (3.662ms)
+✔ candidate interval lookup retains overlap and insertion boundary rules (2.9401ms)
+✔ large selected passages share one comparison between replacement edits and popup rendering (27.2616ms)
+✔ review navigation reuses comparison diffs and invalidates changed readings (7.0418ms)
+✔ popup anchor reuses mappings and text geometry while following scrolling and changed connections (4.6263ms)
+✔ review popup navigates immediately without full model reads and coalesces scroll layout (1825.7898ms)
+✔ PDF newline differences use a caret without highlighting adjacent letters (4.3619ms)
+✔ font detection preserves unknown attributes and merges only compatible UTF-16 runs (1.4729ms)
+✖ independent text differences stay separate across tags while format runs retain their grouping (4.9391ms)
+✖ OCR text indexing starts shared font detection and retains unavailable metadata as unknown (1.3286ms)
+✖ page-uniform styles become unknown independently of other pages (5.1691ms)
+✔ uniform page styles are unknown even while later pages are pending (1.9569ms)
+✔ native selections suppress page-uniform styles without checking other pages (1907.1318ms)
+✖ format differences include missing, surplus and partially marked bold italic (4.3533ms)
+✔ font edits move nearby bold and italic boundaries instead of duplicating wrappers (2.113ms)
+✔ font edits move touching tags and remove all selected bold and italic wrappers for plain text (2.0212ms)
+✖ font edits reuse source coordinates and preserve entities, attributes and inline structure (1.7135ms)
+✖ normal PDF formatting removes surplus tags and preserves formatting outside a partial correction (1.799ms)
+✔ retained OCR font declarations participate in style comparison even when invisible or not embedded (1.3436ms)
+✔ mixed visibility retains font declarations but failed inspection remains unknown (1.053ms)
+✔ review font loading uses metadata without reading scan pixels (7.488ms)
+✔ Tesseract placeholder fonts remain unknown and cannot produce surplus HTML style differences (1.7789ms)
+✖ PDF.js detects four actual PDF faces in file review and native selections (8244.9863ms)
+✖ format notices suppress matching and unknown styles and stay compact over PDF in combined view (31594.6111ms)
+✖ locator returns page targets and rendered/source ranges without the highlight script (2.9634ms)
+✖ ME32-007 reverse selections reuse OCR alignment around Gewißheit (25.9422ms)
+✖ background document mapping retains page font highlights alongside text differences (2.3349ms)
+✔ locator cancels obsolete extraction and keeps document caches per reader (0.9338ms)
+✔ source/PDF pairs reuse one snapshot and rebuild all mappings after edits (1.5295ms)
+✔ MEW_BRIEF/23/ME23-316 prepares reusable mappings across five actual OCR pages (70.0716ms)
+✔ long multi-page passages retain OCR mappings beyond the whole-range edit limit (860.2138ms)
+✔ local highlight hunks separate OCR boundary spaces (2.9147ms)
+✖ an over-budget page comparison does not highlight or replace the whole passage (9.6692ms)
+✔ ME04-608 wrapped prose stays aligned across blank-line anchors (2.7387ms)
+✔ bounded local anchor checks reject impossible lengths and count Unicode code points (8.0263ms)
+✔ local diff preserves complete Unicode readings and maps source positions in both directions (1.3249ms)
+✖ native decorations split changes around tags, map entities, and mark missing HTML text (1.4152ms)
+✖ ME04-004 quote markers exclude matching paragraphs, PDF wrapping and the footnote (10.7581ms)
+✖ ME04-117 case-only differences survive selection mapping in both directions (2.1245ms)
+✔ ME07-073 and ME07-074 alignment excludes neighboring pages and preserves the final punctuation (202.391ms)
+✖ ME07-066 missing page-end text maps before whole-document indexing (19.9236ms)
+✖ ME04-117 adjacent-page quotations cannot override a complete page mapping (34.1837ms)
+✖ ME04-037 keeps the matching heading out of deletion/reinsertion markers (11.5333ms)
+✔ ME07-261 missing letters after a PDF line break keep a source insertion marker and mapping (3.1186ms)
+✔ ME07-316 missing heading text marks the insertion before the closing tag and remains clickable (11.1266ms)
+✖ source decorations ignore whitespace and hyphens while preserving subsequent character offsets (1.4277ms)
+✖ source markers locate local diff changes at word boundaries, inside words and beside repeated characters (0.9579ms)
+✖ Monaco standalone renders native source-line and exact character decorations (7629.6665ms)
+✔ concurrent page extraction is shared across locators and failures can retry (1.6075ms)
+✔ equal text stays unchanged and batch preview preserves all untouched text (0.751ms)
+✖ PDF replacement batches identical patterns and retains different text or formatting targets (2.7542ms)
+✔ compact review keeps distant differences without computing a second diff (1.4357ms)
+✖ local textDiff serves review candidates and popup comparisons (1.9472ms)
+✔ provider loads font/text and popup scripts before selection consumes its mapping API (7175.3258ms)
+✖ text candidates, font candidates and decorations reuse one traversal and refresh font metadata (3.6409ms)
+✖ transient mapping eviction preserves every prepared passage and recent selections (5.0946ms)
+✖ passage pruning matches pairwise containment and ignores cache recency order (5.9282ms)
+✖ OCR page reads publish font styles into the same aligned spans without a separate font pass (2.118ms)
+✖ saved font sizes and colors load without merging distinct frontend runs (0.8969ms)
+✖ PDF cache stays primary and unavailable or invalid caches use the original text layer (1.0963ms)
+✔ text-layer fallback stops on document change and failed extraction can retry (1.0894ms)
+✔ source edits rebuild mappings before either selection direction consumes them (6.4416ms)
+✔ context distinguishes repeated words and rejects ties or conflicting context (1.2009ms)
+✖ empty PDF counterparts retain their insertion position without a rendered-layer connection (1.9863ms)
+✔ normalization preserves source offsets through ligatures and line hyphenation (0.4823ms)
+✔ incremental normalization preserves whitespace and Unicode offsets across complete lines (1.7443ms)
+✔ partial words retain precise offsets and context resolves overlapping occurrences (1.8374ms)
+✔ Chinese selections match inside continuous text with UTF-16 offsets (0.4691ms)
+✔ context locates small differences in either direction, including partial words (2.9613ms)
+✔ tolerance rejects missing context, large differences, short selections and ambiguous locations (0.887ms)
+✔ bounded distance agrees with full alignment for Unicode, insertions and deletions (53.2169ms)
+✔ compact traceback agrees with an independent edit-distance oracle across wider bands (81.2268ms)
+✔ long German and unspaced Chinese selections align internal note markers with both boundaries (12.0458ms)
+✔ confirmed diffs map inner selections both ways, including changed runs and deleted characters (1.7527ms)
+✔ startup alignment maps a single damaged Chinese character without spaces or a prior selection (2.6852ms)
+✔ connections reuse whole-text indexes and alignments while respecting partial-range boundaries (0.345ms)
+✔ page preparation reuses retained anchor mappings without repeating comparisons (40.0873ms)
+✔ failed page preparation is cached until the source or PDF layer changes (5.5264ms)
+✔ last fallback searches all patched words without changing substrings or trusting conflicting patches (1.5257ms)
+✔ browser draws selected ranges and nearby diffs for tolerant matches (9025.6901ms)
+✔ review highlights all supplied occurrences across PDF pages and clears them together (1551.5216ms)
+Caret fixture middle {
+  state: 'idle',
+  pages: [ { pageNumber: 1, source: 'pdf-text', matches: 1, pending: false } ],
+  matches: 1,
+  differences: [ { pageNumber: 1, html: 'EXTRA', pdf: '' } ],
+  error: null,
+  mode: 'exact'
+}
+✖ browser draws HTML-only text as a visible PDF caret between text spans (4434.7926ms)
+✖ Monaco decorations appear on open and on cached PDF page changes without a selection (4432.4965ms)
+✖ browser prepares diffs before selection and rebuilds mappings after source or PDF changes (1691.7522ms)
+✔ browser reveals a bottom-of-page selection without exposing the next page (1591.3799ms)
+✔ browser selects one contextual occurrence, scrolls offscreen, and retains ambiguous fallback (2824.5298ms)
+✖ PDF selection reveals matching Monaco source without stealing focus or feeding back (1539.2462ms)
+Ready-layer selection latency (exact, 100 selections, 100 pages, 1500 spans, up to 15 KB): {
+  p50: 1,
+  p95: 7.300000000745058,
+  max: 11.900000000372529,
+  walks: 0,
+  rangeReads: 7930,
+  sourceReads: 1
+}
+✖ ready OCR layer highlights partial words through full-file selections within 10 ms without rebuilding text mappings (3219.0863ms)
+15 KB complete character diff latency: [
+  {
+    kind: 'substitutions',
+    bytes: 15000,
+    edits: 87,
+    p50: 1.2999999998137355,
+    max: 4
+  },
+  {
+    kind: 'mixed edits',
+    bytes: 15000,
+    edits: 87,
+    p50: 1.3999999994412065,
+    max: 2.400000000372529
+  },
+  {
+    kind: 'substitutions',
+    bytes: 15000,
+    edits: 47,
+    p50: 0.6000000005587935,
+    max: 1.599999999627471
+  },
+  {
+    kind: 'mixed edits',
+    bytes: 15000,
+    edits: 47,
+    p50: 0.7000000001862645,
+    max: 1.5
+  }
+]
+✔ 15 KB character diffs complete within 50 ms with complete Unicode traceback (1468.6278ms)
+✖ ME34-010 and ME34-014 prepared OCR differences highlight before whole-PDF extraction (2607.181ms)
+✔ native PDF and text scrolling stays free and cancels late automatic positioning (2820.7059ms)
+✖ scrolling across retained PDF pages bounds DOM caches and revisits rebuild current highlights (2879.2415ms)
+ℹ tests 100
+ℹ suites 0
+ℹ pass 62
+ℹ fail 38
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 60264.3426
+
+✖ failing tests:
+
+test at tests\pdf-selection-diff.test.mjs:49:1
+✖ concurrent font indexing shares page work while cancellation stays caller-local (7.9672ms)
+  AssertionError [ERR_ASSERTION]: text indexing and font detection use the same PDF page read
+  
+  2 !== 1
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:67:10)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:290:1
+✖ independent text differences stay separate across tags while format runs retain their grouping (4.9391ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'a',
+  +   'b',
+  +   'c',
+  +   'd',
+  +   'E',
+  +   'F'
+  -   'ab cd',
+  -   'EF'
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:309:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'a', 'b', 'c', 'd', 'E', 'F' ],
+    expected: [ 'ab cd', 'EF' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:313:1
+✖ OCR text indexing starts shared font detection and retains unavailable metadata as unknown (1.3286ms)
+  AssertionError [ERR_ASSERTION]: the OCR page read starts font detection without a separate review pass
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:326:10)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:337:1
+✖ page-uniform styles become unknown independently of other pages (5.1691ms)
+  TypeError: Cannot read properties of undefined (reading '0')
+      at fontEdits (evalmachine.<anonymous>:149:25)
+      at evalmachine.<anonymous>:230:40
+      at Array.map (<anonymous>)
+      at Object.formatDifferences (evalmachine.<anonymous>:228:19)
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:370:27)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:449:1
+✖ format differences include missing, surplus and partially marked bold italic (4.3533ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'A',
+  +   'B',
+  +   'C',
+  -   'A B C',
+      '𠀀'
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:473:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'A', 'B', 'C', '𠀀' ],
+    expected: [ 'A B C', '𠀀' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:536:1
+✖ font edits reuse source coordinates and preserve entities, attributes and inline structure (1.7135ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + '<p id="keep"><i>A</i><b>&amp;<a href="/keep">𠀀B</b><i></a>C</i></p>'
+  - '<p id="keep"><i>A</i><span style="font-weight:bold">&amp;</span><a href="/keep"><span style="font-weight:bold">𠀀B</span></a><i>C</i></p>'
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:545:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<p id="keep"><i>A</i><b>&amp;<a href="/keep">𠀀B</b><i></a>C</i></p>',
+    expected: '<p id="keep"><i>A</i><span style="font-weight:bold">&amp;</span><a href="/keep"><span style="font-weight:bold">𠀀B</span></a><i>C</i></p>',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:550:1
+✖ normal PDF formatting removes surplus tags and preserves formatting outside a partial correction (1.799ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + '<p>Vorträge über die Grundlagen</p>'
+  - '<p><span style="color:red">Vorträge über die Grundlagen</span></p>'
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:560:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<p>Vorträge über die Grundlagen</p>',
+    expected: '<p><span style="color:red">Vorträge über die Grundlagen</span></p>',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:673:1
+✖ PDF.js detects four actual PDF faces in file review and native selections (8244.9863ms)
+  page.evaluate: TypeError: Cannot read properties of undefined (reading 'create')
+      at eval (eval at <anonymous> (eval at evaluate (:311:30)), <anonymous>:22:46)
+      at eval (eval at <anonymous> (eval at evaluate (:311:30)), <anonymous>:391:3)
+      at eval (eval at evaluate (:311:30), <anonymous>:29:35)
+      at async <anonymous>:337:30
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-diff.test.mjs:689:31) {
+    log: []
+  }
+
+test at tests\pdf-selection-diff.test.mjs:773:1
+✖ format notices suppress matching and unknown styles and stay compact over PDF in combined view (31594.6111ms)
+  page.waitForFunction: Timeout 30000ms exceeded.
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-diff.test.mjs:855:16) {
+    name: 'TimeoutError',
+    log: []
+  }
+
+test at tests\pdf-selection-diff.test.mjs:920:1
+✖ locator returns page targets and rendered/source ranges without the highlight script (2.9634ms)
+  TypeError: locator.findLocations is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:937:36)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:953:1
+✖ ME32-007 reverse selections reuse OCR alignment around Gewißheit (25.9422ms)
+  TypeError: locator.locateSource is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:967:41)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:977:1
+✖ background document mapping retains page font highlights alongside text differences (2.3349ms)
+  TypeError: reviewProvider(...).sourceDecorations is not a function
+      at marks (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:992:48)
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:994:16)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1129:1
+✖ an over-budget page comparison does not highlight or replace the whole passage (9.6692ms)
+  TypeError: api.differences is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1139:17)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1201:1
+✖ native decorations split changes around tags, map entities, and mark missing HTML text (1.4152ms)
+  TypeError: provider.sourceDecorations is not a function or its return value is not iterable
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1204:33)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1225:1
+✖ ME04-004 quote markers exclude matching paragraphs, PDF wrapping and the footnote (10.7581ms)
+  TypeError: reviewProvider(...).sourceDecorations is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1237:37)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1257:1
+✖ ME04-117 case-only differences survive selection mapping in both directions (2.1245ms)
+  TypeError: locator.locateSource is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1271:34)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1311:1
+✖ ME07-066 missing page-end text maps before whole-document indexing (19.9236ms)
+  AssertionError [ERR_ASSERTION]: the missing word is highlighted without waiting for the full PDF
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1321:12)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:1333:1
+✖ ME04-117 adjacent-page quotations cannot override a complete page mapping (34.1837ms)
+  TypeError: reviewProvider(...).sourceDecorations is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1345:37)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1352:1
+✖ ME04-037 keeps the matching heading out of deletion/reinsertion markers (11.5333ms)
+  TypeError: reviewProvider(...).sourceDecorations is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1362:39)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1436:1
+✖ source decorations ignore whitespace and hyphens while preserving subsequent character offsets (1.4277ms)
+  TypeError: reviewProvider(...).sourceDecorations is not a function
+      at decorate (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1439:54)
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1450:19)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1470:1
+✖ source markers locate local diff changes at word boundaries, inside words and beside repeated characters (0.9579ms)
+  TypeError: locator.findLocations is not a function or its return value is not iterable
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1487:32)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1496:1
+✖ Monaco standalone renders native source-line and exact character decorations (7629.6665ms)
+  page.evaluate: TypeError: PdfReviewProvider.sourceDecorations is not a function
+      at eval (eval at evaluate (:311:30), <anonymous>:5:75)
+      at async <anonymous>:337:30
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-diff.test.mjs:1520:16) {
+    log: []
+  }
+
+test at tests\pdf-selection-diff.test.mjs:1790:1
+✖ PDF replacement batches identical patterns and retains different text or formatting targets (2.7542ms)
+  AssertionError [ERR_ASSERTION]: one popup highlights every matching pattern and excludes other corrections or styles
+  + actual - expected
+  
+    [
+  -   '0',
+      '1'
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1828:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ '1' ],
+    expected: [ '0', '1' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:1873:1
+✖ local textDiff serves review candidates and popup comparisons (1.9472ms)
+  TypeError: Cannot read properties of undefined (reading 'edits')
+      at Object.content (evalmachine.<anonymous>:269:35)
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1885:30)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1950:1
+✖ text candidates, font candidates and decorations reuse one traversal and refresh font metadata (3.6409ms)
+  TypeError: provider.sourceDecorations is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1969:26)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:1982:1
+✖ transient mapping eviction preserves every prepared passage and recent selections (5.0946ms)
+  AssertionError [ERR_ASSERTION]: required mappings are never evicted
+  
+  0 !== 160
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1988:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 160,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:1996:1
+✖ passage pruning matches pairwise containment and ignores cache recency order (5.9282ms)
+  AssertionError [ERR_ASSERTION]: LRU recency changes do not invalidate prepared mappings
+  + actual - expected
+  ... Skipped lines
+  
+    {
+      connections: [
+        [
+          {
+  +         end: 472,
+  +         start: 396
+  -         end: 384,
+  -         start: 298
+          },
+  +     ],
+  +     [
+          {
+  +         end: 336,
+  +         start: 236
+  -         end: 180,
+  -         start: 80
+          },
+          {
+  +         end: 192,
+  +         start: 94
+  -         end: 156,
+  -         start: 58
+          },
+          {
+  +         end: 340,
+  +         start: 240
+  -         end: 96,
+  -         start: 0
+          },
+          {
+  +         end: 448,
+  +         start: 356
+  -         end: 4,
+  -         start: 2
+          },
+          {
+  +         end: 132,
+  +         start: 48
+  -         end: 88,
+  -         start: 24
+          },
+          {
+  +         end: 304,
+  +         start: 218
+  -         end: 128,
+  -         start: 44
+          }
+        ],
+        [
+          {
+  +         end: 196,
+  +         start: 116
+  -         end: 288,
+  -         start: 196
+          },
+          {
+  +         end: 356,
+  +         start: 264
+  -         end: 452,
+  -         start: 362
+          },
+  +     ],
+  +     [
+          {
+  +         end: 468,
+  +         start: 386
+  -         end: 392,
+  -         start: 300
+          },
+          {
+  +         end: 228,
+  +         start: 138
+  -         end: 396,
+  -         start: 318
+          },
+          {
+  +         end: 220,
+  +         start: 124
+  -         end: 408,
+  -         start: 324
+          },
+          {
+  +         end: 116,
+  +         start: 36
+  -         end: 456,
+  -         start: 360
+          },
+  +       {
+  +         end: 232,
+  +         start: 140
+  +       },
+  +       {
+  +         end: 416,
+  +         start: 334
+  +       }
+        ],
+  +     [],
+        [
+          {
+            end: 256,
+            start: 172
+          },
+  ...
+        ],
+  -     [],
+        [
+          {
+  +         end: 288,
+  +         start: 196
+  -         end: 468,
+  -         start: 386
+          },
+          {
+  +         end: 452,
+  +         start: 362
+  -         end: 228,
+  -         start: 138
+          },
+          {
+  +         end: 392,
+  +         start: 300
+  -         end: 220,
+  -         start: 124
+          },
+          {
+  +         end: 396,
+  +         start: 318
+  -         end: 116,
+  -         start: 36
+          },
+          {
+  +         end: 408,
+  +         start: 324
+  -         end: 232,
+  -         start: 140
+          },
+          {
+  +         end: 456,
+  +         start: 360
+  -         end: 416,
+  -         start: 334
+          }
+        ],
+        [
+          {
+  +         end: 384,
+  +         start: 298
+  -         end: 196,
+  -         start: 116
+          },
+          {
+  +         end: 180,
+  +         start: 80
+  -         end: 356,
+  -         start: 264
+          },
+  -     ],
+  -     [
+          {
+  +         end: 156,
+  +         start: 58
+  -         end: 336,
+  -         start: 236
+          },
+          {
+  +         end: 96,
+  +         start: 0
+  -         end: 192,
+  -         start: 94
+          },
+          {
+  +         end: 4,
+  +         start: 2
+  -         end: 340,
+  -         start: 240
+          },
+          {
+  +         end: 88,
+  +         start: 24
+  -         end: 448,
+  -         start: 356
+          },
+          {
+  +         end: 128,
+  +         start: 44
+  -         end: 132,
+  -         start: 48
+          },
+  -       {
+  -         end: 304,
+  -         start: 218
+  -       }
+        ],
+  -     [
+  -       {
+  -         end: 472,
+  -         start: 396
+  -       }
+  -     ]
+      ],
+      full: undefined,
+      pages: [
+        {
+          connections: WeakMap {
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:2017:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [Object],
+    expected: [Object],
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-diff.test.mjs:2022:1
+✖ OCR page reads publish font styles into the same aligned spans without a separate font pass (2.118ms)
+  TypeError: api.differences is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:2044:22)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:2075:1
+✖ saved font sizes and colors load without merging distinct frontend runs (0.8969ms)
+  TypeError: Cannot read properties of undefined (reading 'readDocument')
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:2086:49)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-diff.test.mjs:2099:1
+✖ PDF cache stays primary and unavailable or invalid caches use the original text layer (1.0963ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'Original\n'
+  - 'Cached'
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:2118:10)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'Original\n',
+    expected: 'Cached',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-highlight.test.mjs:79:1
+✖ empty PDF counterparts retain their insertion position without a rendered-layer connection (1.9863ms)
+  TypeError: locator(...).locateLayer is not a function
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:87:28)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+
+test at tests\pdf-selection-highlight.test.mjs:536:1
+✖ browser draws HTML-only text as a visible PDF caret between text spans (4434.7926ms)
+  page.waitForFunction: Timeout 3000ms exceeded.
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.test.mjs:569:18) {
+    name: 'TimeoutError',
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.test.mjs:587:1
+✖ Monaco decorations appear on open and on cached PDF page changes without a selection (4432.4965ms)
+  page.waitForFunction: Timeout 3000ms exceeded.
+      at TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.test.mjs:633:16) {
+    name: 'TimeoutError',
+    log: []
+  }
+
+test at tests\pdf-selection-highlight.test.mjs:640:1
+✖ browser prepares diffs before selection and rebuilds mappings after source or PDF changes (1691.7522ms)
+  AssertionError [ERR_ASSERTION]: first selection reuses the startup alignment
+  
+  3 !== 1
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:703:12)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 3,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-highlight.test.mjs:915:1
+✖ PDF selection reveals matching Monaco source without stealing focus or feeding back (1539.2462ms)
+  AssertionError [ERR_ASSERTION]: unchanged multi-page HTML reuses its source index
+  
+  3 !== 1
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:1005:16)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 3,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-highlight.test.mjs:1034:1
+✖ ready OCR layer highlights partial words through full-file selections within 10 ms without rebuilding text mappings (3219.0863ms)
+  AssertionError [ERR_ASSERTION]: repeated selections reuse geometry for the 20 distinct ranges
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:1102:14)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-highlight.test.mjs:1163:1
+✖ ME34-010 and ME34-014 prepared OCR differences highlight before whole-PDF extraction (2607.181ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      {
+        html: 'Wage',
+  +     pdf: '„lVage'
+  -     pdf: 'lVage'
+      }
+    ]
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:1237:37)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { html: 'Wage', pdf: '„lVage' } ],
+    expected: [ { html: 'Wage', pdf: 'lVage' } ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests\pdf-selection-highlight.test.mjs:1405:1
+✖ scrolling across retained PDF pages bounds DOM caches and revisits rebuild current highlights (2879.2415ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  70 !== 24
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:1446:12)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 70,
+    expected: 24,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

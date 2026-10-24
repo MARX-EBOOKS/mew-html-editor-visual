@@ -1,16 +1,9 @@
-import { createRequire } from 'node:module';
-import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
-const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const server = spawn(process.execPath, ['server.js', '-p', '41873', '-r', 'public'], { windowsHide: true, stdio: 'ignore' });
-let browser;
+import { launchBrowser, startServer, stopServer } from './support/browser.mjs';
+let server, browser;
 try {
-  for (let i = 0; i < 80; i++) {
-    try { if ((await fetch('http://127.0.0.1:41873')).ok) break; } catch {}
-    await new Promise(r => setTimeout(r, 100));
-  }
-  browser = await chromium.launch({ executablePath: process.env.EDGE_PATH || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', headless: true });
+  server = await startServer('server.js', 41873, ['-r', 'public']);
+  browser = await launchBrowser();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -92,5 +85,5 @@ try {
   console.log('PASS: pane drag/close/reopen, keyboard resize, toolbar zoom, persisted layout, reset, floating toolbar, responsive preview, light/dark rendering');
 } finally {
   await browser?.close();
-  server.kill();
+  await stopServer(server);
 }

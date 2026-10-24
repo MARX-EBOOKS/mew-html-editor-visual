@@ -243,9 +243,7 @@ class PdfLocator {
         letters += count;
         if (style.bold === true) boldLetters += count;
       }
-      const dominantBold = letters > 0 && boldLetters / letters >= 0.8;
-      if (textFonts.size && [...textFonts].every(font => font.declaredBold === false))
-        for (const font of textFonts) { font.bold = null; font.reason += '：未保留粗体区分'; }
+      const dominantBold = letters > 0 && boldLetters / letters >= 0.9;
       for (const key of ['bold', 'italic']) {
         if (!textFonts.size || !(key === 'bold' && dominantBold) && ![...textFonts].every(font => font?.[key] === true)) continue;
         const reason = key === 'bold' && boldLetters < letters ? '大部分文字声明为粗体' : `均为${key === 'bold' ? '粗体' : '斜体'}`;
@@ -319,7 +317,7 @@ class PdfLocator {
           if (item.hasEOL) pageRaw += "\n";
           previous = item;
         }
-        pages.push({ number, start, end: start + pageRaw.length, parts });
+        pages.push({ number, start, end: start + pageRaw.length, parts, page });
         raw += pageRaw + "\n";
         if (!/[-\u2010\u2011]\s*$/.test(raw.slice(mappedStart))) {
           toolbox.normalized(raw.slice(mappedStart), mapped, mappedStart); mappedStart = raw.length;
@@ -350,9 +348,7 @@ class PdfLocator {
       await (entry.fontTask ||= (async () => {
         await this.environment.waitForIdle(pdf);
         if (!this.environment.isCurrent(pdf)) return;
-        const page = await pdf.getPage(entry.number);
-        if (!this.environment.isCurrent(pdf)) return;
-        const fonts = await this.readPageFonts(page, entry.parts.map(part => part.item));
+        const fonts = await this.readPageFonts(entry.page, entry.parts.map(part => part.item));
         if (!this.environment.isCurrent(pdf)) return;
         for (const part of entry.parts) part.font = textItemFont(fonts, part.item);
         index.fontVersion = (index.fontVersion || 0) + 1;

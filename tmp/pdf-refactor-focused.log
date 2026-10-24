@@ -1,0 +1,47 @@
+✔ prepared page reuse invalidates when connections or target pages change (10.0434ms)
+✔ candidate interval lookup retains overlap and insertion boundary rules (4.0719ms)
+✔ large selected passages share one comparison between replacement edits and popup rendering (31.1348ms)
+✔ review navigation reuses comparison diffs and invalidates changed readings (3.7559ms)
+✔ popup anchor reuses mappings and text geometry while following scrolling and changed connections (6.8434ms)
+✔ review popup navigates immediately without full model reads and coalesces scroll layout (3711.4923ms)
+✔ font detection preserves unknown attributes and merges only compatible UTF-16 runs (2.061ms)
+✖ OCR text indexing starts shared font detection and retains unavailable metadata as unknown (2.9772ms)
+✔ font edits move nearby bold and italic boundaries instead of duplicating wrappers (3.4667ms)
+✔ retained OCR font declarations participate in style comparison even when invisible or not embedded (2.925ms)
+✔ mixed visibility retains font declarations but failed inspection remains unknown (1.7138ms)
+✔ Tesseract placeholder fonts remain unknown and cannot produce surplus HTML style differences (1.9142ms)
+✔ locator returns page targets and rendered/source ranges without the highlight script (5.5928ms)
+✔ locator cancels obsolete extraction and keeps document caches per reader (1.1961ms)
+✔ source/PDF pairs reuse one snapshot and rebuild all mappings after edits (2.4313ms)
+✔ equal text stays unchanged and batch preview preserves all untouched text (2.7462ms)
+✔ compact review keeps distant differences without computing a second diff (3.2455ms)
+✔ local textDiff serves review candidates and popup comparisons (5.3504ms)
+✔ provider loads font/text and popup scripts before selection consumes its mapping API (7842.3168ms)
+✔ text-layer fallback stops on document change and failed extraction can retry (1.553ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 19
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 12184.2418
+
+✖ failing tests:
+
+test at tests\pdf-selection-diff.test.mjs:303:1
+✖ OCR text indexing starts shared font detection and retains unavailable metadata as unknown (2.9772ms)
+  AssertionError [ERR_ASSERTION]: the OCR page read starts font detection without a separate review pass
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:316:10)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

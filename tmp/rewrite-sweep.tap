@@ -1,0 +1,14 @@
+✔ prepared page reuse invalidates when connections or target pages change (7.8894ms)
+✔ background document mapping retains page font highlights alongside text differences (10.8357ms)
+✔ ME04-117 adjacent-page quotations cannot override a complete page mapping (49.7219ms)
+✔ text candidates, font candidates and decorations reuse one traversal and refresh font metadata (3.3713ms)
+✔ transient mapping eviction preserves every prepared passage and recent selections (6.3107ms)
+✔ passage pruning matches pairwise containment and ignores cache recency order (48.622ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 589.0795

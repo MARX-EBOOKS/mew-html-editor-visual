@@ -1,0 +1,77 @@
+{
+  "label": "baseline",
+  "readyMs": 3228,
+  "before": {
+    "pages": 748,
+    "current": 152,
+    "cached": 3,
+    "canvasMB": 8.202705383300781,
+    "textLayers": 2,
+    "indexReady": false,
+    "longTasks": {
+      "count": 2,
+      "total": 317,
+      "max": 261
+    },
+    "gaps": {
+      "max": 280.80000000004657,
+      "over100": 2
+    },
+    "selectionStatus": "idle",
+    "metrics": [
+      {
+        "name": "Nodes",
+        "value": 13722
+      },
+      {
+        "name": "LayoutCount",
+        "value": 67
+      },
+      {
+        "name": "TaskDuration",
+        "value": 1.837326
+      },
+      {
+        "name": "JSHeapUsedSize",
+        "value": 36144220
+      }
+    ]
+  },
+  "after": {
+    "pages": 748,
+    "current": 152,
+    "cached": 8,
+    "canvasMB": 21.614456176757812,
+    "textLayers": 6,
+    "indexReady": false,
+    "longTasks": {
+      "count": 1,
+      "total": 111,
+      "max": 111
+    },
+    "gaps": {
+      "max": 177.40000000002328,
+      "over100": 2
+    },
+    "selectionStatus": "searching",
+    "metrics": [
+      {
+        "name": "Nodes",
+        "value": 26037
+      },
+      {
+        "name": "LayoutCount",
+        "value": 216
+      },
+      {
+        "name": "TaskDuration",
+        "value": 6.076245
+      },
+      {
+        "name": "JSHeapUsedSize",
+        "value": 61123936
+      }
+    ]
+  },
+  "errors": []
+}

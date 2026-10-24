@@ -1,29 +1,16 @@
 // Run with PLAYWRIGHT_MODULE pointing to an installed playwright module.
-import { createRequire } from 'node:module';
-import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const root = fileURLToPath(new URL('..', import.meta.url));
+import { launchBrowser, startServer, stopServer } from './support/browser.mjs';
 const fixture = await mkdtemp(path.join(tmpdir(), 'mew-doc-browser-'));
 const html = label => `<!doctype html>\n<html><head><title>Test</title></head><body><p>${label}</p></body></html>`;
 const base = html('original'), second = html('second');
 const servers = [];
 let browser;
 async function start(script, port, args) {
-  const child = spawn(process.execPath, [script, '-p', String(port), ...args], { cwd: root, windowsHide: true, stdio: 'pipe' });
-  servers.push(child);
-  let output = ''; child.stdout.on('data', d => { output += d; }); child.stderr.on('data', d => { output += d; });
-  for (let i = 0; i < 80; i++) {
-    if (child.exitCode != null) throw new Error(output);
-    try { const r = await fetch(`http://127.0.0.1:${port}/`); if (r.ok) return; } catch {}
-    await new Promise(r => setTimeout(r, 100));
-  }
-  throw new Error(`Server timeout: ${output}`);
+  servers.push(await startServer(script, port, args));
 }
 async function diskEquals(file, expected) {
   for (let i = 0; i < 80; i++) {
@@ -70,12 +57,40 @@ try {
   const tabFiles = Array.from({ length: 12 }, (_, index) => `legacy-long-tab-name-${String(index + 1).padStart(2, '0')}.html`);
   for (const file of tabFiles) await writeFile(path.join(fixture, file), html(file));
   await writeFile(readerFile, base); await writeFile(path.join(folder, 'ME01-002.html'), second);
-  await writeFile(path.join(fixture, 'config.mjs'), 'export default { htmlRoot: ".", volumes: [{id:"1"}] };');
+  await writeFile(path.join(fixture, 'config.json'), JSON.stringify({ volumes: [{ id: '1', pages: { directory: '1', pattern: '^ME01-([0-9]+)[.]html$' }, pdf: 'missing.pdf' }] }));
   await start('server.js', 41871, ['-r', fixture]);
-  await start('reader-server.js', 41872, ['-c', path.join(fixture, 'config.mjs')]);
-  browser = await chromium.launch({ executablePath: process.env.EDGE_PATH || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', headless: true });
+  await start('reader-server.js', 41872, ['-c', path.join(fixture, 'config.json')]);
+  browser = await launchBrowser();
   const context = await browser.newContext();
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:41872' });
+  // Directory events can refresh navigation before the initial HTML request finishes.
+  {
+    const page = await context.newPage();
+    let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    await page.addInitScript(() => {
+      window.startupErrors = [];
+      new MutationObserver(() => {
+        const text = document.querySelector('.statusbar')?.textContent || '';
+        if (text.includes("reading 'pages'")) window.startupErrors.push(text);
+      }).observe(document, { childList: true, characterData: true, subtree: true });
+    });
+    await page.route('**/api/reader/page/**', async route => { await pending; await route.continue(); });
+    try {
+      let configs = 0;
+      const refreshed = page.waitForResponse(response => response.url().endsWith('/api/reader/config') && ++configs === 2);
+      await page.goto('http://127.0.0.1:41872/?volume=1&page=1&mode=source');
+      await refreshed;
+      await page.waitForTimeout(250);
+      assert.deepEqual(await page.evaluate(() => window.startupErrors), [], 'directory refresh before navigation has no current volume yet');
+      release();
+      await valueEquals(page, base);
+      assert.deepEqual(await page.evaluate(() => window.startupErrors), []);
+    } finally {
+      release();
+      await page.close();
+    }
+  }
   const readerVariants = process.env.READER_ONLY ? [true] : [false, true];
   // Real textareas normalize line endings; opening/switching/saving must not
   // treat that or the visual DOM's HTML serialization as a user edit.
@@ -299,9 +314,14 @@ try {
       await diskEquals(file, shortcutText);
       console.log('reader: Monaco tag edit / native undo-redo / native find-replace / Ctrl+S passed');
       const navigationText = html('save before navigation'); await type(page, navigationText);
-      await page.locator('#nextPageBtn').click(); await valueEquals(page, second);
+      assert.equal(await page.locator('.text-pane footer #languageInfo').textContent(), 'HTML · UTF-8');
+      await page.evaluate(() => readerMonaco.editor.setPosition({ lineNumber: 2, column: 3 }));
+      assert.equal(await page.locator('#positionInfo').textContent(), 'Ln 2, Col 3');
+      assert.equal(await page.locator('#prevFileBtn').isDisabled(), true);
+      await page.locator('#nextFileBtn').click(); await valueEquals(page, second);
       await diskEquals(file, navigationText);
-      await page.locator('#prevBtn').click(); await valueEquals(page, navigationText);
+      assert.equal(await page.locator('#nextFileBtn').isDisabled(), true);
+      await page.locator('#prevFileBtn').click(); await valueEquals(page, navigationText);
       await page.locator('#modeBtn').click();
       const body = page.frameLocator('#visualEditor').locator('body');
       await body.waitFor(); await body.fill('visual edit');
@@ -475,10 +495,7 @@ try {
   console.log('reader: split button and combined-mode restoration passed');
 } finally {
   await browser?.close();
-  await Promise.all(servers.map(child => new Promise(resolve => {
-    if (child.exitCode != null) return resolve();
-    child.once('exit', resolve); child.kill();
-  })));
+  await Promise.all(servers.map(stopServer));
   // Only the unique temporary directory created above is removed.
   if (path.dirname(fixture) === path.resolve(tmpdir()) && path.basename(fixture).startsWith('mew-doc-browser-')) await rm(fixture, { recursive: true, force: true });
 }

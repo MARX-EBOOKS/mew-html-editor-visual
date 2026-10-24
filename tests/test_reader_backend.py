@@ -1,7 +1,6 @@
 """Reader migration contracts and persistent OCR sequence regression checks."""
 from concurrent.futures import ThreadPoolExecutor
 import importlib.util
-import gzip
 import json
 import os
 from pathlib import Path
@@ -319,7 +318,7 @@ class ReaderBackendTests(unittest.TestCase):
         self.assertEqual(styles['Larger']['size'], 22)
         self.assertEqual(index.browser(), rebuilt)
 
-    def test_page_results_regenerate_if_missing_and_compress_without_size_limit(self):
+    def test_plain_json_pages_regenerate_if_missing_and_preserve_large_results(self):
         generate_pdf_text(self.pdf, self.root)
         target = cache_path(self.pdf, self.root)
         manifest = load_browser(self.pdf, self.root)
@@ -331,7 +330,7 @@ class ReaderBackendTests(unittest.TestCase):
         generate_pdf_text(self.pdf, self.root)
         index = PdfTextIndex(self.pdf, cache_dir=self.root)
         self.assertTrue(page.is_file())
-        self.assertEqual(page.suffix, '.gz')
+        self.assertEqual(page.suffix, '.json')
         # A serialized page over the former limit must still save losslessly.
         index.text = 'x' * 5_000_001 + '\n'
         end = len(index.text)
@@ -339,8 +338,8 @@ class ReaderBackendTests(unittest.TestCase):
         index.pages[0].update(start=0, end=end, parts=spans,
             blocks=[dict(start=0, end=end, lines=[dict(start=0, end=end, spans=spans)])])
         index.save(target)
-        self.assertGreater(len(gzip.decompress(page.read_bytes())), 5_000_000)
-        self.assertLess(page.stat().st_size, 5_000_000)
+        self.assertGreater(page.stat().st_size, 5_000_000)
+        self.assertEqual(json.loads(page.read_text('utf-8'))['comparison']['raw'], index.text)
         self.assertEqual(PdfTextIndex(self.pdf, cache_dir=self.root).browser(), index.browser())
         self.assertEqual([target.parent.name], [p.name for p in target.parent.parent.iterdir()])
 

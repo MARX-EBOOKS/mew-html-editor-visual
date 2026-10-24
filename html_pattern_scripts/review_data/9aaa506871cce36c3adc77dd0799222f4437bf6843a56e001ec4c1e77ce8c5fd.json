@@ -1,0 +1,53 @@
+[
+  {
+    "id": "1dbbfbb0d87250507116",
+    "version": "dc67238eb09f99a079546691ba8bcf1281edf39d0720c56de7fce0e3f7a38c1d",
+    "choice": "ocr",
+    "path": "16/ME16-526.html",
+    "purpose": "ocr",
+    "pattern": "ocr",
+    "old": "c",
+    "new": "z",
+    "edits": [
+      [
+        265,
+        266,
+        "z"
+      ]
+    ]
+  },
+  {
+    "id": "608042b8db777fe2a6a9",
+    "version": "dcc65dcda4440e81800df7da9833e28750d0edf7cccdcb2b7e9458a7b1d0b5cf",
+    "choice": "ocr",
+    "path": "16/ME16-526.html",
+    "purpose": "ocr",
+    "pattern": "ocr",
+    "old": "c",
+    "new": "z",
+    "edits": [
+      [
+        389,
+        390,
+        "z"
+      ]
+    ]
+  },
+  {
+    "id": "062712ab3a3d319201c9",
+    "version": "78cd0a8685e24092c7d0b74f579f2e41b690e49275f096704209a517abe7104d",
+    "choice": "ocr",
+    "path": "16/ME16-526.html",
+    "purpose": "ocr",
+    "pattern": "ocr",
+    "old": "e",
+    "new": "",
+    "edits": [
+      [
+        1745,
+        1746,
+        ""
+      ]
+    ]
+  }
+]

@@ -1,0 +1,833 @@
+TAP version 13
+# Subtest: PDF newline differences use a caret without highlighting adjacent letters
+ok 1 - PDF newline differences use a caret without highlighting adjacent letters
+  ---
+  duration_ms: 8.4302
+  type: 'test'
+  ...
+# Subtest: font detection preserves unknown attributes and merges only compatible UTF-16 runs
+ok 2 - font detection preserves unknown attributes and merges only compatible UTF-16 runs
+  ---
+  duration_ms: 1.2847
+  type: 'test'
+  ...
+# Subtest: independent text differences stay separate across tags while format runs retain their grouping
+not ok 3 - independent text differences stay separate across tags while format runs retain their grouping
+  ---
+  duration_ms: 12.3351
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:79:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    +   'a',
+    +   'b',
+    +   'c',
+    +   'd',
+    +   'E',
+    +   'F'
+    -   'ab cd',
+    -   'EF'
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 'ab cd'
+    1: 'EF'
+  actual:
+    0: 'a'
+    1: 'b'
+    2: 'c'
+    3: 'd'
+    4: 'E'
+    5: 'F'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:99:10)
+    Test.runInAsyncScope (node:async_hooks:226:14)
+    Test.run (node:internal/test_runner/test:1201:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+    Test.postRun (node:internal/test_runner/test:1330:19)
+    Test.run (node:internal/test_runner/test:1258:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: font indexing is explicit, cached, and retains unavailable font metadata as unknown
+ok 4 - font indexing is explicit, cached, and retains unavailable font metadata as unknown
+  ---
+  duration_ms: 1.8552
+  type: 'test'
+  ...
+# Subtest: page-uniform styles become unknown independently of other pages
+not ok 5 - page-uniform styles become unknown independently of other pages
+  ---
+  duration_ms: 4.5286
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:127:1'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading '0')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    fontEdits (evalmachine.<anonymous>:194:25)
+    evalmachine.<anonymous>:281:40
+    Array.map (<anonymous>)
+    Object.formatDifferences (evalmachine.<anonymous>:279:19)
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:160:27)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: uniform page styles are unknown even while later pages are pending
+ok 6 - uniform page styles are unknown even while later pages are pending
+  ---
+  duration_ms: 1.367
+  type: 'test'
+  ...
+# Subtest: native selections suppress page-uniform styles without checking other pages
+ok 7 - native selections suppress page-uniform styles without checking other pages
+  ---
+  duration_ms: 1576.3593
+  type: 'test'
+  ...
+# Subtest: format differences include missing, surplus and partially marked bold italic
+not ok 8 - format differences include missing, surplus and partially marked bold italic
+  ---
+  duration_ms: 3.2015
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:236:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    +   'A',
+    +   'B',
+    +   'C',
+    -   'A B C',
+        '𠀀'
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 'A B C'
+    1: '𠀀'
+  actual:
+    0: 'A'
+    1: 'B'
+    2: 'C'
+    3: '𠀀'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:260:10)
+    Test.runInAsyncScope (node:async_hooks:226:14)
+    Test.run (node:internal/test_runner/test:1201:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+    Test.postRun (node:internal/test_runner/test:1330:19)
+    Test.run (node:internal/test_runner/test:1258:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: font edits move nearby bold and italic boundaries instead of duplicating wrappers
+ok 9 - font edits move nearby bold and italic boundaries instead of duplicating wrappers
+  ---
+  duration_ms: 1.8618
+  type: 'test'
+  ...
+# Subtest: font edits reuse source coordinates and preserve entities, attributes and inline structure
+not ok 10 - font edits reuse source coordinates and preserve entities, attributes and inline structure
+  ---
+  duration_ms: 1.5147
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:305:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + '<p id="keep"><i>A</i><b>&amp;<a href="/keep">𠀀B</b><i></a>C</i></p>'
+    - '<p id="keep"><i>A</i><span style="font-weight:bold">&amp;</span><a href="/keep"><span style="font-weight:bold">𠀀B</span></a><i>C</i></p>'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: '<p id="keep"><i>A</i><span style="font-weight:bold">&amp;</span><a href="/keep"><span style="font-weight:bold">𠀀B</span></a><i>C</i></p>'
+  actual: '<p id="keep"><i>A</i><b>&amp;<a href="/keep">𠀀B</b><i></a>C</i></p>'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:314:10)
+    Test.runInAsyncScope (node:async_hooks:226:14)
+    Test.run (node:internal/test_runner/test:1201:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+    Test.postRun (node:internal/test_runner/test:1330:19)
+    Test.run (node:internal/test_runner/test:1258:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: normal PDF formatting removes surplus tags and preserves formatting outside a partial correction
+not ok 11 - normal PDF formatting removes surplus tags and preserves formatting outside a partial correction
+  ---
+  duration_ms: 1.3732
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:319:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + '<p>Vorträge über die Grundlagen</p>'
+    - '<p><span style="color:red">Vorträge über die Grundlagen</span></p>'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: '<p><span style="color:red">Vorträge über die Grundlagen</span></p>'
+  actual: '<p>Vorträge über die Grundlagen</p>'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:329:12)
+    Test.runInAsyncScope (node:async_hooks:226:14)
+    Test.run (node:internal/test_runner/test:1201:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+    Test.postRun (node:internal/test_runner/test:1330:19)
+    Test.run (node:internal/test_runner/test:1258:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: retained OCR font declarations participate in style comparison even when invisible or not embedded
+ok 12 - retained OCR font declarations participate in style comparison even when invisible or not embedded
+  ---
+  duration_ms: 0.8975
+  type: 'test'
+  ...
+# Subtest: mixed visibility retains font declarations but failed inspection remains unknown
+ok 13 - mixed visibility retains font declarations but failed inspection remains unknown
+  ---
+  duration_ms: 0.8059
+  type: 'test'
+  ...
+# Subtest: review font loading uses metadata without reading scan pixels
+ok 14 - review font loading uses metadata without reading scan pixels
+  ---
+  duration_ms: 5.6443
+  type: 'test'
+  ...
+# Subtest: Tesseract placeholder fonts remain unknown and cannot produce surplus HTML style differences
+ok 15 - Tesseract placeholder fonts remain unknown and cannot produce surplus HTML style differences
+  ---
+  duration_ms: 1.1591
+  type: 'test'
+  ...
+# Subtest: PDF.js detects four actual PDF faces in file review and native selections
+ok 16 - PDF.js detects four actual PDF faces in file review and native selections
+  ---
+  duration_ms: 7637.9774
+  type: 'test'
+  ...
+# Subtest: locator returns page targets and rendered/source ranges without the highlight script
+ok 17 - locator returns page targets and rendered/source ranges without the highlight script
+  ---
+  duration_ms: 3.7806
+  type: 'test'
+  ...
+# Subtest: ME32-007 reverse selections reuse OCR alignment around Gewißheit
+not ok 18 - ME32-007 reverse selections reuse OCR alignment around Gewißheit
+  ---
+  duration_ms: 86.9184
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:724:1'
+  failureType: 'testCodeFailure'
+  error: 'reverse selection of hatte must survive neighbouring OCR errors'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: ~
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:740:12)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: background document mapping retains page font highlights alongside text differences
+not ok 19 - background document mapping retains page font highlights alongside text differences
+  ---
+  duration_ms: 2.9677
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:749:1'
+  failureType: 'testCodeFailure'
+  error: 'api.sourceDecorations is not a function'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    marks (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:765:32)
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:767:16)
+    Test.runInAsyncScope (node:async_hooks:226:14)
+    Test.run (node:internal/test_runner/test:1201:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+    Test.postRun (node:internal/test_runner/test:1330:19)
+    Test.run (node:internal/test_runner/test:1258:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: locator cancels obsolete extraction and keeps document caches per reader
+ok 20 - locator cancels obsolete extraction and keeps document caches per reader
+  ---
+  duration_ms: 0.9368
+  type: 'test'
+  ...
+# Subtest: source/PDF pairs reuse one snapshot and rebuild all mappings after edits
+ok 21 - source/PDF pairs reuse one snapshot and rebuild all mappings after edits
+  ---
+  duration_ms: 1.6415
+  type: 'test'
+  ...
+# Subtest: MEW_BRIEF/23/ME23-316 prepares reusable mappings across five actual OCR pages
+not ok 22 - MEW_BRIEF/23/ME23-316 prepares reusable mappings across five actual OCR pages
+  ---
+  duration_ms: 143.8137
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:824:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    inverse mappings reuse the forward character diffs
+    
+    88 !== 15
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 15
+  actual: 88
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:840:10)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: long multi-page passages retain OCR mappings beyond the whole-range edit limit
+ok 23 - long multi-page passages retain OCR mappings beyond the whole-range edit limit
+  ---
+  duration_ms: 821.9187
+  type: 'test'
+  ...
+# Subtest: Monaco ranges take priority; missing, failed, timed-out and incomplete results fall back
+ok 24 - Monaco ranges take priority; missing, failed, timed-out and incomplete results fall back
+  ---
+  duration_ms: 1.4495
+  type: 'test'
+  ...
+# Subtest: highlight hunks separate OCR boundary spaces beyond the whole-passage refinement budget
+ok 25 - highlight hunks separate OCR boundary spaces beyond the whole-passage refinement budget
+  ---
+  duration_ms: 4.7478
+  type: 'test'
+  ...
+# Subtest: ME04-608 wrapped prose stays aligned across blank-line anchors
+ok 26 - ME04-608 wrapped prose stays aligned across blank-line anchors
+  ---
+  duration_ms: 9.6834
+  type: 'test'
+  ...
+# Subtest: bounded anchor checks reject impossible lengths before invoking Monaco
+ok 27 - bounded anchor checks reject impossible lengths before invoking Monaco
+  ---
+  duration_ms: 10.4111
+  type: 'test'
+  ...
+# Subtest: shared textDiff applies a one-second Monaco budget and falls back per comparison
+ok 28 - shared textDiff applies a one-second Monaco budget and falls back per comparison
+  ---
+  duration_ms: 1.2471
+  type: 'test'
+  ...
+# Subtest: installed Monaco preserves complete Unicode readings and maps source positions in both directions
+ok 29 - installed Monaco preserves complete Unicode readings and maps source positions in both directions
+  ---
+  duration_ms: 2.129
+  type: 'test'
+  ...
+# Subtest: native decorations split changes around tags, map entities, and mark missing HTML text
+ok 30 - native decorations split changes around tags, map entities, and mark missing HTML text
+  ---
+  duration_ms: 3.0237
+  type: 'test'
+  ...
+# Subtest: ME04-004 quote markers exclude matching paragraphs, PDF wrapping and the footnote
+not ok 31 - ME04-004 quote markers exclude matching paragraphs, PDF wrapping and the footnote
+  ---
+  duration_ms: 14.9398
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:1053:1'
+  failureType: 'testCodeFailure'
+  error: 'api.sourceDecorations is not a function'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1066:21)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: ME04-117 case-only differences survive selection mapping in both directions
+ok 32 - ME04-117 case-only differences survive selection mapping in both directions
+  ---
+  duration_ms: 4.0249
+  type: 'test'
+  ...
+# Subtest: ME07-073 and ME07-074 alignment excludes neighboring pages and preserves the final punctuation
+ok 33 - ME07-073 and ME07-074 alignment excludes neighboring pages and preserves the final punctuation
+  ---
+  duration_ms: 611.6472
+  type: 'test'
+  ...
+# Subtest: ME07-066 missing page-end text maps before whole-document indexing
+ok 34 - ME07-066 missing page-end text maps before whole-document indexing
+  ---
+  duration_ms: 103.9832
+  type: 'test'
+  ...
+# Subtest: ME04-117 adjacent-page quotations cannot override a complete page mapping
+not ok 35 - ME04-117 adjacent-page quotations cannot override a complete page mapping
+  ---
+  duration_ms: 41.7707
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:1165:1'
+  failureType: 'testCodeFailure'
+  error: 'api.sourceDecorations is not a function'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1178:21)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: ME04-037 keeps the matching heading out of deletion/reinsertion markers
+not ok 36 - ME04-037 keeps the matching heading out of deletion/reinsertion markers
+  ---
+  duration_ms: 18.2373
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:1185:1'
+  failureType: 'testCodeFailure'
+  error: 'api.sourceDecorations is not a function'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1196:23)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: source decorations ignore whitespace and hyphens while preserving subsequent character offsets
+not ok 37 - source decorations ignore whitespace and hyphens while preserving subsequent character offsets
+  ---
+  duration_ms: 0.9159
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:1215:1'
+  failureType: 'testCodeFailure'
+  error: 'api.sourceDecorations is not a function'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    decorate (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1219:38)
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1230:19)
+    Test.runInAsyncScope (node:async_hooks:226:14)
+    Test.run (node:internal/test_runner/test:1201:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+    Test.postRun (node:internal/test_runner/test:1330:19)
+    Test.run (node:internal/test_runner/test:1258:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: source markers locate Monaco changes at word boundaries, inside words and beside repeated characters
+ok 38 - source markers locate Monaco changes at word boundaries, inside words and beside repeated characters
+  ---
+  duration_ms: 2.686
+  type: 'test'
+  ...
+# Subtest: Monaco standalone renders native source-line and exact character decorations
+not ok 39 - Monaco standalone renders native source-line and exact character decorations
+  ---
+  duration_ms: 7595.7741
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:1277:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    page.evaluate: TypeError: PdfSelectionDiff.sourceDecorations is not a function
+        at eval (eval at evaluate (:311:30), <anonymous>:5:74)
+        at async <anonymous>:337:30
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    eval (eval at evaluate (:311:30), <anonymous>:5:74)
+    async <anonymous>:337:30
+    TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-diff.test.mjs:1300:16)
+  ...
+# Subtest: browser loads Monaco ESM through static assets and uses its character ranges
+ok 40 - browser loads Monaco ESM through static assets and uses its character ranges
+  ---
+  duration_ms: 7410.6247
+  type: 'test'
+  ...
+# Subtest: concurrent page extraction is shared across locators and failures can retry
+ok 41 - concurrent page extraction is shared across locators and failures can retry
+  ---
+  duration_ms: 1.5183
+  type: 'test'
+  ...
+# Subtest: equal text skips Monaco computation and batch preview preserves all untouched text
+ok 42 - equal text skips Monaco computation and batch preview preserves all untouched text
+  ---
+  duration_ms: 0.7453
+  type: 'test'
+  ...
+# Subtest: PDF replacement batches identical patterns and retains different text or formatting targets
+not ok 43 - PDF replacement batches identical patterns and retains different text or formatting targets
+  ---
+  duration_ms: 4.995
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-diff.test.mjs:1605:1'
+  failureType: 'testCodeFailure'
+  error: 'incremental replacement must preserve existing candidates'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    api.reviewCandidates (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1646:42)
+    reviewItems (evalmachine.<anonymous>:107:34)
+    refreshCandidates (evalmachine.<anonymous>:87:19)
+    Object.apply (evalmachine.<anonymous>:163:17)
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-diff.test.mjs:1647:45)
+    Test.runInAsyncScope (node:async_hooks:226:14)
+    Test.run (node:internal/test_runner/test:1201:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+    Test.postRun (node:internal/test_runner/test:1330:19)
+    Test.run (node:internal/test_runner/test:1258:12)
+  ...
+# Subtest: compact review keeps distant differences without computing a second diff
+ok 44 - compact review keeps distant differences without computing a second diff
+  ---
+  duration_ms: 1.9759
+  type: 'test'
+  ...
+# Subtest: local textDiff replaces Monaco for review candidates and popup comparisons
+ok 45 - local textDiff replaces Monaco for review candidates and popup comparisons
+  ---
+  duration_ms: 2.3134
+  type: 'test'
+  ...
+# Subtest: browser loads the local substitute when Monaco assets are unavailable
+ok 46 - browser loads the local substitute when Monaco assets are unavailable
+  ---
+  duration_ms: 7550.7252
+  type: 'test'
+  ...
+# Subtest: source edits rebuild mappings before either selection direction consumes them
+ok 47 - source edits rebuild mappings before either selection direction consumes them
+  ---
+  duration_ms: 5.9926
+  type: 'test'
+  ...
+# Subtest: context distinguishes repeated words and rejects ties or conflicting context
+ok 48 - context distinguishes repeated words and rejects ties or conflicting context
+  ---
+  duration_ms: 0.8921
+  type: 'test'
+  ...
+# Subtest: normalization preserves source offsets through ligatures and line hyphenation
+ok 49 - normalization preserves source offsets through ligatures and line hyphenation
+  ---
+  duration_ms: 0.3501
+  type: 'test'
+  ...
+# Subtest: incremental normalization preserves whitespace and Unicode offsets across complete lines
+ok 50 - incremental normalization preserves whitespace and Unicode offsets across complete lines
+  ---
+  duration_ms: 1.4182
+  type: 'test'
+  ...
+# Subtest: partial words retain precise offsets and context resolves overlapping occurrences
+ok 51 - partial words retain precise offsets and context resolves overlapping occurrences
+  ---
+  duration_ms: 1.8481
+  type: 'test'
+  ...
+# Subtest: Chinese selections match inside continuous text with UTF-16 offsets
+ok 52 - Chinese selections match inside continuous text with UTF-16 offsets
+  ---
+  duration_ms: 0.3999
+  type: 'test'
+  ...
+# Subtest: context locates small differences in either direction, including partial words
+ok 53 - context locates small differences in either direction, including partial words
+  ---
+  duration_ms: 2.6646
+  type: 'test'
+  ...
+# Subtest: tolerance rejects missing context, large differences, short selections and ambiguous locations
+ok 54 - tolerance rejects missing context, large differences, short selections and ambiguous locations
+  ---
+  duration_ms: 0.7064
+  type: 'test'
+  ...
+# Subtest: bounded distance agrees with full alignment for Unicode, insertions and deletions
+ok 55 - bounded distance agrees with full alignment for Unicode, insertions and deletions
+  ---
+  duration_ms: 53.5869
+  type: 'test'
+  ...
+# Subtest: compact traceback agrees with an independent edit-distance oracle across wider bands
+ok 56 - compact traceback agrees with an independent edit-distance oracle across wider bands
+  ---
+  duration_ms: 74.3736
+  type: 'test'
+  ...
+# Subtest: long German and unspaced Chinese selections align internal note markers with both boundaries
+ok 57 - long German and unspaced Chinese selections align internal note markers with both boundaries
+  ---
+  duration_ms: 8.5486
+  type: 'test'
+  ...
+# Subtest: confirmed diffs map inner selections both ways, including changed runs and deleted characters
+ok 58 - confirmed diffs map inner selections both ways, including changed runs and deleted characters
+  ---
+  duration_ms: 1.763
+  type: 'test'
+  ...
+# Subtest: startup alignment maps a single damaged Chinese character without spaces or a prior selection
+ok 59 - startup alignment maps a single damaged Chinese character without spaces or a prior selection
+  ---
+  duration_ms: 2.8324
+  type: 'test'
+  ...
+# Subtest: connections reuse whole-text indexes and alignments while respecting partial-range boundaries
+ok 60 - connections reuse whole-text indexes and alignments while respecting partial-range boundaries
+  ---
+  duration_ms: 0.3125
+  type: 'test'
+  ...
+# Subtest: page preparation reuses retained anchor mappings without repeating comparisons
+not ok 61 - page preparation reuses retained anchor mappings without repeating comparisons
+  ---
+  duration_ms: 13.7095
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-highlight.test.mjs:271:1'
+  failureType: 'testCodeFailure'
+  error: 'initial preparation validates uncached gaps'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:287:10)
+    Test.runInAsyncScope (node:async_hooks:226:14)
+    Test.run (node:internal/test_runner/test:1201:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+    Test.postRun (node:internal/test_runner/test:1330:19)
+    Test.run (node:internal/test_runner/test:1258:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: failed page preparation is cached until the source or PDF layer changes
+ok 62 - failed page preparation is cached until the source or PDF layer changes
+  ---
+  duration_ms: 4.7542
+  type: 'test'
+  ...
+# Subtest: last fallback searches all patched words without changing substrings or trusting conflicting patches
+ok 63 - last fallback searches all patched words without changing substrings or trusting conflicting patches
+  ---
+  duration_ms: 1.3341
+  type: 'test'
+  ...
+# Subtest: browser draws selected ranges and nearby diffs for tolerant matches
+ok 64 - browser draws selected ranges and nearby diffs for tolerant matches
+  ---
+  duration_ms: 7849.9526
+  type: 'test'
+  ...
+# Subtest: review highlights all supplied occurrences across PDF pages and clears them together
+ok 65 - review highlights all supplied occurrences across PDF pages and clears them together
+  ---
+  duration_ms: 1346.3864
+  type: 'test'
+  ...
+# Caret fixture middle {
+#   state: 'idle',
+#   pages: [ { pageNumber: 1, source: 'pdf-text', matches: 1, pending: false } ],
+#   matches: 1,
+#   differences: [ { pageNumber: 1, html: 'EXTRA', pdf: 'T' } ],
+#   error: null,
+#   mode: 'exact'
+# }
+# Subtest: browser draws HTML-only text as a visible PDF caret between text spans
+not ok 66 - browser draws HTML-only text as a visible PDF caret between text spans
+  ---
+  duration_ms: 4317.9827
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-highlight.test.mjs:504:1'
+  failureType: 'testCodeFailure'
+  error: 'page.waitForFunction: Timeout 3000ms exceeded.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TimeoutError'
+  stack: |-
+    TestContext.<anonymous> (D:\马恩列总装\mew-html-editor-visual\tests\pdf-selection-highlight.test.mjs:535:18)
+  ...
+# Subtest: browser prepares diffs before selection and rebuilds mappings after source or PDF changes
+not ok 67 - browser prepares diffs before selection and rebuilds mappings after source or PDF changes
+  ---
+  duration_ms: 1489.2641
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-highlight.test.mjs:551:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    first selection reuses the startup alignment
+    
+    6 !== 2
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  actual: 6
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:614:12)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: browser reveals a bottom-of-page selection without exposing the next page
+ok 68 - browser reveals a bottom-of-page selection without exposing the next page
+  ---
+  duration_ms: 1287.5586
+  type: 'test'
+  ...
+# Subtest: browser selects one contextual occurrence, scrolls offscreen, and retains ambiguous fallback
+ok 69 - browser selects one contextual occurrence, scrolls offscreen, and retains ambiguous fallback
+  ---
+  duration_ms: 2662.5781
+  type: 'test'
+  ...
+# Subtest: PDF selection reveals matching Monaco source without stealing focus or feeding back
+not ok 70 - PDF selection reveals matching Monaco source without stealing focus or feeding back
+  ---
+  duration_ms: 1292.7293
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-highlight.test.mjs:826:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    unchanged multi-page HTML reuses its source index
+    
+    5 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 5
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:916:16)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Ready-layer selection latency (exact, 100 selections, 100 pages, 1500 spans, up to 15 KB): {
+#   p50: 1.5,
+#   p95: 44.600000001490116,
+#   max: 70.09999999776483,
+#   walks: 0,
+#   rangeReads: 7930,
+#   sourceReads: 1
+# }
+# Subtest: ready OCR layer highlights partial words through full-file selections within 10 ms without rebuilding text mappings
+not ok 71 - ready OCR layer highlights partial words through full-file selections within 10 ms without rebuilding text mappings
+  ---
+  duration_ms: 3298.2546
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-highlight.test.mjs:945:1'
+  failureType: 'testCodeFailure'
+  error: 'repeated selections reuse geometry for the 20 distinct ranges'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:1013:14)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# 15 KB complete character diff latency: [
+#   {
+#     kind: 'substitutions',
+#     bytes: 15000,
+#     edits: 87,
+#     p50: 1.0999999977648258,
+#     max: 7.899999998509884
+#   },
+#   {
+#     kind: 'mixed edits',
+#     bytes: 15000,
+#     edits: 87,
+#     p50: 1,
+#     max: 1.699999999254942
+#   },
+#   {
+#     kind: 'substitutions',
+#     bytes: 15000,
+#     edits: 47,
+#     p50: 0.6999999992549419,
+#     max: 1.8999999985098839
+#   },
+#   {
+#     kind: 'mixed edits',
+#     bytes: 15000,
+#     edits: 47,
+#     p50: 0.8999999985098839,
+#     max: 1.6000000014901161
+#   }
+# ]
+# Subtest: 15 KB character diffs complete within 50 ms with complete Unicode traceback
+ok 72 - 15 KB character diffs complete within 50 ms with complete Unicode traceback
+  ---
+  duration_ms: 1368.8706
+  type: 'test'
+  ...
+# Subtest: ME34-010 and ME34-014 prepared OCR differences highlight before whole-PDF extraction
+not ok 73 - ME34-010 and ME34-014 prepared OCR differences highlight before whole-PDF extraction
+  ---
+  duration_ms: 2849.3512
+  type: 'test'
+  location: 'D:\\马恩列总装\\mew-html-editor-visual\\tests\\pdf-selection-highlight.test.mjs:1074:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        {
+          html: 'Wage',
+    +     pdf: '„lVage'
+    -     pdf: 'lVage'
+        }
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      html: 'Wage'
+      pdf: 'lVage'
+  actual:
+    0:
+      html: 'Wage'
+      pdf: '„lVage'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///D:/%E9%A9%AC%E6%81%A9%E5%88%97%E6%80%BB%E8%A3%85/mew-html-editor-visual/tests/pdf-selection-highlight.test.mjs:1148:37)
+    async Test.run (node:internal/test_runner/test:1208:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:831:7)
+  ...
+# Subtest: native PDF and text scrolling stays free and cancels late automatic positioning
+ok 74 - native PDF and text scrolling stays free and cancels late automatic positioning
+  ---
+  duration_ms: 2698.8574
+  type: 'test'
+  ...
+1..74
+# tests 74
+# suites 0
+# pass 54
+# fail 20
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 65234.688

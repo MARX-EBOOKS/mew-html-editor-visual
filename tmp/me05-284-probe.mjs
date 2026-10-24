@@ -1,0 +1,13 @@
+import {readFile,writeFile} from 'node:fs/promises';
+import {engine} from '../tests/support/pdf-harness.mjs';
+const api=engine(), loc=new api.PdfLocator({}, {document:{createElement:()=>({})}});
+const fixture=JSON.parse(await readFile('tmp/me05-281-alignment-fixture.json','utf8'));
+const source=await readFile('../MEW_BRIEF/5/ME05-284.html','utf8');
+const full=new api.PdfSourceIndex(loc,{raw:fixture.pdf,pages:fixture.pages});
+const index=loc.sourceIndex(source); loc.prepareSource(index,[full],{});
+const pairs=index.connectionPairs([full]);
+console.log('CONNECTIONS',pairs.map(([c,t])=>({start:c.start,end:c.end,targetStart:c.targetStart,targetEnd:c.targetEnd,head:index.raw.slice(c.start,c.start+80),targetHead:t.raw.slice(c.targetStart,c.targetStart+80)})));
+console.log('CANDIDATES',JSON.stringify(index.reviewCandidates([full]).map(i=>({start:i.sourceStart,end:i.sourceEnd,comparison:i.comparison})),null,2));
+const start=Math.min(...pairs.map(([c])=>c.targetStart)),end=Math.max(...pairs.map(([c])=>c.targetEnd));
+await writeFile('tmp/me05-284-fixture.json',JSON.stringify({source,pdf:full.raw.slice(start,end)}));
+console.log('PDF',full.raw.slice(start,end));

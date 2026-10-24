@@ -1,5 +1,4 @@
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { launchBrowser, startServer, stopServer } from './support/browser.mjs';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,14 +14,10 @@ const fixture = await mkdtemp(path.join(tmpdir(), 'mew-monaco-'));
   await writeFile(path.join(fixture, 'README'), 'plain text');
 const tabFiles = Array.from({ length: 12 }, (_, index) => `long-tab-name-${String(index + 1).padStart(2, '0')}.html`);
 for (const file of tabFiles) await writeFile(path.join(fixture, file), `<p>${file}</p>`);
-const server = spawn(process.execPath, ['server.js', '-p', '41874', '-r', fixture], { windowsHide: true, stdio: 'pipe' });
-let browser;
+let server, browser;
 try {
-  for (let n = 0; n < 80; n++) {
-    try { if ((await fetch('http://127.0.0.1:41874/')).ok) break; } catch {}
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  browser = await chromium.launch({ executablePath: process.env.EDGE_PATH || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', headless: true });
+  server = await startServer('server.js', 41874, ['-r', fixture]);
+  browser = await launchBrowser();
   const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
   const errors = [];
   page.on('pageerror', error => { errors.push(error.message); console.error(error.stack); });
@@ -195,7 +190,6 @@ try {
   console.log('PASS: Monaco, tag undo/redo, per-file models, CRLF/save, native find, theme/preview, external reload/conflict, close cancel/discard, tree events.');
 } finally {
   await browser?.close();
-  server.kill();
-  await new Promise(resolve => server.exitCode !== null ? resolve() : server.once('exit', resolve));
+  await stopServer(server);
   await rm(fixture, { recursive: true, force: true });
 }

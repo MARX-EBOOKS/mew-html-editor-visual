@@ -1,0 +1,42 @@
+[
+  {
+    "name": "document",
+    "code": 1,
+    "durationMs": 12240
+  },
+  {
+    "name": "editor-input",
+    "code": 1,
+    "durationMs": 2855
+  },
+  {
+    "name": "html-pattern-review",
+    "code": 1,
+    "durationMs": 18839
+  },
+  {
+    "name": "layout",
+    "code": 1,
+    "durationMs": 3780
+  },
+  {
+    "name": "monaco",
+    "code": 1,
+    "durationMs": 32816
+  },
+  {
+    "name": "pdf-cache",
+    "code": 1,
+    "durationMs": 6452
+  },
+  {
+    "name": "pdf-review-popup",
+    "code": 1,
+    "durationMs": 9102
+  },
+  {
+    "name": "replacement-review",
+    "code": 0,
+    "durationMs": 14108
+  }
+]

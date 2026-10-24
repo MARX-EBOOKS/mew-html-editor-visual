@@ -1,0 +1,45 @@
+{
+  "node": "v25.9.0",
+  "platform": "win32",
+  "cpu": "AMD Ryzen 7 5800H with Radeon Graphics         ",
+  "iterations": 30,
+  "warmup": 3,
+  "rows": [
+    {
+      "fixture": "pdf-selection-me04-037",
+      "htmlBytes": 2308,
+      "ocrBytes": 1922,
+      "hunks": 24,
+      "p50Ms": 6.038,
+      "p95Ms": 8.693,
+      "maxMs": 9.367
+    },
+    {
+      "fixture": "pdf-selection-me04",
+      "htmlBytes": 1654,
+      "ocrBytes": 1287,
+      "hunks": 21,
+      "p50Ms": 4.251,
+      "p95Ms": 7.417,
+      "maxMs": 8.788
+    },
+    {
+      "fixture": "pdf-selection-me07-066",
+      "htmlBytes": 3010,
+      "ocrBytes": 2889,
+      "hunks": 9,
+      "p50Ms": 9.367,
+      "p95Ms": 11.863,
+      "maxMs": 12.296
+    },
+    {
+      "fixture": "pdf-selection-me07-316",
+      "htmlBytes": 2021,
+      "ocrBytes": 1754,
+      "hunks": 5,
+      "p50Ms": 5.558,
+      "p95Ms": 8.449,
+      "maxMs": 8.853
+    }
+  ]
+}

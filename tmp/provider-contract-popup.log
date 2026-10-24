@@ -1,0 +1,19 @@
+highlight click and discrepancy drag: linking on passed
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.waitFor: Timeout 5000ms exceeded.
+Call log:
+  - waiting for locator('.replacement-review') to be visible
+    14 × locator resolved to hidden <section hidden="" tabindex="-1" role="dialog" data-side="pdf" aria-label="审阅与批量替换" class="replacement-review compact">…</section>
+
+    at D:\马恩列总装\mew-html-editor-visual\tests\pdf-review-popup-browser.mjs:60:17 {
+  log: [
+    "  - waiting for locator('.replacement-review') to be visible",
+    '    14 × locator resolved to hidden <section hidden="" tabindex="-1" role="dialog" data-side="pdf" aria-label="审阅与批量替换" class="replacement-review compact">…</section>'
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v25.9.0

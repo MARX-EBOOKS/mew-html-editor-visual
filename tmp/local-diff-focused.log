@@ -1,0 +1,58 @@
+✔ concurrent font indexing shares page work while cancellation stays caller-local (7.7154ms)
+✔ locator cancels obsolete extraction and keeps document caches per reader (1.9294ms)
+✔ local highlight hunks separate OCR boundary spaces (7.492ms)
+✔ ME04-608 wrapped prose stays aligned across blank-line anchors (6.9645ms)
+✔ bounded local anchor checks reject impossible lengths and count Unicode code points (21.3979ms)
+✔ local diff preserves complete Unicode readings and maps source positions in both directions (2.5097ms)
+✔ source markers locate local diff changes at word boundaries, inside words and beside repeated characters (5.3203ms)
+✔ concurrent page extraction is shared across locators and failures can retry (3.9731ms)
+✔ local textDiff serves review candidates and popup comparisons (7.2824ms)
+✔ browser compares locally and loads only the OCR reader for PDF extraction (8635.1694ms)
+✔ text candidates, font candidates and decorations reuse one traversal and refresh font metadata (5.4479ms)
+✔ passage pruning matches pairwise containment and ignores cache recency order (66.3942ms)
+✔ PDF cache stays primary and unavailable or invalid caches use the original text layer (4.5404ms)
+✔ text-layer fallback stops on document change and failed extraction can retry (2.0396ms)
+✔ incremental normalization preserves whitespace and Unicode offsets across complete lines (7.0259ms)
+✔ bounded distance agrees with full alignment for Unicode, insertions and deletions (67.1777ms)
+✔ compact traceback agrees with an independent edit-distance oracle across wider bands (102.297ms)
+✔ failed page preparation is cached until the source or PDF layer changes (9.4406ms)
+15 KB complete character diff latency: [
+  {
+    kind: 'substitutions',
+    bytes: 15000,
+    edits: 87,
+    p50: 1.7000000001862645,
+    max: 5.7000000001862645
+  },
+  {
+    kind: 'mixed edits',
+    bytes: 15000,
+    edits: 87,
+    p50: 1.5,
+    max: 2.199999999254942
+  },
+  {
+    kind: 'substitutions',
+    bytes: 15000,
+    edits: 47,
+    p50: 1,
+    max: 2.7000000001862645
+  },
+  {
+    kind: 'mixed edits',
+    bytes: 15000,
+    edits: 47,
+    p50: 0.8999999994412065,
+    max: 1.3999999994412065
+  }
+]
+✔ 15 KB character diffs complete within 50 ms with complete Unicode traceback (2428.633ms)
+✔ scrolling across retained PDF pages bounds DOM caches and revisits rebuild current highlights (1797.6512ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9363.6039

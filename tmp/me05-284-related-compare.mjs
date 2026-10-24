@@ -1,0 +1,1 @@
+import{readFile}from'node:fs/promises';const n=async f=>(await readFile(f,'utf8')).split('\n').filter(s=>s.startsWith('✖')).map(s=>s.replace(/ \([\d.]+ms\).*$/,''));const a=await n('tmp/me05-284-related-baseline.log'),b=await n('tmp/me05-284-related.log');console.log('NEW',b.filter(x=>!a.includes(x)));console.log('FIXED',a.filter(x=>!b.includes(x)));

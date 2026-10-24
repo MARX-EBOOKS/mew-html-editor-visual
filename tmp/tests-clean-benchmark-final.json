@@ -1,0 +1,108 @@
+{
+  "node": "v25.9.0",
+  "platform": "win32",
+  "cpu": "AMD Ryzen 7 5800H with Radeon Graphics         ",
+  "iterations": 30,
+  "warmup": 3,
+  "rows": [
+    {
+      "fixture": "pdf-selection-me04-037",
+      "htmlBytes": 2308,
+      "ocrBytes": 1922,
+      "hunks": 24,
+      "p50Ms": 5.966,
+      "p95Ms": 8.525,
+      "maxMs": 10.105
+    },
+    {
+      "fixture": "pdf-selection-me04-117",
+      "htmlBytes": 3291,
+      "ocrBytes": 8653,
+      "hunks": 14,
+      "p50Ms": 17.895,
+      "p95Ms": 20.386,
+      "maxMs": 20.774
+    },
+    {
+      "fixture": "pdf-selection-me04",
+      "htmlBytes": 1654,
+      "ocrBytes": 1287,
+      "hunks": 21,
+      "p50Ms": 3.984,
+      "p95Ms": 6.72,
+      "maxMs": 7.655
+    },
+    {
+      "fixture": "pdf-selection-me07-066",
+      "htmlBytes": 3010,
+      "ocrBytes": 2889,
+      "hunks": 9,
+      "p50Ms": 8.821,
+      "p95Ms": 11.019,
+      "maxMs": 11.258
+    },
+    {
+      "fixture": "pdf-selection-me07-073-074/1",
+      "htmlBytes": 3101,
+      "ocrBytes": 11272,
+      "hunks": 9,
+      "p50Ms": 20.498,
+      "p95Ms": 26.166,
+      "maxMs": 26.817
+    },
+    {
+      "fixture": "pdf-selection-me07-073-074/2",
+      "htmlBytes": 3144,
+      "ocrBytes": 11272,
+      "hunks": 9,
+      "p50Ms": 19.564,
+      "p95Ms": 21.356,
+      "maxMs": 21.41
+    },
+    {
+      "fixture": "pdf-selection-me07-316",
+      "htmlBytes": 2021,
+      "ocrBytes": 1754,
+      "hunks": 5,
+      "p50Ms": 5.139,
+      "p95Ms": 7.358,
+      "maxMs": 9.402
+    },
+    {
+      "fixture": "pdf-selection-me23",
+      "htmlBytes": 15860,
+      "ocrBytes": 14090,
+      "hunks": 171,
+      "p50Ms": 45.22,
+      "p95Ms": 46.366,
+      "maxMs": 46.474
+    },
+    {
+      "fixture": "pdf-selection-me32",
+      "htmlBytes": 2604,
+      "ocrBytes": 1984,
+      "hunks": 257,
+      "p50Ms": 6.99,
+      "p95Ms": 8.436,
+      "maxMs": 11.759
+    },
+    {
+      "fixture": "pdf-selection-me34/1",
+      "htmlBytes": 5667,
+      "ocrBytes": 2558,
+      "hunks": 133,
+      "p50Ms": 9.799,
+      "p95Ms": 11.425,
+      "maxMs": 11.745
+    },
+    {
+      "fixture": "pdf-selection-me34/2",
+      "htmlBytes": 2598,
+      "ocrBytes": 1988,
+      "hunks": 12,
+      "p50Ms": 6.015,
+      "p95Ms": 7.626,
+      "maxMs": 8.088
+    }
+  ]
+}
