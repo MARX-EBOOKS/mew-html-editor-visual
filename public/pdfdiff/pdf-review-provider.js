@@ -243,7 +243,7 @@ class PdfLocator {
         letters += count;
         if (style.bold === true) boldLetters += count;
       }
-      const dominantBold = letters > 0 && boldLetters / letters >= 0.9;
+      const dominantBold = letters > 0 && boldLetters / letters >= 0.8;
       for (const key of ['bold', 'italic']) {
         if (!textFonts.size || !(key === 'bold' && dominantBold) && ![...textFonts].every(font => font?.[key] === true)) continue;
         const reason = key === 'bold' && boldLetters < letters ? '大部分文字声明为粗体' : `均为${key === 'bold' ? '粗体' : '斜体'}`;
@@ -317,7 +317,7 @@ class PdfLocator {
           if (item.hasEOL) pageRaw += "\n";
           previous = item;
         }
-        pages.push({ number, start, end: start + pageRaw.length, parts, page });
+        pages.push({ number, start, end: start + pageRaw.length, parts });
         raw += pageRaw + "\n";
         if (!/[-\u2010\u2011]\s*$/.test(raw.slice(mappedStart))) {
           toolbox.normalized(raw.slice(mappedStart), mapped, mappedStart); mappedStart = raw.length;
@@ -348,7 +348,9 @@ class PdfLocator {
       await (entry.fontTask ||= (async () => {
         await this.environment.waitForIdle(pdf);
         if (!this.environment.isCurrent(pdf)) return;
-        const fonts = await this.readPageFonts(entry.page, entry.parts.map(part => part.item));
+        const page = await pdf.getPage(entry.number);
+        if (!this.environment.isCurrent(pdf)) return;
+        const fonts = await this.readPageFonts(page, entry.parts.map(part => part.item));
         if (!this.environment.isCurrent(pdf)) return;
         for (const part of entry.parts) part.font = textItemFont(fonts, part.item);
         index.fontVersion = (index.fontVersion || 0) + 1;
@@ -456,11 +458,11 @@ function reviewItems(index, targets, notice, model) {
   const selected = enabled && selectionCandidate(index, notice, model);
   if (selected) text = [...text.filter(item => item.sourceEnd <= selected.sourceStart && item.sourceStart < selected.sourceStart
     || item.sourceStart >= selected.sourceEnd && item.sourceEnd > selected.sourceEnd), selected].sort((a, b) => a.sourceStart - b.sourceStart);
-  const formats = fontEnabled ? index.formatDifferences(index.connectionPairs(targets)) : [];
+  const formats = fontEnabled ? index.formatDifferences(index.connectionPairs(targets || [])) : [];
   const positions = new Map();
   let cursor = 0;
   for (const item of formats) {
-    item.range = index.sourceRange(model, item.sourceStart, item.sourceEnd);
+    item.range = toolbox.rangeAt(model, index.starts[item.sourceStart], index.ends[item.sourceEnd - 1]);
     while (cursor < text.length && text[cursor].sourceEnd < item.sourceStart) cursor++;
     const nearby = text[cursor];
     positions.set(item, nearby && nearby.sourceStart <= item.sourceEnd ? nearby.sourceStart : item.sourceStart);
@@ -522,7 +524,7 @@ function apply(state, all) {
     if (value.font) formats.push(value);
     else edits.push(...value.options[0].edits);
   }
-  if (fontEnabled && formats.length) for (const candidate of state.context.index.formatDifferences(state.context.index.connectionPairs(state.context.targets)))
+  if (fontEnabled && formats.length) for (const candidate of state.context.index.formatDifferences(state.context.index.connectionPairs(state.context.targets || [])))
     if (formats.some(value => candidate.sourceStart < value.sourceEnd && candidate.sourceEnd > value.sourceStart))
       edits.push(...candidate.options[0].edits);
   const checked = toolbox.validateEdits(state.source, edits);
