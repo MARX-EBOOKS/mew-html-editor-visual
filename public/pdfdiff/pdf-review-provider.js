@@ -204,6 +204,7 @@ class PdfLocator {
     fontPages.set(page, (async () => {
       const ops = window.pdfjsLib?.OPS || { save: 10, restore: 11, setFont: 37, setTextRenderingMode: 38,
         showText: 44, showSpacedText: 45, nextLineShowText: 46, nextLineSetSpacingShowText: 47 };
+      const textOps = new Set([ops.showText, ops.showSpacedText, ops.nextLineShowText, ops.nextLineSetSpacingShowText]);
       const invisibleFonts = new Set(), stack = [];
       let fontId = null, mode = 0, failed = false;
       try {
@@ -214,7 +215,7 @@ class PdfLocator {
           else if (fn === ops.restore && stack.length) [fontId, mode] = stack.pop();
           else if (fn === ops.setFont) fontId = args[0];
           else if (fn === ops.setTextRenderingMode) mode = args[0];
-          else if ([ops.showText, ops.showSpacedText, ops.nextLineShowText, ops.nextLineSetSpacingShowText].includes(fn)
+          else if (textOps.has(fn)
             && (mode & 3) === 3) invisibleFonts.add(fontId);
         }
       } catch {
@@ -274,10 +275,10 @@ class PdfLocator {
     if (spans.length === items.length && spans.every((span, i) => span.textContent === items[i].str))
       spans.forEach((span, i) => names.set(span, items[i]));
     return element => {
-      const css = element.ownerDocument.defaultView.getComputedStyle(element), family = css.fontFamily;
       const item = names.get(element);
       const observed = item && textItemFont(data?.fonts, item);
       if (observed) return observed;
+      const css = element.ownerDocument.defaultView.getComputedStyle(element), family = css.fontFamily;
       const id = item?.fontName || element.dataset?.fontName;
       const key = `${id}:${family}:${css.fontStyle}:${css.fontWeight}`;
       if (!fonts.has(key)) {

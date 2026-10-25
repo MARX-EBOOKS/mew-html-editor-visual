@@ -276,11 +276,7 @@ class PdfSourceIndex {
   reviewCandidates(targets = [], notice = null) {
     const items = [], seen = [];
     function claim(start, end) {
-      let low = 0, high = seen.length;
-      while (low < high) {
-        const middle = (low + high) >>> 1;
-        if (seen[middle].start < start) low = middle + 1; else high = middle;
-      }
+      const low = lowerBound(seen, start, range => range.start);
       if (seen[low]?.start === start || low && seen[low - 1].end > start
         || seen[low] && seen[low].start < end && seen[low].end > start) return false;
       seen.splice(low, 0, { start, end });
@@ -294,12 +290,7 @@ class PdfSourceIndex {
         left += part.html.length; right += part.pdf.length;
       }
       const project = (offset, endBias) => {
-        let low = 0, high = projection.length;
-        while (low < high) {
-          const middle = (low + high) >>> 1;
-          if (projection[middle].stop < offset) low = middle + 1; else high = middle;
-        }
-        const hit = projection[low];
+        const hit = projection[lowerBound(projection, offset, range => range.stop)];
         if (!hit) return left;
         if (!hit.part.changed) return hit.left + Math.max(0, offset - hit.right);
         if (offset <= hit.right) return hit.left;
@@ -337,7 +328,9 @@ class PdfSourceIndex {
   }
   fontRuns(start = 0, end = this.raw.length) {
     const runs = [];
-    for (const part of this.parts || this.pages?.filter(page => start < page.end && end > page.start).flatMap(page => page.parts) || []) {
+    const parts = this.parts ? this.partsInRange(start, end)
+      : this.pages?.filter(page => start < page.end && end > page.start).flatMap(page => page.parts) || [];
+    for (const part of parts) {
       const a = Math.max(start, part.start), b = Math.min(end, part.end);
       if (a >= b || !this.raw.slice(a, b).trim()) continue;
       const style = part.font || { name: '', italic: null, bold: null }, last = runs.at(-1);
@@ -351,22 +344,22 @@ class PdfSourceIndex {
     while (start < end && /\s/u.test(this.raw[start])) start++;
     while (end > start && /\s/u.test(this.raw[end - 1])) end--;
     if (start >= end) return [];
-    const keys = ['italic', 'bold'].filter(key => typeof font[key] === 'boolean'
-      && this.formats.slice(start, end).some((style, i) => !/\s/u.test(this.raw[start + i])
+    const styles = this.formats.slice(start, end), keys = ['italic', 'bold'].filter(key => typeof font[key] === 'boolean'
+      && styles.some((style, i) => !/\s/u.test(this.raw[start + i])
         && (style[key] !== font[key] || !font[key] && style.tags?.some(tag => typeof tag[key] === 'boolean'))));
     if (!keys.length) return [];
-    const tags = [...new Set(this.formats.slice(start, end).flatMap(style => style.tags || []))]
+    const tags = [...new Set(styles.flatMap(style => style.tags || []))]
       .filter(tag => keys.some(key => typeof tag[key] === 'boolean'))
       .sort((a, b) => a.openStart - b.openStart);
     if (tags.some(tag => tag.closeStart === undefined || !['i', 'em', 'b', 'strong', 'span'].includes(tag.name))) return [];
     // Move adjacent boundaries when adding a single format to unwrapped text.
     if (!tags.length && keys.length === 1 && font[keys[0]]) {
-      const key = keys[0], pattern = key === 'italic' ? 'i|em' : 'b|strong';
+      const key = keys[0], opening = key === 'italic' ? /^<(i|em)>$/i : /^<(b|strong)>$/i;
       const adjacent = before => {
         let at = before ? start - 1 : end;
         while (at >= 0 && at < this.raw.length && /[^\S\r\n]/u.test(this.raw[at])) at += before ? -1 : 1;
         return this.formats[at]?.tags?.findLast(tag => tag[key] === true
-          && new RegExp(`^<(${pattern})>$`, 'i').test(tag.opening)
+          && opening.test(tag.opening)
           && tag.closeStart !== undefined && (before ? tag.rawEnd <= start : tag.rawStart >= end)
           && /^[^\S\r\n]*$/u.test(this.source.slice(before ? tag.closeEnd : this.ends[end - 1],
             before ? this.starts[start] : tag.openStart)));
