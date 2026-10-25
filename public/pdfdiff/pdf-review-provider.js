@@ -618,7 +618,8 @@ function onDifference(event) {
     && dismissed.range === editor?.getSelection()?.toString() && dismissed.interaction === data.interactionId) return;
   dismissed = null;
   const changed = data.notices.find(value => typeof value.html === 'string' && typeof value.pdf === 'string'
-    && getLocator().comparisonParts(value).some(part => part.changed));
+    && (value.source ? value.source.index.reviewCandidates([], value).length
+      : getLocator().comparisonParts(value).some(part => part.changed && significantText(part.html) !== significantText(part.pdf))));
   const notice = changed || data.notices.find(value => value.source) || data.notices[0];
   if (!notice || notice.source && model && notice.source.index.source !== model.getValue()) return;
   if (!changed) {

@@ -339,7 +339,7 @@
       warm([...new Set(numbers)]);
       if (contexts.length) { locationSearch = null; schedule(); }
       else if (reviewPointer) schedule();
-    }, 100);
+    }, Math.max(0, 100 - (performance.now() - lastInteraction), editIdleDelay - (performance.now() - lastEdit)));
   }
   function warm(numbers = visiblePages()) {
     const pdf = viewer?.pdfDocument, model = activeEditor?.getModel(), source = model && locator.editorSourceIndex(model);

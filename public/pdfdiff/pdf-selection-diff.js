@@ -175,16 +175,18 @@ async function loadMonaco() {
 function normalized(raw, result = { text: "", starts: [], ends: [] }, base = 0) {
   let previous = result.text.at(-1) || "";
   const units = [], { starts, ends } = result;
-  for (const match of raw.matchAll(/((?<=[\p{L}\p{N}])[-\u2010\u2011]\s*\n\s*(?=[\p{L}\p{N}]))|[\s\S]/gu)) {
+  for (const match of raw.matchAll(/((?<=[\p{L}\p{N}])[-\u2010\u2011]\s*\n\s*(?=[\p{L}\p{N}]))|([a-zA-Z0-9]+)|(\s+)|[\s\S]/gu)) {
     const char = match[0], start = base + match.index, offset = start + char.length;
     if (match[1] || char === "\u00ad") continue;
-    const value = char.normalize("NFKC").toLowerCase().replace(/ſ/g, "s").replace(/ß/g, "ss")
+    if (match[2]) {
+      units.push(char.toLowerCase()); previous = char.at(-1);
+      for (let i = 0; i < char.length; i++) { starts.push(start + i); ends.push(start + i + 1); }
+      continue;
+    }
+    const value = match[3] ? ' ' : char >= '!' && char <= '~' ? char.toLowerCase() : char.normalize("NFKC").toLowerCase().replace(/ſ/g, "s").replace(/ß/g, "ss")
       .replace(/[‘’‚]/g, "'").replace(/[“”„]/g, '"').replace(/\s/g, " ");
     for (const unit of value) {
-      if (unit === " " && previous === " ") {
-        ends[ends.length - 1] = offset;
-        continue;
-      }
+      if (unit === " " && previous === " ") { ends[ends.length - 1] = offset; continue; }
       units.push(unit); previous = unit;
       for (let i = 0; i < unit.length; i++) { starts.push(start); ends.push(offset); }
     }
@@ -440,6 +442,7 @@ class PdfSourceIndex {
           for (let i = run; i < runs.length && runs[i].start < right + part.pdf.length; i++) compared.push(runs[i]);
         }
         for (const font of compared) {
+          if (typeof font.italic !== 'boolean' && typeof font.bold !== 'boolean') continue;
           const a = Math.max(right, font.start), b = Math.min(right + part.pdf.length, font.end);
           if (!part.changed && a >= b) continue;
           let start = part.changed ? left : left + a - right;
@@ -521,20 +524,15 @@ class PdfSourceIndex {
       let description = 'PDF OCR text difference';
       if (item.text && item.font) description = 'PDF text and font difference';
       else if (item.font) description = 'PDF font difference';
-      const tooltips = [];
-      if (item.text) tooltips.push('Text differs from PDF OCR');
-      if (item.font) tooltips.push('粗体／斜体与 PDF 不一致');
       const options = {
         description, linesDecorationsClassName: 'mew-ocr-diff-line', stickiness: 1,
         inlineClassName: item.font ? 'mew-ocr-diff-text mew-font-diff-text' : 'mew-ocr-diff-text',
         hoverMessage: { value: [...new Set(item.messages)].join('\n\n'), isTrusted: false },
-        linesDecorationsTooltip: tooltips.join('；')
+        linesDecorationsTooltip: [item.text && 'Text differs from PDF OCR', item.font && '粗体／斜体与 PDF 不一致'].filter(Boolean).join('；')
       };
       const segments = this.sourceSegments(item.start, item.end, Boolean(item.font));
       if (!segments.length && item.text) item.insertions.push(item.start);
-      for (const segment of segments) {
-        decorations.push({ ...segment, options });
-      }
+      for (const segment of segments) decorations.push({ ...segment, options });
       for (const start of new Set(item.insertions)) {
         decorations.push({ ...this.insertionSegment(start),
           options: { ...options, inlineClassName: undefined, beforeContentClassName: 'mew-ocr-diff-insert' } });

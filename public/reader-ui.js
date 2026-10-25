@@ -600,9 +600,9 @@
           };
         }
         pdfViewer.setPageLabels(pdfPageLabels);
+        showPendingPdfPage();
         pdfViewer.currentScaleValue = pdfSettings.scale;
         applyPdfSettings();
-        showPendingPdfPage();
         pdfReady = true;
         reportPdfPage();
         setPdfStatus();
