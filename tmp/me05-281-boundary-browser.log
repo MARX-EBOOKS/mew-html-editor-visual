@@ -1,5 +1,0 @@
-candidates [{"html":"h","pdf":"b"},{"html":"lb","pdf":"ih"},{"html":"tw","pdf":"^\nW"},{"html":"v","pdf":"V"},{"html":"“","pdf":""},{"html":"","pdf":" und Kosten"}]
-marks ["h","lb","tw","v","“"]
-popup ["h","b"]
-back ["h","lb","tw","v","“"]
-PASS: real page popup and scroll return
