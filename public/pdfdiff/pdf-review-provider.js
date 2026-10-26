@@ -584,11 +584,15 @@ function apply(state, all) {
 const review = {
   compact: true, content, apply, presentation, isCurrent, provide,
   refreshAfterEdit: refreshCandidates,
-  onSelect(item, context, items) {
-    const key = pattern(item, context.index);
-    selection()?.showReviewPointer(context.editor, items.filter(value => pattern(value, context.index) === key));
+  onSelect(item, context, items, previewEnabled = false) {
+    context.editor.getDomNode()?.classList.toggle('mew-review-preview', previewEnabled);
+    if (!previewEnabled) { selection()?.clearReviewPointer(context.editor); return; }
+    selection()?.showReviewPointer(context.editor, items);
   },
-  onClose(context) { selection()?.clearReviewPointer(context.editor); }
+  onClose(context) {
+    context.editor.getDomNode()?.classList.remove('mew-review-preview');
+    selection()?.clearReviewPointer(context.editor);
+  }
 };
 function onSources(event) {
   const { editor, index, targets, enabled } = event.detail;
