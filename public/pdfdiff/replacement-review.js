@@ -26,10 +26,10 @@
           range ||= (div.ownerDocument || document).createRange();
           range.setStart(part.node, Math.max(0, hit.start - part.start));
           range.setEnd(part.node, Math.max(0, Math.min(part.node.length, (caret ? hit.start : hit.end) - part.start)));
-          for (let box of range.getClientRects()) if ((box.width || caret) && box.height) {
+          for (let box of caret ? [range.getBoundingClientRect()] : range.getClientRects()) if ((box.width || caret) && box.height) {
             // Collapsed ranges can have a fractional width in Chromium. Always
             // draw missing text as a visible caret at the insertion point.
-            if (caret) box = { left: box.left, right: box.left + 2, top: box.top, width: 2, height: box.height, caret: true };
+            if (caret) box = { left: box.left - 2, right: box.left + 2, top: box.top, width: 4, height: box.height, caret: true };
             const previous = boxes.at(-1);
             // Range rects can include both a span and its text, or adjoining spans.
             if (previous && !previous.caret && !box.caret && Math.abs(previous.top - box.top) < .5 && Math.abs(previous.height - box.height) < .5
@@ -75,7 +75,7 @@
           overlay.append(mark);
         }
         mark.style.cssText = `position:absolute;left:${box.x * 100}%;top:${box.y * 100}%;width:${box.w * 100}%;height:${box.h * 100}%;border-radius:2px;pointer-events:none;`;
-        mark.style.background = box.caret ? '#d58b24' : color;
+        mark.style.background = color;
         mark.classList.toggle(caretClass, box.caret);
       }
       while (overlay.children.length > boxes.length) overlay.lastElementChild.remove();
@@ -109,6 +109,7 @@
         delete options.linesDecorationsClassName; delete options.linesDecorationsTooltip;
       }
       state.collection.set(values);
+      editor.render?.(true);
       state.key = key;
     }
     function selectionRange(editor, event, range) {
@@ -118,7 +119,13 @@
       const collection = marks.get(editor)?.collection, position = event?.position || range.getStartPosition();
       for (let i = 0; i < (collection?.length || 0); i++) {
         const mark = collection.getRange(i);
-        if (event?.lineRange ? mark?.intersectRanges(event.lineRange) : mark?.containsPosition(position)) return mark;
+        if (event?.lineRange ? mark?.intersectRanges(event.lineRange) : mark?.containsPosition(position)
+          && (mark.isEmpty() || position.lineNumber !== mark.endLineNumber || position.column !== mark.endColumn)) return mark;
+        // Missing text beside a space must also be reachable from that space.
+        if (!event?.lineRange && mark?.isEmpty() && position.lineNumber === mark.startLineNumber
+          && position.column + 1 === mark.startColumn && /^\s$/u.test(editor.getModel().getValueInRange({
+            startLineNumber: position.lineNumber, startColumn: position.column,
+            endLineNumber: mark.startLineNumber, endColumn: mark.startColumn }))) return mark;
       }
       return null;
     }
@@ -153,7 +160,8 @@
   function message(text) { get('status').textContent = text; get('status').hidden = !text; }
   function current() { return session?.items[session.position]; }
   function selectedEdits(all = false) {
-    return (all ? session.items : [current()]).flatMap(item => item?.options.find(value => value.id === session.choices.get(item.id))?.edits || []);
+    return (all ? session.items : session.provider.matchingItems?.(current(), session.context, session.items) || [current()])
+      .flatMap(item => item?.options.find(value => value.id === session.choices.get(item.id))?.edits || []);
   }
   function presentation() { return session?.provider.presentation?.(session.context, current()) || noticeLayout; }
   function opposite(state) {
@@ -243,7 +251,7 @@
     previous?.provider.onClose?.(previous.context);
     if (dismiss && previous && previous.editor.getModel() === previous.model) {
       const selected = previous.editor.getSelection();
-      if (selected && (position || !selected.isEmpty())) previous.editor.setPosition(position || selected.getPosition(), 'replacement-review-close');
+      if (selected && (position || restoreFocus && !selected.isEmpty())) previous.editor.setPosition(position || selected.getPosition(), 'replacement-review-close');
     }
     if (dismiss && previous) opposite(previous)?.host.close(false, false);
     const detail = dismiss && previous && { id: previous.provider.id, editor: previous.editor, model: previous.model };
@@ -256,7 +264,6 @@
     if (!session) return;
     session.stale = true; ++generation; clearPreview(); revisionMarks.clearMarks();
     const saved = session;
-    if (!saved) return;
     if (!saved.manualPending) saved.resumeOffset = saved.anchorOffset ?? 0;
     // Monaco change offsets refer to the source before this event.
     const offset = saved.resumeOffset;
@@ -297,12 +304,13 @@
     });
   }
   function controls() {
-    const item = current(), currentVersion = valid(), ready = (currentVersion || session?.manualPending && !composing) && !!item && !session.applying && !session.saving && !session.waitingApply;
-    get('apply').disabled = !currentVersion || !item || !!session?.applying || !!session?.saving;
-    for (const name of ['advance', 'all']) get(name).disabled = !ready || !session?.provider.apply || session.content?.apply === false;
+    const item = current(), currentVersion = valid(), busy = !!(session?.applying || session?.saving);
+    const ready = (currentVersion || session?.manualPending && !composing) && !!item && !busy && !session.waitingApply;
+    const canApply = ready && session.provider.apply && session.content?.apply !== false;
+    get('apply').disabled = !currentVersion || !item || busy;
+    for (const name of ['advance', 'all']) get(name).disabled = !canApply;
     get('save').textContent = session?.manualSave ? '保存修改' : '替换&保存';
-    get('save').disabled = !workspace()?.save || !!session?.saving || !!session?.applying || !(session?.manualSave
-      ? session.editor.getModel() === session.model : ready && session?.provider.apply && session.content?.apply !== false);
+    get('save').disabled = !workspace()?.save || busy || !(session?.manualSave ? session.editor.getModel() === session.model : canApply);
     const blocked = !currentVersion || !!session?.applying;
     get('prev').disabled = blocked || session.position <= 0;
     get('next').disabled = blocked || session.position >= session.items.length - 1;
@@ -367,10 +375,10 @@
       manualSave: requestData?.snapshot?.manualSave || false, needsSave: requestData?.snapshot?.needsSave || false };
     subscribe(target, 'onDidScrollChange', queuePlace);
     if (placement?.container) {
-      const container = placement.container, move = queuePlace;
-      container.addEventListener('scroll', move); disposals.push(() => container.removeEventListener('scroll', move));
-      placement.eventBus?.on('textlayerrendered', move);
-      disposals.push(() => placement.eventBus?.off('textlayerrendered', move));
+      const container = placement.container;
+      container.addEventListener('scroll', queuePlace); disposals.push(() => container.removeEventListener('scroll', queuePlace));
+      placement.eventBus?.on('textlayerrendered', queuePlace);
+      disposals.push(() => placement.eventBus?.off('textlayerrendered', queuePlace));
     }
     message('正在计算候选…'); place(target);
     try {
@@ -383,9 +391,9 @@
       const items = validateCandidates(result);
       let found = items.findIndex(item => item.id === focusId);
       if (found < 0) found = provider.focusIndex?.(items, requestData) ?? -1;
-      session = { provider, editor: target, model, source, version, context, items,
+      Object.assign(session, { items,
         position: found >= 0 ? found : Math.max(0, Math.min(fallbackPosition, items.length - 1)),
-        manualSave: snapshot?.manualSave || false, needsSave: snapshot?.needsSave || false, choices: new Map(items.map(item => [item.id, snapshot?.choices.get(item.id) || item.options[0].id])) };
+        manualSave: snapshot?.manualSave || false, needsSave: snapshot?.needsSave || false, choices: new Map(items.map(item => [item.id, snapshot?.choices.get(item.id) || item.options[0].id])) });
       render(!!requestData, !!requestData?.mirror);
     } catch (error) { if (request === generation) {
       if (provider.isCurrent && !provider.isCurrent(context)) stale();
@@ -416,11 +424,21 @@
     } else session.provider.onClose?.(session.context);
     if (session.editor.getDomNode()?.ownerDocument === document) {
       revisionMarks.updateSource(session.editor, [session.model, session.version ?? session.source, item, session.choices.get(item?.id), previewEnabled],
-        () => (previewEnabled ? selectedEdits() : []).map(edit => ({
+        () => [...(previewEnabled ? selectedEdits() : []).flatMap(edit => {
+          if (edit.options) return [edit];
+          let offset = edit.start;
+          return session.context.toolbox.textDiff(session.source.slice(edit.start, edit.end), edit.text, true).parts.flatMap(part => {
+            const start = offset;
+            offset += part.html.length;
+            return part.changed ? [{ start, end: offset, text: part.pdf }] : [];
+          });
+        }).map(edit => ({
           range: session.context.toolbox.rangeAt(session.model, edit.start, edit.end),
-          options: edit.options || { description: 'Revision preview', stickiness: 1, className: 'mew-review-current',
+          options: edit.options || { description: 'Revision preview', stickiness: 1, showIfCollapsed: true,
+            inlineClassName: edit.end > edit.start ? 'mew-review-current' : undefined,
+            beforeContentClassName: edit.start === edit.end && edit.text ? 'mew-review-insert' : undefined,
             after: edit.text ? { content: edit.text, inlineClassName: 'mew-review-proposed', cursorStops: 0 } : undefined }
-        })));
+        })), ...(previewEnabled ? content.previewDecorations || [] : [])]);
     }
     void preview(); place(session.editor);
     const peer = !mirrored && opposite(session);
@@ -433,6 +451,9 @@
       if (row.label) line.append(`${row.label}: `);
       for (const part of row.parts || []) {
         const span = document.createElement(part.changed ? 'mark' : 'span'); span.textContent = part.text; line.append(span);
+        if (part.changed && current()?.selection) { span.style.cursor = 'pointer'; span.onclick = () => { if (!valid()) return;
+          const parts = current().comparison.comparisonDiff.parts, at = row.parts.indexOf(part), start = current().sourceStart + parts.slice(0, at).reduce((offset, value) => offset + value.html.length, 0), owner = session.context.index.locator.document.defaultView;
+          session.editor.setSelection(session.context.index.sourceRange(session.model, start, start + parts[at].html.length)); owner.dispatchEvent(new owner.CustomEvent('pdf-selection-difference', { detail: { ...session.context, ...session.context.request, interactionId: undefined, snapshot: null, notices: [{ ...parts[at], source: { index: session.context.index, start, end: start + parts[at].html.length } }] } })); }; }
       }
       get('comparison').append(line);
     }
@@ -467,13 +488,13 @@
   }
   function selectField(preserveSelection) {
     const range = preserveSelection && session.editor.getSelection() || session.content?.range;
-    session.anchor = session.content?.range || range;
+    session.anchor = session.content?.range ? session.model.validateRange(session.content.range) : range;
     if (range) {
       session.anchorOffset = session.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
       if (!preserveSelection) {
-        session.editor.setSelection(range);
-        session.editor.revealRangeInCenterIfOutsideViewport(range);
+        session.editor.setSelection(session.model.validateRange(range));
       }
+      session.editor.revealRangeInCenterIfOutsideViewport(session.anchor);
     }
   }
   async function preview() {
@@ -493,7 +514,7 @@
       view.setModel({ original: previewModels[0], modified: previewModels[1] });
     } catch (error) { if (session === saved && request === generation) { clearPreview(); message(error.message); } }
   }
-  async function apply(all, advance = false) {
+  async function apply(all) {
     const saved = session;
     if (saved?.waitingApply) return;
     if (saved?.refreshTask || saved?.manualPending && !composing)
@@ -516,14 +537,11 @@
       if (saved.context.request) saved.context.request = { ...saved.context.request, snapshot: null };
       if (!valid()) { stale(); return; }
       render();
-      saved.applying = false; controls();
-      if (advance && !saved.items.length) await navigate(1);
       return true;
     } catch (error) {
       if (session !== saved) return;
-      saved.applying = false;
       if (saved.model.getValue() !== saved.source) stale();
-      message(error.message); controls();
+      message(error.message);
     } finally { saved.applying = false; controls(); }
   }
   function navigate(direction) {
@@ -560,8 +578,8 @@
     const roomAbove = Math.max(0, anchor - top - 8), roomBelow = Math.max(0, bottom - end - 8);
     const useAbove = roomAbove >= height || roomAbove >= roomBelow;
     const available = Math.min(height, useAbove ? roomAbove : roomBelow);
-    // Only the current anchor positions the popup, including when preview paints all diffs.
-    panel.style.visibility = !available || pdfSide && current() && !fragment ? 'hidden' : '';
+    // Only the current anchor positions the popup when preview paints matching diffs.
+    panel.style.visibility = !available ? 'hidden' : '';
     panel.style.maxHeight = `${available}px`;
     panel.style.top = `${useAbove ? anchor - available - 8 : end + 8}px`;
     panel.style.left = `${Math.max(left, Math.min(right - panel.offsetWidth, fragment?.left ?? left + (position?.left || 0)))}px`;
@@ -584,7 +602,7 @@
     render(true);
     if (get('apply').getAttribute('aria-pressed') === 'true' && session.content.range) session.editor.revealRangeInCenterIfOutsideViewport(session.content.range);
   };
-  get('advance').onclick = () => void apply(false, true);
+  get('advance').onclick = () => void apply(false);
   get('all').onclick = () => apply(true);
   async function save() {
     const saved = session, owner = workspace();
@@ -613,6 +631,11 @@
   panel.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Escape') close(); });
   window.addEventListener('blur', () => { if (!document.hasFocus()) returningToWindow = true; });
   window.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.isComposing && !panel.hidden) {
+      event.preventDefault(); event.stopPropagation();
+      close(true, panel.contains(document.activeElement));
+      return;
+    }
     if (document.hasFocus() && !['Alt', 'Control', 'Meta', 'Shift'].includes(event.key)
       && !(event.key === 'Tab' && event.altKey)) returningToWindow = false;
   }, true);
@@ -624,7 +647,7 @@
     const position = session?.editor.getTargetAtClientPoint(event.clientX, event.clientY)?.position;
     const api = session?.editor.getDomNode()?.ownerDocument.defaultView.monaco;
     if (position && session.anchor && api?.Range.containsPosition(session.anchor, position)) return;
-    close(true, false, event.composedPath().includes(session?.editor.getDomNode()) ? position : null);
+    close(true, false, event.button === 0 && event.composedPath().includes(session?.editor.getDomNode()) ? position : null);
   }, true);
   new ResizeObserver(queuePlace).observe(panel);
   window.addEventListener('resize', queuePlace);

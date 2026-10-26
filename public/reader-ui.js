@@ -20,6 +20,7 @@
   let pdfUrl = "", pdfPageLabels = null, scrollMode = null, pdfWriteTimer = null, pdfRevision = 0;
   let pdfReady = false, pdfRenderingStates = null;
   let pdfPageTimer = null, pdfCacheTimer = null;
+  let sourcePageRange = [];
   let configuredToc = { title: "", items: [] }, pdfToc = [];
   let pdfShortcutActive = false;
   let pdfContextPageNumber = null;
@@ -292,6 +293,7 @@
   }
 
   function renderNavigation(view) {
+    sourcePageRange = [view.page, view.nextPage ?? Infinity];
     footer.setFile(view.filePath);
     footer.setAvailable(view.hasPrevious, view.hasNext);
     byId("chapterTitle").textContent = view.chapterTitle;
@@ -360,7 +362,7 @@
   const frameId = (id) => pdfFrame?.querySelector(`#${id}`);
   function normalizedPdfSettings(value = {}) {
     // Diff highlighting is saved independently; PDF controls must not overwrite it.
-    const { diffHighlight, selectionHighlight, ...displaySettings } = value;
+    const { diffHighlight, sourceDiffHighlight, selectionHighlight, ...displaySettings } = value;
     value = displaySettings;
     const color = (input, fallback) => /^#[0-9a-f]{6}$/i.test(String(input)) ? String(input).toLowerCase() : fallback;
     const scale = typeof value.scale === "string" && value.scale.length <= 32 ? value.scale : PDF_DEFAULTS.scale;
@@ -814,7 +816,11 @@
     setMode, setWorkspaceMode, setToc, setPdf, applyVisualTheme, showVisual, setEditorScale,
     byId, editorScale: () => editorScale, isDark: () => body.classList.contains("dark"),
     getVisualDocument: () => visualFrame.contentDocument,
-    getPdfViewer: () => pdfViewer
+    getPdfViewer: () => pdfViewer,
+    getPdfSourcePages: () => (pdfPageLabels || []).flatMap((label, index) => {
+      const page = Number(String(label).match(/^(\d+)/)?.[1]);
+      return page >= sourcePageRange[0] && page < sourcePageRange[1] ? [index + 1] : [];
+    })
   };
 
 /* 编辑工具面板由 index.html 与 reader.html 共用同一个控制器。 */

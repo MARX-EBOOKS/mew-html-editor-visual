@@ -52,7 +52,7 @@ function applyEdits(editor, model, version, source, edits, origin = 'review-repl
 function textDiff(left, right, details = false, limit = Infinity) {
   if (left === right) return { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
   // A bounded match cannot span more extra characters than its edit limit.
-  if (Number.isFinite(limit) && Math.abs(Array.from(left).length - Array.from(right).length) > limit)
+  if (Number.isFinite(limit) && Math.abs(left.length - right.length) > limit && Math.abs(Array.from(left).length - Array.from(right).length) > limit)
     return { distance: limit + 1, parts: details ? [{ html: left, pdf: right, changed: true }] : undefined };
   // Bounded anchor checks and unavailable Monaco use the local engine directly.
   if (!computer || !details && Number.isFinite(limit)) return localTextDiff(left, right, details, limit);
@@ -269,11 +269,12 @@ class PdfSourceIndex {
   connectionDiff(target, connection) {
     const diff = connection.editorDiff ||= textDiff(this.raw.slice(connection.start, connection.end),
       target.raw.slice(connection.targetStart, connection.targetEnd), true);
-    return diff.distance > 128 ? null : diff;
+    return diff.distance > 128 && diff.parts.some(part => part.changed
+      && Math.max(significantText(part.html).length, significantText(part.pdf).length) > 128) ? null : diff;
   }
   sourceRange(model, start, end) {
     return rangeAt(model, this.starts[start] ?? this.source.length,
-      this.ends[end - 1] ?? this.starts[start] ?? this.source.length);
+      (end > start ? this.ends[end - 1] : this.starts[start]) ?? this.source.length);
   }
   reviewCandidates(targets = [], notice = null) {
     const items = [], seen = [];
@@ -530,12 +531,16 @@ class PdfSourceIndex {
         hoverMessage: { value: [...new Set(item.messages)].join('\n\n'), isTrusted: false },
         linesDecorationsTooltip: [item.text && 'Text differs from PDF OCR', item.font && '粗体／斜体与 PDF 不一致'].filter(Boolean).join('；')
       };
-      const segments = this.sourceSegments(item.start, item.end, Boolean(item.font));
+      const segments = this.sourceSegments(item.start, item.end, Boolean(item.font) || !this.raw.slice(item.start, item.end).trim());
       if (!segments.length && item.text) item.insertions.push(item.start);
       for (const segment of segments) decorations.push({ ...segment, options });
       for (const start of new Set(item.insertions)) {
-        decorations.push({ ...this.insertionSegment(start),
-          options: { ...options, inlineClassName: undefined, beforeContentClassName: 'mew-ocr-diff-insert' } });
+        const space = /[\p{L}\p{N}]/u.test(this.raw[start - 1] || '') ? undefined
+          : [start, start - 1].find(at => /^[^\S\r\n]$/u.test(this.raw[at] || ''));
+        const segment = space === undefined ? this.insertionSegment(start) : this.sourceSegments(space, space + 1, true)[0] || this.insertionSegment(start);
+        decorations.push({ ...segment, options: segment.start !== segment.end ? options
+          : { ...options, inlineClassName: undefined, showIfCollapsed: true,
+            before: { content: '\u200b', inlineClassName: 'mew-ocr-diff-insert', inlineClassNameAffectsLetterSpacing: true } } });
       }
     }
     decorations.sort((a, b) => a.start - b.start || b.end - a.end);
@@ -544,7 +549,7 @@ class PdfSourceIndex {
   textEdits(start, end, replacement) {
     if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start
       || end > this.raw.length || typeof replacement !== 'string') throw new Error('无效的可见文字替换范围');
-    const segments = this.sourceSegments(start, end);
+    const segments = this.sourceSegments(start, end, !this.raw.slice(start, end).trim());
     if (!segments.length) segments.push(this.insertionSegment(start));
     const text = replacement.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return segments.map((segment, i) => ({ ...segment, text: i ? '' : text,
@@ -565,12 +570,12 @@ class PdfSourceIndex {
     if (scope && connect) this.rememberConnection(scope.start, scope.end, page, { start: 0, end: page.raw.length });
     for (const prepare of connect ? [true, false] : [false]) {
       if (scope) break;
-      const size = Math.min(prepare ? 32 : 96, text.length), anchors = [];
+      const size = Math.min(prepare ? 24 : 96, text.length), anchors = [];
       // Overlap prepared anchors so nearby OCR errors cannot hide a clean passage between samples.
-      const positions = prepare ? Array.from({ length: Math.ceil((text.length - size) / 16) + 1 }, (_, i) => Math.min(i * 16, text.length - size))
+      const positions = prepare ? Array.from({ length: Math.ceil((text.length - size) / 8) + 1 }, (_, i) => Math.min(i * 8, text.length - size))
         : [0, .25, .5, .75, 1].map(ratio => Math.floor((text.length - size) * ratio));
       if (size >= 24) for (const at of new Set(positions)) {
-        const hits = this.matches([text.slice(at, at + size)], to, prepare && size >= 31 && !this.locator.options.wholeWords);
+        const hits = this.matches([text.slice(at, at + size)], to, prepare && size >= 24 && !this.locator.options.wholeWords);
         if (hits.length === 1) anchors.push({ at, start: lowerBound(to.starts, hits[0].start), end: lowerBound(to.starts, hits[0].end) });
       }
       if (anchors.length < 2) continue;
@@ -606,17 +611,17 @@ class PdfSourceIndex {
             if (same || from.text[b] === ' ') b++;
             if (same || to.text[y] === ' ') y++;
           }
-          // Keep OCR errors at anchor edges inside the same confirmed word.
+          // Keep OCR errors and wrapped compounds inside the same confirmed word.
           let aa = a, xx = x, bb = b, yy = y;
-          while (aa && a - aa < 32 && /^[\p{L}\p{N}]{2}$/u.test(from.text.slice(aa - 1, aa + 1))) aa--;
-          while (xx && x - xx < 32 && /^[\p{L}\p{N}]{2}$/u.test(to.text.slice(xx - 1, xx + 1))) xx--;
-          if ((a > aa || x > xx) && !/[\p{L}\p{N}]/u.test(from.text[aa - 1] || '')
-            && !/[\p{L}\p{N}]/u.test(to.text[xx - 1] || '')
+          while (aa && a - aa < 32 && /^[\p{L}\p{N}\-\u2010\u2011]{2}$/u.test(from.text.slice(aa - 1, aa + 1))) aa--;
+          while (xx && x - xx < 32 && /^[\p{L}\p{N}\-\u2010\u2011]{2}$/u.test(to.text.slice(xx - 1, xx + 1))) xx--;
+          if ((a > aa || x > xx) && !/[\p{L}\p{N}\-\u2010\u2011]/u.test(from.text[aa - 1] || '')
+            && !/[\p{L}\p{N}\-\u2010\u2011]/u.test(to.text[xx - 1] || '')
             && textDiff(from.text.slice(aa, a), to.text.slice(xx, x), false, 32).distance <= 32) { a = aa; x = xx; }
-          while (bb < from.text.length && bb - b < 32 && /^[\p{L}\p{N}]{2}$/u.test(from.text.slice(bb - 1, bb + 1))) bb++;
-          while (yy < to.text.length && yy - y < 32 && /^[\p{L}\p{N}]{2}$/u.test(to.text.slice(yy - 1, yy + 1))) yy++;
-          if ((bb > b || yy > y) && !/[\p{L}\p{N}]/u.test(from.text[bb] || '')
-            && !/[\p{L}\p{N}]/u.test(to.text[yy] || '')
+          while (bb < from.text.length && bb - b < 32 && /^[\p{L}\p{N}\-\u2010\u2011]{2}$/u.test(from.text.slice(bb - 1, bb + 1))) bb++;
+          while (yy < to.text.length && yy - y < 32 && /^[\p{L}\p{N}\-\u2010\u2011]{2}$/u.test(to.text.slice(yy - 1, yy + 1))) yy++;
+          if ((bb > b || yy > y) && !/[\p{L}\p{N}\-\u2010\u2011]/u.test(from.text[bb] || '')
+            && !/[\p{L}\p{N}\-\u2010\u2011]/u.test(to.text[yy] || '')
             && textDiff(from.text.slice(b, bb), to.text.slice(y, yy), false, 32).distance <= 32) { b = bb; y = yy; }
           while (a && x && from.text[a - 1] === to.text[x - 1]) { a--; x--; }
           while (b < from.text.length && y < to.text.length && from.text[b] === to.text[y]) { b++; y++; }
@@ -636,15 +641,15 @@ class PdfSourceIndex {
     return scope;
   }
   *matchPositions(needle, { text }, anchors) {
-    if (!anchors) {
+    if (!anchors || text.length < 65536) {
       for (let at = text.indexOf(needle); at !== -1; at = text.indexOf(needle, at + 1)) yield at;
       return;
     }
-    // Index aligned 16-character blocks to find 32-character anchors without full rescans.
-    this.anchorBlocks ||= Map.groupBy(Array.from({ length: Math.floor(text.length / 16) }, (_, i) => i * 16),
-      at => text.slice(at, at + 16));
-    for (let offset = 0; offset < 16 && offset + 16 <= needle.length; offset++) {
-      for (const position of this.anchorBlocks.get(needle.slice(offset, offset + 16)) || []) {
+    // Index aligned 8-character blocks so short anchors also avoid full-volume rescans.
+    this.anchorBlocks ||= Map.groupBy(Array.from({ length: Math.floor(text.length / 8) }, (_, i) => i * 8),
+      at => text.slice(at, at + 8));
+    for (let offset = 0; offset < 8 && offset + 8 <= needle.length; offset++) {
+      for (const position of this.anchorBlocks.get(needle.slice(offset, offset + 8)) || []) {
         const at = position - offset;
         if (at >= 0 && text.startsWith(needle, at)) yield at;
       }
