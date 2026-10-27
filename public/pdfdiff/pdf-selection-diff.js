@@ -627,28 +627,26 @@ class PdfSourceIndex {
           const a = anchors[i - 1], b = anchors[i];
           if (b.start <= a.start) continue;
           const left = from.text.slice(a.at, b.at + size), right = to.text.slice(a.start, b.end);
-          const range = { start: from.starts[a.at], end: from.ends[b.at + size - 1], hit: { start: to.starts[a.start], end: to.ends[b.end - 1] } };
           const previous = confirmed.at(-1);
           const limit = Math.min(32, Math.max(12, Math.floor(left.length * .2)));
           if (left.length > 2048) continue;
           if (textDiff(left, right, false, limit).distance > limit) continue;
           // Use the connection budget on the union: overlapping samples must not count the same OCR errors twice.
-          if (previous && previous.end >= range.start && previous.hit.end >= range.hit.start
-            && textDiff(from.text.slice(lowerBound(from.starts, previous.start), b.at + size),
-              to.text.slice(lowerBound(to.starts, previous.hit.start), b.end), false, 128).distance <= 128) {
-            previous.end = range.end;
-            previous.hit.end = range.hit.end;
-          } else confirmed.push(range);
+          if (previous && previous.b >= a.at && previous.y >= a.start
+            && textDiff(from.text.slice(previous.a, b.at + size), to.text.slice(previous.x, b.end), false, 128).distance <= 128) {
+            previous.b = b.at + size;
+            previous.y = b.end;
+          } else confirmed.push({ a: a.at, b: b.at + size, x: a.start, y: b.end });
         }
         let previous = null;
         for (const range of confirmed) {
-          let [a, x] = extendPageRange(from.text, to.text, lowerBound(from.starts, range.start), lowerBound(to.starts, range.hit.start), -1);
+          let [a, x] = extendPageRange(from.text, to.text, range.a, range.x, -1);
           const aa = lowerBound(from.starts, page.raw.lastIndexOf('\n', from.starts[a] - 1) + 1);
           const xx = lowerBound(to.starts, this.raw.lastIndexOf('\n', to.starts[x] - 1) + 1);
           if (a > aa && x > xx && a - aa <= 32 && x - xx <= 32
             && /[\p{L}\p{N}]/u.test(to.text.slice(xx, x))
             && !/[\r\n]/.test(page.raw.slice(from.starts[a], from.ends[a]) + this.raw.slice(to.starts[x], to.ends[x]))) [a, x] = [aa, xx];
-          const [b, y] = extendPageRange(from.text, to.text, lowerBound(from.ends, range.end) + 1, lowerBound(to.ends, range.hit.end) + 1, 1);
+          const [b, y] = extendPageRange(from.text, to.text, range.b, range.y, 1);
           // Edge expansion can make adjacent anchor groups overlap. Compare their union
           // so a joined OCR word is not counted twice and selections can cross the seam.
           const merged = previous && (previous.end === to.starts[x] && previous.targetEnd > from.starts[a]
@@ -749,15 +747,24 @@ class PdfSourceIndex {
     const begin = reverse ? 'targetStart' : 'start', stop = reverse ? 'targetEnd' : 'end';
     let connections = connection ? [connection] : this.connections.get(target) || [];
     connection ||= connections.find(item => start >= item[begin] && end <= item[stop]);
-    connections = connection ? [connection] : connections.filter(item => start < item[stop] && end > item[begin])
-      .sort((a, b) => a[begin] - b[begin]);
-    let first = Infinity, last = -1, leftCovered = false, rightCovered = false;
+    // Add bounded gap diffs between confirmed neighbours in the same ordered traversal.
+    if (!connection) connections = [...connections].sort((a, b) => a[begin] - b[begin]).flatMap((b, i, ordered) => {
+      const a = ordered[i - 1];
+      const gap = a && a[stop] < Math.min(end, b[begin]) && b[begin] > start
+        && a.end <= b.start && a.targetEnd <= b.targetStart
+        && Math.max(b.start - a.end, b.targetStart - a.targetEnd) <= 2048
+        && this.rememberConnection(a.end, b.start, target, { start: a.targetEnd, end: b.targetStart });
+      return gap ? [gap, b] : [b];
+    });
+    connection ||= connections.find(item => start >= item[begin] && end <= item[stop]);
+    connections = connection ? [connection] : connections.filter(item => start < item[stop] && end > item[begin]);
+    let first = Infinity, last = -1, covered = start;
     for (const item of connections) {
       const diff = this.connectionDiff(target, item);
       if (!diff) continue;
+      if (item[begin] > covered) return null;
+      covered = Math.max(covered, item[stop]);
       const a = start - item[begin], b = end - item[begin], offset = reverse ? item.start : item.targetStart;
-      leftCovered ||= a >= 0 && start <= item[stop];
-      rightCovered ||= b <= item[stop] - item[begin] && end >= item[begin];
       for (const [x, y, u, v, part] of diff.ranges) {
         const [left, right, targetLeft, targetRight] = reverse ? [u, v, x, y] : [x, y, u, v];
         if (a === b ? !part.changed || a < left || a > right || left !== right
@@ -768,7 +775,7 @@ class PdfSourceIndex {
         last = Math.max(last, offset + (part.changed ? targetRight : targetLeft + Math.min(b, right) - left));
       }
     }
-    if (!leftCovered || !rightCovered || last < first || last === first && reverse) return null;
+    if (covered < end || last < first || last === first && reverse) return null;
     const hit = { start: first, end: last, connection };
     return { ...hit, approximate: significantText((reverse ? target : this).raw.slice(start, end))
       !== significantText((reverse ? this : target).raw.slice(hit.start, hit.end)) };
