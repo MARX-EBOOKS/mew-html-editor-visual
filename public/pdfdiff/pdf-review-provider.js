@@ -501,10 +501,16 @@ function reviewItems(index, targets, notice, model) {
     }), ...selections].sort((a, b) => a.sourceStart - b.sourceStart);
   }
   const formats = fontEnabled ? index.formatDifferences(index.connectionPairs(targets || [])) : [];
+  const positions = new Map();
+  let cursor = 0;
   for (const item of formats) {
     item.range = toolbox.rangeAt(model, index.starts[item.sourceStart], index.ends[item.sourceEnd - 1]);
+    while (cursor < text.length && text[cursor].sourceEnd < item.sourceStart) cursor++;
+    const nearby = text[cursor];
+    positions.set(item, nearby && nearby.sourceStart <= item.sourceEnd ? nearby.sourceStart : item.sourceStart);
   }
-  return [...text, ...formats].sort((a, b) => Number(!!a.font) - Number(!!b.font) || a.sourceStart - b.sourceStart)
+  const order = item => positions.get(item) ?? item.sourceStart;
+  return [...text, ...formats].sort((a, b) => order(a) - order(b) || Number(!!a.font) - Number(!!b.font))
     .map(item => ({ ...item, pdfSource: { index, start: item.sourceStart, end: item.sourceEnd } }));
 }
 function selectionCandidate(index, notice, model, candidates) {
