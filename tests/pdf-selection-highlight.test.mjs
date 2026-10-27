@@ -15,6 +15,61 @@ const germanPdfSelection = germanSelection.replace('wiederholt', 'wieder-\nholt'
 const germanBefore = 'die Pflicht, diesen Burschen zu erklären, ', germanAfter = ' durch wiederholte Zusendung von Knotenbriefen';
 const chineseSelection = '这是连续中文文本中的一段选区用来验证格式标签和注释不会打断字符之间的对应关系。'.repeat(5);
 
+test('a passage selection extends beyond an already mapped font fault', () => {
+  const diff = locator();
+  const source = diff.sourceIndex('<p>Before the selected <i>word</i> after the selected passage.</p>');
+  const target = new PdfReviewProvider.PdfSourceIndex(diff, { raw: source.raw,
+    pages: [{ number: 1, start: 0, end: source.raw.length, parts: [] }] });
+  const start = source.raw.indexOf('word');
+  source.rememberConnection(start, start + 4, target, { start, end: start + 4 });
+  diff.getDocumentIndex = () => target;
+  diff.prepareSource = () => {};
+  const [location] = diff.findLocations({}, [{ index: source, start: 0, end: source.raw.length, text: source.raw, before: '', after: '' }]);
+  assert.equal(location.entry.text, source.raw, 'a user selection must not be clipped to the known font range');
+  assert.equal(location.targets.map(item => item.text).join(''), source.raw.trimEnd());
+});
+
+test('cross-page words use the complete confirmed mapping before a clipped rendered page', () => {
+  const diff = locator({}, { getVisiblePages: () => [{ number: 1, index: rendered }] });
+  const source = diff.sourceIndex('<p>Before counterrevolutionary after.</p>');
+  const left = 'Before counterrevo-\n', right = 'lutionarv after.', raw = left + right;
+  const full = new PdfReviewProvider.PdfSourceIndex(diff, { raw, pages: [
+    { number: 1, start: 0, end: left.length, parts: [{ start: 0, end: left.length }] },
+    { number: 2, start: left.length, end: raw.length, parts: [{ start: left.length, end: raw.length }] }
+  ] });
+  const rendered = new PdfReviewProvider.PdfSourceIndex(diff, { raw: left });
+  const start = source.raw.indexOf('counterrevolutionary'), end = start + 20;
+  source.rememberConnection(0, source.raw.length, full, { start: 0, end: raw.length });
+  source.rememberConnection(0, end, rendered, { start: 0, end: left.length });
+  diff.getDocumentIndex = () => full;
+  diff.prepareSource = () => {};
+  const [location] = diff.findLocations({}, [{ index: source, start, end, text: source.raw.slice(start, end) }]);
+  assert.deepEqual(Array.from(location.targets, target => target.pageNumber), [1, 2]);
+  assert.equal(location.targets.map(target => target.text).join(''), 'counterrevo-\nlutionarv');
+});
+
+test('bounded PDF indexes retain physical page numbers and do not replace the whole-volume index', async () => {
+  const reads = [], pdf = { numPages: 4, async getPage(number) {
+    reads.push(number);
+    return { async getTextContent() { return { items: [{ str: `Page ${number}`, transform: [1, 0, 0, 1, 0, 100], width: 50, height: 12 }] }; } };
+  } };
+  const diff = locator({}, { isCurrent: () => true, waitForIdle: async () => {} });
+  const bounded = await diff.indexDocument(pdf, [2, 3]);
+  assert.deepEqual(reads, [2, 3]);
+  assert.deepEqual(Array.from(bounded.pages, page => page.number), [2, 3]);
+  assert.equal(await diff.indexDocument(pdf, [2, 3]), bounded, 'the page interval reuses its cached extraction');
+  assert.equal(diff.getDocumentIndex(pdf), undefined);
+  diff.readPageFonts = async () => new Map();
+  assert.equal(await diff.indexFonts(pdf, null, undefined, [2, 3]), bounded,
+    'review font loading must use the same bounded page index as text candidates');
+  assert.deepEqual(reads, [2, 3, 2, 3]);
+  assert.equal(diff.getDocumentIndex(pdf), undefined, 'bounded review must not start a whole-volume extraction');
+  const full = await diff.indexDocument(pdf);
+  assert.deepEqual(Array.from(full.pages, page => page.number), [1, 2, 3, 4]);
+  assert.equal(diff.getDocumentIndex(pdf), full);
+  assert.equal(await diff.indexDocument(pdf, [2, 3]), bounded);
+});
+
 test('source edits rebuild mappings before either selection direction consumes them', () => {
   const pdf = {};
   let value = 'Alpha middle Beta', version = 1;
@@ -36,11 +91,37 @@ test('source edits rebuild mappings before either selection direction consumes t
   assert.notEqual(diff.editorSourceIndex({ ...model }), index);
 });
 
+test('prepared page extraction remains usable after a longer rendered mapping disappears', () => {
+  const pdf = {}, diff = locator({}, { document: { createElement: () => ({}) } });
+  const raw = 'A unique introductory passage establishes the source location. Another complete sentence ends this comparison.';
+  const index = diff.sourceIndex(raw), bounded = new PdfReviewProvider.PdfSourceIndex(diff, { raw, pages: [] }),
+    rendered = new PdfReviewProvider.PdfSourceIndex(diff, { raw });
+  const saved = index.rememberConnection(10, 60, bounded, { start: 10, end: 60 });
+  index.rememberConnection(0, raw.length, rendered, { start: 0, end: raw.length });
+  // Preparation already succeeded; a cached scope does not rebuild discarded connections.
+  index.sourcePageScope = () => null;
+  diff.prepareSource(index, [bounded, rendered], pdf);
+  assert.equal(index.connectedRange(bounded, 20, 30).start, 20);
+  diff.prepareSource(index, [bounded], pdf);
+  assert.equal(index.connections.get(bounded)[0], saved,
+    'closing or rebuilding the rendered layer must not discard extracted-page candidates');
+  assert.equal(index.connectedRange(bounded, 20, 30).end, 30);
+});
+
 test('context distinguishes repeated words and rejects ties or conflicting context', () => {
   const raw = 'An unrelated passage contains work. The workers finish their work before returning home.';
   assert.equal(new PdfReviewProvider.PdfSourceIndex(testLocator, { raw: raw }).locate({ text: 'work', before: 'The workers finish their ', after: ' before returning home.' }).start, raw.lastIndexOf('work'));
   assert.equal(new PdfReviewProvider.PdfSourceIndex(testLocator, { raw: 'work and work' }).locate({ text: 'work', before: '', after: '' }), null);
   assert.equal(new PdfReviewProvider.PdfSourceIndex(testLocator, { raw: raw }).locate({ text: 'work', before: 'Completely different context ', after: ' an unrelated ending' }), null);
+});
+
+test('short indexed anchors agree with direct search at every block alignment', () => {
+  const raw = 'x'.repeat(66000) + 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const index = new PdfReviewProvider.PdfSourceIndex(testLocator, { raw });
+  for (let offset = 0; offset < 8; offset++) {
+    const needle = raw.slice(66000 + offset, 66024 + offset);
+    assert.deepEqual([...index.matches([needle], index.normalized, true)], [...index.matches([needle])]);
+  }
 });
 
 test('empty PDF counterparts retain their insertion position without a rendered-layer connection', () => {
@@ -207,7 +288,7 @@ test('confirmed diffs map inner selections both ways, including changed runs and
     ['Before Knoten-Strebern after.', 'Before Knoten-5/refiern after.', 'Strebern', '5/refiern'],
     ['甲𠀀乙丙', '甲𠀀乙[27]丙', '𠀀乙丙', '𠀀乙[27]丙'],
     ['Before Straße after.', 'Before Strasse after.', 'Straße', 'Strasse'],
-    ['甲𠀀乙丁丙', '甲𠀀乙丙', '𠀀乙', '𠀀乙']
+    ['甲𠀀乙丁丙', '甲𠀀乙丙', '𠀀乙丁', '𠀀乙']
   ]) {
     const source = new PdfReviewProvider.PdfSourceIndex(new PdfReviewProvider.PdfLocator(), { raw: html, connections: new WeakMap() }), target = new PdfReviewProvider.PdfSourceIndex(new PdfReviewProvider.PdfLocator(), { raw: pdf });
     source.rememberConnection(0, html.length, target, { start: 0, end: pdf.length });
@@ -229,6 +310,33 @@ test('confirmed diffs map inner selections both ways, including changed runs and
     const hit = source.connectedRange(target, start, start + 1);
     assert.equal(hit.start, expected, 'surplus text at passage boundaries keeps an insertion anchor');
     assert.equal(hit.end, expected);
+  }
+});
+
+test('selections include missing text at both boundaries in either direction', () => {
+  for (const [html, pdf, selected, expected] of [
+    ['Before Papieren after.', 'Before Papierscheinen after.', 'Papieren', 'Papierscheinen'],
+    ['Before handeln after.', 'Before verhandeln after.', 'handeln', 'verhandeln'],
+    ['Before Papier after.', 'Before Papieren after.', 'Papier', 'Papieren'],
+    ['Before handeln after.', 'Before verhandeln! after.', 'handeln', 'verhandeln!'],
+    ['Before handeln after.', 'Before verhandeln after.', 'andeln', 'andeln'],
+    ['Before handeln after.', 'Before handeln! after.', 'handel', 'handel']
+  ]) {
+    for (const reverse of [false, true]) {
+      const diff = locator(), from = reverse ? pdf : html, to = reverse ? html : pdf;
+      const source = diff.sourceIndex(from), target = new PdfReviewProvider.PdfSourceIndex(diff, { raw: to });
+      source.rememberConnection(0, source.raw.length, target, { start: 0, end: target.raw.length });
+      const at = html.indexOf(selected);
+      for (const marked of [false, true]) {
+        const hit = source.connectedRange(target, at, at + selected.length, reverse, undefined, marked);
+        assert.equal(pdf.slice(hit.start, hit.end), expected, `${selected}, reverse=${reverse}, marked=${marked}`);
+        if (!reverse) {
+          const notice = { html: selected, pdf: expected, source: { index: source, start: at, end: at + selected.length } };
+          const edits = source.reviewCandidates([], notice).flatMap(item => item.options[0].edits);
+          assert.equal(engineWindow.PdfSelectionDiff.previewEdits(html, edits), html.replace(selected, expected));
+        }
+      }
+    }
   }
 });
 
@@ -317,13 +425,43 @@ test('failed page preparation is cached until the source or PDF layer changes', 
   assert.ok(searches > changed, 'rebuilt PDF layer retries preparation');
 });
 
-test('last fallback searches all patched words without changing substrings or trusting conflicting patches', () => {
+test('partial selection mappings stay inside the selection instead of highlighting words later on the page', () => {
+  let target;
+  const diff = locator({}, { getVisiblePages: () => [{ number: 1, index: target }] });
+  const source = diff.sourceIndex('Damaged opening. A reliable selected sentence. Outside selection repeats sentence.');
+  target = diff.sourceIndex('Corrupt prefix! A reliable selected sentence. Outside selection repeats sentence.');
+  target.parts = [];
+  const start = source.raw.indexOf('A reliable'), end = source.raw.indexOf(' Outside');
+  source.rememberConnection(start, source.raw.length, target, { start: target.raw.indexOf('A reliable'), end: target.raw.length });
+  // Isolate the partial-connection path from automatic preparation and contextual lookup.
+  diff.prepareSource = () => {};
+  const result = diff.findLocations({}, [{ index: source, start: 0, end,
+    text: source.raw.slice(0, end), before: '', after: '' }], true);
+  assert.equal(result[0].targets.length, 1);
+  assert.equal(result[0].targets[0].text, 'A reliable selected sentence.');
+  assert.equal(result[0].queries, undefined, 'no page-wide word fallback after a partial match');
+  assert.ok(result[0].targets.every(hit => hit.start >= 0 && hit.end <= end));
+});
+
+test('unconfirmed diff markers do not use the unrelated-occurrence word fallback', () => {
+  const target = new PdfReviewProvider.PdfSourceIndex(testLocator, { raw: 'unrelated word elsewhere' });
+  const entry = { text: 'word', before: 'missing context', after: 'different context' };
+  assert.equal(testLocator.locateLayer(target, [], [{ ...entry, marked: true }]).hits.length, 0);
+  const selection = testLocator.locateLayer(target, [], [entry]);
+  assert.equal(selection.hits.length, 1, 'explicit selection retains the word fallback');
+  assert.equal(target.raw.slice(selection.hits[0].start, selection.hits[0].end), 'word');
+});
+
+test('contextual selection maps OCR changes without searching unrelated words', () => {
   const source = new PdfReviewProvider.PdfSourceIndex(new PdfReviewProvider.PdfLocator(), { raw: 'Before Wage and Strebern after.', connections: new WeakMap() });
   const target = new PdfReviewProvider.PdfSourceIndex(new PdfReviewProvider.PdfLocator(), { raw: 'Before lVage and 5/refiern after.' });
   source.rememberConnection(0, source.raw.length, target, { start: 0, end: target.raw.length });
-  const entry = { index: source, text: 'Wage and Strebern wagework' };
-  assert.deepEqual([...entry.index.patchedWords(entry.text, target)], ['lvage', 'and', '5/refiern', 'wagework']);
-  source.connections.get(target).push({ patches: [['wage', 'other']] });
-  assert.deepEqual([...entry.index.patchedWords(entry.text, target)], ['wage', 'and', '5/refiern', 'wagework']);
+  const start = source.raw.indexOf('Wage'), end = source.raw.indexOf(' after');
+  const entry = { index: source, start, end, text: source.raw.slice(start, end), before: 'Before ', after: ' after.' };
+  const result = testLocator.locateLayer(target, [], [entry]);
+  assert.equal(result.hits.length, 1);
+  assert.equal(target.raw.slice(result.focusHit.start, result.focusHit.end), 'lVage and 5/refiern');
+  const unrelated = new PdfReviewProvider.PdfSourceIndex(testLocator, { raw: 'Wage and Strebern elsewhere' });
+  assert.equal(testLocator.locateLayer(unrelated, [], [entry]).hits.length, 0, 'a repeated word without its context is not a match');
 });
 

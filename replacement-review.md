@@ -1,6 +1,14 @@
 # 编辑器审阅弹窗与前后条导航
 
-`index.html` 和 `reader.html` 共用“审阅 / 批量替换”菜单。
+PDF 审阅使用原有紧凑弹窗，每次显示一个候选，通过前后条按钮切换差异；候选列表中文字差异排在格式差异之前。替换并保存沿用同模式候选替换规则；预览和差异高亮保持原有行为。
+
+打开差异或选择文字后，PDF 指针高亮当前同模式候选组，不依赖“预览”开关；“预览”在 Monaco 中按字符显示该组的修改，“替换&保存”应用同一组。选中的词干或短语沿用 Monaco 匹配并保留大小写及词尾；单字符差异只在相同词语上下文中分组。关闭弹窗后恢复默认差异高亮。
+
+关闭 PDF 默认差异高亮时，点击差异或选择文字仍显示当前同模式组的 PDF 高亮；关闭弹窗后清除该组高亮。
+
+打开差异或选择文字后，PDF 指针高亮当前同模式候选组，不依赖“预览”开关；“预览”在 Monaco 中按字符显示该组的修改，“替换&保存”应用同一组。选中的词干或短语沿用 Monaco 匹配并保留大小写及词尾；单字符差异只在相同词语上下文中分组。关闭弹窗后恢复默认差异高亮。
+
+`index.html` 和 `reader.html` 共用“审阅”按钮及“审阅选项”菜单。按钮直接打开 PDF 差异审阅；双窗口时使用当前配对编辑器，同时显示源码与 PDF 弹窗。
 
 - `public/pdfdiff/pdf-review-provider.js`：统一加载入口；`PdfLocator` 负责 PDF 文字、字体元数据和渲染层样式读取、共享读取缓存及索引准备；管理 PDF 文字/格式候选、差异标记和替换操作，向共用弹窗提供数据与动作。
 - `public/pdfdiff/pdf-selection-diff.js`：`PdfSourceIndex` 对已准备的数据执行定位、双向映射、文字与格式比较、装饰和编辑计算，以及共用编辑事务；不读取 PDF 页面或 DOM 样式。
@@ -15,7 +23,7 @@ Provider 提供 PDF 高亮数据，由独立的 `ReviewHighlights` 实例测量�
 实例提供 `paintHighlight/clearHighlights/getHighlight`；`updateSource(editor, key, decorations, css)` 按调用方的版本键缓存 Monaco 标记，`decorations` 只在缓存失效时调用。
 `selectionRange(editor, event, range)` 查询当前标记，`dispose()` 清理该实例的叠层、样式和订阅。
 
-各功能只提交展示数据与操作回调，不创建自己的弹窗。PDF 紧凑弹窗保留对照、替换和前后条；分窗时仍可切换“查看PDF / 查看HTML”，携带当前候选与选择，不重新计算、不替换内容。
+各功能只提交展示数据与操作回调，不创建自己的弹窗。PDF 紧凑弹窗保留对照、预览、替换并保存和前后条；“预览”是开关，开启或关闭 Monaco 修改预览，不修改正文；按钮按下状态与两个窗口同步。分窗时两个弹窗共享候选快照，同步导航、预览、保存状态与关闭，不抢焦点。Monaco 使用字符范围红色背景和绿色 injected text 预览，不修改模型、不标记整行。输入后清除过期预览，空闲 350ms 后重算；保留光标、选区与 IME 输入。进入分窗时自动开启 PDF 差异高亮；全部已映射的文字和格式差异默认显示，不受“预览”或选区联动开关影响，仍可通过独立的差异高亮开关关闭。
 
 ## 注册接口
 
@@ -53,11 +61,15 @@ ReplacementReview.register({
 
 `apply(state, all)` 可以同步或异步返回更新后的会话字段。`state` 包含当前编辑器、模型、原文与版本、候选数组、当前 `position`、选项 `choices` 和发现上下文 `context`。功能脚本负责实际修改、只读与冲突检查，以及候选移除和坐标维护；公共模块只防止重复操作、更新返回的会话、渲染结果或显示错误。`all` 仅表示当前文件全部候选，不批量改写其他文件。
 
-需要展开 diff 时，提供 `preview(state, wholeFile)`，返回 `{ before, after, language }`；公共模块只负责 Monaco diff 渲染和模型释放。业务脚本负责生成预览内容。
+行内预览与展开 diff 共用当前所选方案的 `edits`，装饰缓存和清理由 `ReviewHighlights` 管理；展开 diff 默认通过 `previewEdits` 生成，勾选整个文件时使用全部候选的所选方案。特殊展示仍可提供 `preview(state, wholeFile)`，返回 `{ before, after, language }` 覆盖默认结果。`onSelect(item, context, items, previewEnabled)` 同步当前 PDF 指针；切换预览不触发 PDF 索引准备，默认差异高亮保持独立。
 
 可选接口保留 `isEnabled/setEnabled/available/isCurrent/onSelect/presentation`。`focusIndex(items, request)` 决定选区请求的候选回退位置，`containsSelection(item, request)` 判断选区是否属于当前候选。仅有 `setEnabled` 的功能注册为独立开关。`ReplacementReview.invalidate(id)` 使外部依赖变化后的会话失效并自动重新计算。
 
+双窗口切回阅读器或编辑器时，以 `document.hasFocus()` 配合窗口 `blur` 判断是否离开窗口：首次点击保留两边弹窗，随后点击其他位置才关闭。弹窗在后台打开或刷新也保留此状态；焦点进入内嵌 iframe 不算切换窗口。键盘开始操作后恢复普通关闭行为，窗口切换用的修饰键及 Alt+Tab 不消耗首次点击保护；关闭按钮始终生效。
+
 ## 当前文件前后条
+
+差异命中使用左闭右开的字符范围：点击高亮后方的普通文字不命中前一条差异；空字符差异仍可点击其插入位置。拖选期间不打开弹窗，取消拖选或切出窗口不提交待显示的弹窗。编辑器中按 Escape 关闭弹窗并保留当前选区。
 
 公共弹窗仅在当前文件的候选中移动，到首尾后禁用对应方向；没有候选时禁用前后条。不读取全局文件列表，也不自动打开其他文件。
 

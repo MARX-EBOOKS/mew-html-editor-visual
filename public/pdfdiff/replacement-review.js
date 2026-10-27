@@ -26,6 +26,7 @@
           range ||= (div.ownerDocument || document).createRange();
           range.setStart(part.node, Math.max(0, hit.start - part.start));
           range.setEnd(part.node, Math.max(0, Math.min(part.node.length, (caret ? hit.start : hit.end) - part.start)));
+          if (!caret && !range.toString().trim()) continue;
           for (let box of caret ? [range.getBoundingClientRect()] : range.getClientRects()) if ((box.width || caret) && box.height) {
             // Collapsed ranges can have a fractional width in Chromium. Always
             // draw missing text as a visible caret at the insertion point.

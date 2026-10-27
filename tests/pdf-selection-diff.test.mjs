@@ -5,6 +5,219 @@ import test from 'node:test';
 import { engineSource, source, engine, reviewProvider } from './support/pdf-harness.mjs';
 const PdfReviewProvider = engine();
 
+test('ME08-432 joined derZuver retains der and maps the final sentence across anchor groups', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me08-432.json', import.meta.url), 'utf8'));
+  for (const newline of ['\r\n', '\n']) for (const raw of [fixture.pdf, fixture.layerRaw]) {
+    const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+    const html = fixture.source.replace(/\r?\n/g, newline), index = locator.sourceIndex(html);
+    const target = new api.PdfSourceIndex(locator, { raw, parts: [] });
+    locator.prepareSource(index, [target]);
+    const candidates = index.reviewCandidates([target]);
+    const der = index.raw.lastIndexOf('der Zuverlässigkeit');
+    assert.ok(!candidates.some(c => c.sourceStart >= der && c.sourceStart <= der + 4 && c.comparison.pdf.trim() === 'der'),
+      'the same der cannot be counted again in the following passage');
+    const sentence = 'Beweise der Wahrheit und Beweise der Zuverlässigkeit!';
+    const at = index.raw.indexOf(sentence);
+    const hit = index.connectedRange(target, at, at + sentence.length, false, undefined, true);
+    assert.ok(hit, 'one confirmed mapping must cover the sentence across the former seam');
+    assert.equal(api.significantText(raw.slice(hit.start, hit.end)), 'BeweisederWahrhaftigkeitundBeweisederZuverlassigkeit!');
+    assert.ok(hit.start > raw.lastIndexOf('Mitteilungen'), 'mapping stays in the last paragraph');
+    const item = candidates.find(c => c.sourceStart >= at && c.sourceStart < der && c.comparison.pdf === 'aftigk');
+    assert.ok(item, 'the actual Wahrheit/Wahrhaftigkeit difference remains reviewable');
+    const inserted = index.connectedRange(target, item.sourceStart, item.sourceEnd, false, undefined, true);
+    assert.equal(raw.slice(inserted.start, inserted.end), 'aftigk');
+    assert.ok(inserted.start >= hit.start && inserted.end <= hit.end);
+    assert.ok(api.previewEdits(html, item.options[0].edits).includes('Beweise der Wahrhaftigkeit und Beweise der'));
+  }
+});
+
+test('ME08-412 OCR spacing preserves des and prepares the complete footnote dash difference', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me08-412.json', import.meta.url), 'utf8'));
+  for (const newline of ['\r\n', '\n']) for (const space of [' ', '  ']) for (const dash of ['–', '—']) {
+    const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+    const html = fixture.source.replace(/\r?\n/g, newline).replace('597–601', `597${dash}601`);
+    const index = locator.sourceIndex(html);
+    const target = new api.PdfSourceIndex(locator, { raw: fixture.pdf.replace('Gestalt des.', `Gestalt${space}des.`), parts: [] });
+    locator.prepareSource(index, [target]);
+    const candidates = index.reviewCandidates([target]);
+    const des = index.raw.indexOf('des deutschen'), missing = des + 4;
+    const word = candidates.filter(c => c.sourceStart < missing + 9 && c.sourceEnd > des);
+    assert.equal(word.length, 1);
+    assert.equal(word[0].comparison.html.trim(), 'deutschen', 'matching des cannot be borrowed from deutschen');
+    assert.ok(word[0].sourceStart >= des + 3);
+    assert.match(api.previewEdits(html, word[0].options[0].edits), /Gestalt des\s*\.\s*Proletariats/);
+    const at = index.raw.indexOf(`597${dash}601`) + 3;
+    const item = candidates.find(c => c.sourceStart === at && c.sourceEnd === at + 1);
+    assert.ok(item, 'dash is a replacement on first preparation, not a missing -601 insertion');
+    assert.deepEqual({ ...item.comparison }, { html: dash, pdf: '-' });
+    const hit = index.connectedRange(target, at, at + 1, false, undefined, true);
+    assert.equal(target.raw.slice(hit.start, hit.end), '-');
+    assert.ok(api.previewEdits(html, item.options[0].edits).includes('597-601'));
+    const marks = index.sourceDecorations(index.connectionPairs([target]), { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) });
+    assert.ok(marks.some(m => m.range.startColumn === index.starts[at] + 1 && m.range.endColumn === index.ends[at] + 1));
+    assert.ok(!marks.some(m => m.range.startColumn <= index.starts[des + 2] + 1 && m.range.endColumn > index.starts[des] + 1));
+    for (const [connection] of index.connectionPairs([target])) {
+      const diff = index.connectionDiff(target, connection);
+      assert.equal(diff.parts.map(p => p.html).join(''), index.raw.slice(connection.start, connection.end));
+      assert.equal(diff.parts.map(p => p.pdf).join(''), target.raw.slice(connection.targetStart, connection.targetEnd));
+    }
+  }
+});
+
+test('ME08-411 page text owns overlapping document highlights and hover messages', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me08-411.json', import.meta.url), 'utf8'));
+  const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+  const index = locator.sourceIndex(fixture.source);
+  const page = new api.PdfSourceIndex(locator, { raw: fixture.pdf, parts: [] });
+  locator.prepareSource(index, [page]);
+  const document = new api.PdfSourceIndex(locator, { raw: fixture.pdf, pages: [] });
+  const pageConnection = index.connections.get(page)[0];
+  const connection = index.rememberConnection(pageConnection.start, pageConnection.end, document,
+    { start: pageConnection.targetStart, end: pageConnection.targetEnd });
+  // Both alignments are valid: the larger scope deletes the earlier repeated re.
+  const parts = index.connectionDiff(page, pageConnection).parts.map(part => ({ ...part }));
+  const re = parts.findIndex(part => part.changed && part.html === 're' && !part.pdf);
+  assert.ok(re > 0);
+  for (const key of ['html', 'pdf']) {
+    parts[re - 1][key] = parts[re - 1][key].slice(0, -2);
+    parts[re + 1][key] = 're' + parts[re + 1][key];
+  }
+  connection.editorDiff = { distance: 50, parts };
+  assert.equal(parts.map(part => part.html).join(''), index.raw.slice(connection.start, connection.end));
+  assert.equal(parts.map(part => part.pdf).join(''), document.raw.slice(connection.targetStart, connection.targetEnd));
+  // The real rendered page ends before the document mapping does.
+  const pageEnd = index.raw.indexOf('noch eine Vorbemerkung');
+  const mapped = index.connectedRange(page, pageConnection.start, pageEnd, false, pageConnection, true);
+  pageConnection.end = pageEnd;
+  pageConnection.targetEnd = mapped.end;
+  delete pageConnection.editorDiff;
+  const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
+  const expected = index.sourceDecorations(index.connectionPairs([page]), model);
+  const candidates = index.reviewCandidates([page]).map(({ preview, ...item }) => item);
+  const rendered = new api.PdfSourceIndex(locator, { raw: fixture.pdf, parts: [], layer: {} });
+  index.connections.set(rendered, [pageConnection]);
+  for (const targets of [[document, page], [page, document], [document, page, rendered], [document, page]]) {
+    assert.deepEqual(index.sourceDecorations(index.connectionPairs(targets), model)
+      .filter(mark => mark.range.startColumn - 1 < index.starts[pageEnd]), expected);
+    assert.deepEqual(index.reviewCandidates(targets).filter(item => item.sourceStart < pageEnd)
+      .map(({ preview, ...item }) => item), candidates);
+    assert.ok(index.reviewCandidates(targets).some(item => item.sourceStart >= pageEnd), 'document-only differences remain available');
+    const at = index.raw.indexOf('Prahlerereien');
+    const repeated = index.reviewCandidates(targets).filter(item => item.sourceStart >= at && item.sourceStart < at + 12);
+    assert.equal(repeated.length, 1);
+    const [item] = repeated;
+    const hit = index.connectedRange(page, item.sourceStart, item.sourceEnd, false, undefined, true);
+    assert.equal(page.raw.slice(hit.start, hit.end), '');
+    assert.deepEqual({ ...item.comparison }, { html: 're', pdf: '' });
+    assert.ok(api.previewEdits(fixture.source, item.options[0].edits).includes('durch Prahlereien mit'));
+  }
+});
+
+test('ME08-423 marked OCR errors reuse confirmed document mappings beyond page connections', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me08-423.json', import.meta.url), 'utf8'));
+  const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+  const source = locator.sourceIndex(fixture.source);
+  const page = new api.PdfSourceIndex(locator, { raw: fixture.pdf, parts: [] });
+  const full = new api.PdfSourceIndex(locator, { raw: fixture.pdf,
+    pages: [{ number: 445, start: 0, end: fixture.pdf.length, parts: [] }] });
+  locator.getDocumentIndex = () => full;
+  locator.environment.getVisiblePages = () => [{ number: 445, index: page }];
+  locator.prepareSource(source, [page], {});
+  locator.indexDocument = () => { throw new Error('marker lookup must not load offscreen text'); };
+  full.locate = () => { throw new Error('marker lookup must reuse a confirmed connection'); };
+  for (const [word, pdf] of [['weißen', '\nÎ^'], ['ab', '»h']]) {
+    const start = source.raw.lastIndexOf(word === 'ab' ? 'abnahm' : word), end = start + word.length;
+    const mapped = source.connectedRange(page, start, end, false, undefined, true);
+    if (mapped) assert.equal(page.raw.slice(mapped.start, mapped.end).trim(), pdf.trim());
+    const [location] = locator.findLocations({}, [{ index: source, start, end, marked: true,
+      text: source.raw.slice(start, end) }], true);
+    assert.equal(location.targets.length, 1);
+    const target = location.targets[0];
+    assert.equal(target.pageNumber, 445);
+    assert.equal(target.difference.html, word);
+    assert.equal(target.difference.pdf, pdf);
+    assert.equal(target.source.index, source);
+  }
+});
+
+test('ME08-364 initial selection stays in the article when contents has a stronger word match', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me08-364.json', import.meta.url), 'utf8'));
+  for (const ready of [false, true]) {
+    const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+    const index = locator.sourceIndex(fixture.source), raw = fixture.pdf + '\n' + fixture.contents;
+    const full = new api.PdfSourceIndex(locator, { raw, pages: [
+      { number: 387, start: 0, end: fixture.pdf.length, parts: [] },
+      { number: 778, start: fixture.pdf.length + 1, end: raw.length, parts: [] }
+    ] });
+    let available = ready;
+    locator.getDocumentIndex = () => available ? full : undefined;
+    locator.indexDocument = async () => { available = true; return full; };
+    // The first word can lie outside a retained connection while page preparation finishes.
+    full.sourcePageScope(index, true);
+    index.preparedDocument = full;
+    const body = index.raw.indexOf('Die folgenden');
+    index.rememberConnection(body, index.raw.length, full, { start: raw.indexOf('Die folgenden'), end: fixture.pdf.length });
+    const start = index.raw.indexOf('Kossuths'), end = start + 'Kossuths'.length;
+    const entry = { index, start, end, text: index.raw.slice(start, end),
+      before: index.raw.slice(Math.max(0, start - 160), start), after: index.raw.slice(end, end + 160) };
+    assert.equal(index.connectedRange(full, start, end), null, 'exercise the initial selection fallback');
+    assert.ok(full.locate(entry).start > fixture.pdf.length, 'unrestricted search prefers the contents entry');
+    full.sourcePageScope = () => { throw new Error('selection must reuse its prepared page scope'); };
+    const [location] = await locator.findLocations({}, [entry]);
+    assert.equal(location.targets.length, 1);
+    assert.equal(location.targets[0].pageNumber, 387, 'selection must stay on printed page 364');
+    assert.equal(location.targets[0].text, 'Kossuths');
+  }
+});
+
+test('ME08-364 wrapped title compounds keep both sides of the anchor boundary', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me08-364.json', import.meta.url), 'utf8'));
+  for (const full of [false, true]) for (const hyphen of ['-', '\u2010', '\u2011']) {
+    const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+    const source = fixture.source.replaceAll('Kossuths-Bündnis', `Kossuths${hyphen}Bündnis`);
+    const raw = fixture.pdf.replace('Kossuths-\n', `Kossuths${hyphen}\n`);
+    const target = new api.PdfSourceIndex(locator, { raw });
+    if (full) locator.getDocumentIndex = () => target;
+    const index = locator.sourceIndex(source);
+    locator.prepareSource(index, [target], {});
+    const start = index.raw.indexOf('Kossuths'), end = start + 'Kossuths-Bündnis'.length;
+    for (const marked of [false, true]) {
+      const hit = index.connectedRange(target, start, end, false, undefined, marked);
+      assert.ok(hit, 'the title is inside the confirmed connection');
+      assert.equal(raw.slice(hit.start, hit.end), `Kossuths${hyphen}\nBündnis`);
+      const reverse = index.connectedRange(target, hit.start, hit.end, true);
+      assert.equal(index.raw.slice(reverse.start, reverse.end), `Kossuths${hyphen}Bündnis`);
+    }
+    const candidates = index.reviewCandidates([target]);
+    assert.ok(candidates.length, 'unrelated real OCR differences remain reviewable');
+    assert.ok(candidates.every(item => item.sourceStart >= end), 'no false title insertion');
+    const corrected = api.previewEdits(source, candidates.flatMap(item => item.options[0].edits));
+    assert.equal(corrected.split(`Kossuths${hyphen}`).length, 3, 'title and heading each retain one occurrence');
+    assert.ok(corrected.endsWith(source.slice(source.indexOf('<aside>'))), 'footnote and file ending stay intact');
+  }
+});
+
+test('ME05-486 joined PDF words retain matching text at passage edges', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me05-486.json', import.meta.url), 'utf8'));
+  for (const missing of [false, true]) {
+    const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+    const source = missing ? fixture.source.replace('Unsre ', '') : fixture.source;
+    const index = locator.sourceIndex(source), target = new api.PdfSourceIndex(locator, { raw: fixture.pdf });
+    locator.prepareSource(index, [target]);
+    const candidates = index.reviewCandidates([target]);
+    assert.deepEqual(Array.from(candidates, item => ({ ...item.comparison })), missing
+      ? [{ html: '×', pdf: 'X' }, { html: '', pdf: 'Unsre' }] : []);
+    if (missing) {
+      const corrected = api.previewEdits(source, candidates.find(item => item.comparison.pdf === 'Unsre').options[0].edits);
+      assert.equal(corrected.replace('UnsreVerwickelungen', 'Unsre Verwickelungen'), fixture.source);
+    } else {
+      const start = index.raw.indexOf('Unsre'), hit = index.connectedRange(target, start, start + 5);
+      assert.ok(hit);
+      assert.equal(target.raw.slice(hit.start, hit.end), 'Unsre');
+    }
+  }
+});
+
 test('ME05-284 wrapped words and dash variants do not create text highlights', async () => {
   const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me05-284.json', import.meta.url), 'utf8'));
   for (const source of [fixture.source, fixture.source.replace(/\r\n/g, '\n')]) {
@@ -46,6 +259,56 @@ test('ME05-284 a real missing letter disappears from review after replacement', 
   const revised = locator.editorSourceIndex(model, [target]);
   locator.prepareSource(revised, [target], pdf);
   assert.equal(revised.reviewCandidates([target]).some(item => item.comparison.pdf === 'n'), false);
+});
+
+test('ME05-389 OCR error near the final anchor retains the complete font correction', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me05-389.json', import.meta.url), 'utf8'));
+  const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+  const index = locator.sourceIndex(fixture.source), target = new api.PdfSourceIndex(locator, { raw: fixture.pdf, parts: fixture.parts });
+  locator.getDocumentIndex = () => target;
+  locator.prepareSource(index, [target], {});
+  const text = 'Geschrieben von Friedrich Engels.', start = index.raw.indexOf(text), end = start + text.length;
+  const hit = index.connectedRange(target, start, end, false, undefined, true);
+  assert.ok(hit, 'the final attribution stays in the confirmed alignment');
+  assert.equal(target.raw.slice(hit.start, hit.end), 'Geschrieben vyn Friedrich Engels.');
+  const item = index.formatDifferences(index.connectionPairs([target])).find(item => item.sourceStart === start);
+  assert.equal(item?.text, text, 'surplus bold is detected across the OCR error and matching suffix');
+  const corrected = api.previewEdits(fixture.source, item.options[0].edits);
+  assert.equal(corrected, fixture.source.replace(`<b>${text}</b>`, text), 'only formatting changes');
+  assert.ok(index.reviewCandidates([target]).some(item => item.comparison.html === 'o' && item.comparison.pdf === 'y'));
+  const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
+  const marks = index.sourceDecorations(index.connectionPairs([target]), model);
+  assert.ok(marks.some(mark => mark.options.description === 'PDF text and font difference'
+    && fixture.source.slice(mark.range.startColumn - 1, mark.range.endColumn - 1) === text));
+});
+
+test('ME05-398 missing word prefix shares the highlight, click mapping and replacement', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me05-398.json', import.meta.url), 'utf8'));
+  for (const source of [fixture.source, fixture.source.replace(/\r\n/g, '\n')]) {
+    const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+    const index = locator.sourceIndex(source), target = new api.PdfSourceIndex(locator, { raw: fixture.pdf });
+    locator.getDocumentIndex = () => target;
+    locator.prepareSource(index, [target], {});
+    const at = index.raw.indexOf('versammlung'), item = index.reviewCandidates([target]).find(item => item.sourceStart === at);
+    assert.equal(item?.comparison.html, '');
+    assert.equal(item?.comparison.pdf, 'Vereinbarungs');
+    assert.equal(item.sourceEnd, at);
+    const hit = index.connectedRange(target, at, at, false, undefined, true);
+    assert.equal(target.raw.slice(hit.start, hit.end), 'Vereinbarungs');
+    const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
+    const marks = index.sourceDecorations(index.connectionPairs([target]), model);
+    const mark = marks.find(mark => mark.options.inlineClassName === 'mew-ocr-diff-text'
+      && mark.range.startColumn - 1 === source.indexOf('versammlung') - 1 && mark.range.endColumn - 1 === source.indexOf('versammlung'));
+    assert.ok(mark, 'the space before the missing prefix is the clickable highlight');
+    const range = index.rawRange(mark.range.startColumn - 1, mark.range.endColumn - 1);
+    const clicked = index.connectedRange(target, range.start, range.end, false, undefined, true);
+    assert.equal(target.raw.slice(clicked.start, clicked.end).trim(), 'Vereinbarungs');
+    const corrected = api.previewEdits(source, item.options[0].edits);
+    assert.equal(corrected, source.replace('Auflösung der versammlung', 'Auflösung der Vereinbarungsversammlung'));
+    const revised = locator.sourceIndex(corrected);
+    locator.prepareSource(revised, [target], {});
+    assert.ok(!revised.reviewCandidates([target]).some(item => item.comparison.pdf.includes('Vereinbarungs')));
+  }
 });
 
 test('ME05-281 repeated anchors across a broken word preserve the complete passage', async () => {
@@ -207,14 +470,17 @@ test('review navigation reuses comparison diffs and invalidates changed readings
 test('popup anchor reuses mappings and text geometry while following scrolling and changed connections', () => {
   const window = {};
   vm.runInNewContext(engineSource.replace(
-    '    connection ||= (this.connections.get(target)',
-    '    window.mappingCalls = (window.mappingCalls || 0) + 1; connection ||= (this.connections.get(target)'
+    '  connectedRange(target, start, end, reverse = false, connection, marked = false) {',
+    '$& window.mappingCalls = (window.mappingCalls || 0) + 1;'
   ), { window });
   let top = 20, scale = 1, visible, measurements = 0;
   const locator = new window.PdfReviewProvider.PdfLocator({}, {
     getVisiblePages: () => [{ index: visible }],
     document: { createElement: () => ({}), createRange: () => ({ setStart() {}, setEnd() {},
-      getClientRects: () => { measurements++; return [{ left: 10, top, bottom: top + 12, height: 12 }]; } }) }
+      getClientRects: () => { measurements++; return [
+        { left: 10, top, bottom: top + 12, width: 20, height: 12 },
+        { left: 0, top: top + 16, bottom: top + 28, width: 0, height: 12 }
+      ]; } }) }
   });
   const source = locator.sourceIndex('Alpha Beta');
   visible = locator.sourceIndex('Alpha Beta');
@@ -223,6 +489,8 @@ test('popup anchor reuses mappings and text geometry while following scrolling a
   source.rememberConnection(0, source.raw.length, visible, { start: 0, end: visible.raw.length });
   const item = { sourceStart: 6, sourceEnd: 10, pdfSource: { index: source, start: 6, end: 10 } };
   assert.equal(locator.reviewAnchor(item, source).top, 20);
+  assert.equal(locator.reviewAnchor(item, source).left, 10, 'a collapsed next-line rect must not pull a text anchor to the left');
+  assert.equal(locator.reviewAnchor(item, source).bottom, 32, 'a collapsed next-line rect must not extend a text anchor downwards');
   const initial = window.mappingCalls;
   top = 50;
   assert.equal(locator.reviewAnchor(item, source).top, 50, 'scrolling follows the current layer position');
@@ -246,6 +514,7 @@ test('PDF newline differences use a caret without highlighting adjacent letters'
     const provider = reviewProvider(engine(), new Map(), undefined, { createRange: () => ({
       setStart(node, offset) { endpoints.push([node, offset]); },
       setEnd(node, offset) { endpoints.push([node, offset]); },
+      getBoundingClientRect: () => ({ left: 20, right: 20, top: 20, width: 0, height: 10 }),
       getClientRects: () => [{ left: 20, right: 20, top: 20, width: 0, height: 10 }]
     }) });
     const next = { length: 4 }, raw = 'alpha' + newline + 'beta';
@@ -482,7 +751,12 @@ test('continuous text and font highlights share both details across tags and adj
     const target = new api.PdfSourceIndex(locator, { raw: pdf,
       parts: [{ start: 0, end: pdf.length, font: { italic: false, bold: false } }] });
     const connection = index.rememberConnection(0, index.raw.length, target, { start: 0, end: pdf.length });
+    let mappings = 0;
+    const sourceSegments = index.sourceSegments.bind(index);
+    index.sourceSegments = (...args) => { mappings++; return sourceSegments(...args); };
+    index.fontEdits = () => assert.fail('Highlighting must not build format replacement edits');
     const marks = index.sourceDecorations([[connection, target], [connection, target]], model);
+    assert.equal(mappings, 1, 'overlapping text and font ranges share one source mapping');
     assert.deepEqual(Array.from(marks, mark => markup.slice(mark.range.startColumn - 1, mark.range.endColumn - 1)), expected);
     for (const { options } of marks) {
       assert.equal(options.description, 'PDF text and font difference');
@@ -873,22 +1147,24 @@ test('MEW_BRIEF/23/ME23-316 prepares reusable mappings across five actual OCR pa
   const touchedPages = new Set();
   let changed = 0, probes = 0;
   for (const item of connections) {
-    let cursor = 0;
-    for (const span of item.spans) {
+    const ranges = source.connectionDiff(full, item).ranges;
+    for (const [position, [a, b, , , span]] of ranges.entries()) {
       if (span.html.length && span.pdf.length) {
-        const a = span.changed ? cursor : cursor + Math.floor(span.html.length / 2);
-        const b = span.changed ? cursor + span.html.length : a + 1;
-        const start = item.start + item.left.starts[a], end = item.start + item.left.ends[b - 1];
+        const start = item.start + (span.changed ? a : a + Math.floor(span.html.length / 2));
+        const end = span.changed ? item.start + b : start + 1;
         const hit = source.connectedRange(full, start, end, false, item);
         assert.ok(hit);
-        assert.equal(api.normalized(full.raw.slice(hit.start, hit.end)).text,
-          span.changed ? span.pdf : api.normalized(source.raw.slice(start, end)).text);
+        const before = start === item.start + a && ranges[position - 1]?.[4], after = end === item.start + b && ranges[position + 1]?.[4];
+        const missing = part => part && !part.html && api.significantText(part.pdf) ? part.pdf : '';
+        assert.equal(full.raw.slice(hit.start, hit.end),
+          missing(before) + (span.changed ? span.pdf : source.raw.slice(start, end)) + missing(after));
         const reverse = source.connectedRange(full, hit.start, hit.end, true, item);
-        assert.equal(reverse.start, start); assert.equal(reverse.end, end);
+        assert.ok(reverse.start <= start && reverse.end >= end, 'reverse selections include touching HTML-only text');
+        const roundTrip = source.connectedRange(full, reverse.start, reverse.end, false, item);
+        assert.equal(roundTrip.start, hit.start); assert.equal(roundTrip.end, hit.end);
         for (const page of full.pages) if (hit.start < page.end && hit.end > page.start) touchedPages.add(fixture.pages[page.number - 1].number);
         changed += Number(span.changed); probes++;
       }
-      cursor += span.html.length;
     }
   }
   assert.equal(touchedPages.size, 5); assert.ok(changed > 0); assert.ok(probes > 20);
@@ -1000,7 +1276,7 @@ test('local diff preserves complete Unicode readings and maps source positions i
   const left = index('Before working together after.'), right = index('Before working nicely together after.');
   left.rememberConnection(0, left.raw.length, right, { start: 0, end: right.raw.length });
   const word = left.raw.indexOf('together'), mapped = left.connectedRange(right, word, word + 8);
-  assert.equal(right.raw.slice(mapped.start, mapped.end), 'together');
+  assert.equal(right.raw.slice(mapped.start, mapped.end), 'nicely together');
   const reverse = left.connectedRange(right, mapped.start, mapped.end, true);
   assert.equal(left.raw.slice(reverse.start, reverse.end), 'together');
 });
@@ -1018,7 +1294,7 @@ test('native decorations split changes around tags, map entities, and mark missi
   const ranges = decorations.map(({ range }) => markup.slice(range.startColumn - 1, range.endColumn - 1));
   assert.deepEqual([...ranges], ['X', '&amp;', '']);
   assert.ok(decorations.every(item => item.options.linesDecorationsClassName));
-  assert.equal(decorations.at(-1).options.beforeContentClassName, 'mew-ocr-diff-insert');
+  assert.equal(decorations.at(-1).options.before?.inlineClassName, 'mew-ocr-diff-insert');
   assert.equal(decorations.at(-1).range.startColumn, 21, 'trailing insertion is anchored before the closing tag');
   assert.match(decorations.at(-1).options.hoverMessage.value, /OCR:.*\+/);
   const saved = connection.editorDiff;
@@ -1186,7 +1462,7 @@ test('ME04-037 keeps the matching heading out of deletion/reinsertion markers', 
   }
 });
 
-test('ME07-261 missing letters after a PDF line break keep a source insertion marker and mapping', () => {
+test('ME07-261 missing letters highlight available whitespace and retain their click mapping', () => {
   const api = engine();
   const locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
   const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
@@ -1200,20 +1476,44 @@ test('ME07-261 missing letters after a PDF line break keep a source insertion ma
     assert.ok(mark, 'whitespace-only HTML changes must still mark missing PDF letters');
     const [item] = index.reviewCandidates([target]);
     assert.equal(mark.range.startColumn, item.options[0].edits[0].start + 1);
-    assert.equal(mark.range.endColumn, mark.range.startColumn);
-    assert.equal(mark.options.beforeContentClassName, 'mew-ocr-diff-insert');
-    assert.equal(mark.options.inlineClassName, undefined);
+    assert.equal(html.slice(mark.range.startColumn - 1, mark.range.endColumn - 1), gap === '\n' ? '' : gap);
+    assert.equal(mark.options.before?.inlineClassName, gap === '\n' ? 'mew-ocr-diff-insert' : undefined);
+    assert.equal(mark.options.inlineClassName, gap === '\n' ? undefined : 'mew-ocr-diff-text');
     const at = index.raw.indexOf('schließt');
     const hit = index.connectedRange(target, at, at, false, undefined, true);
     assert.ok(hit, 'clicking the insertion caret maps back to the missing letters');
     assert.equal(target.raw.slice(hit.start, hit.end).trim(), 'an');
     const anchor = api.lowerBound(index.ends, mark.range.startColumn);
-    const clicked = index.connectedRange(target, anchor, anchor, false, undefined, true);
+    const end = api.lowerBound(index.starts, mark.range.endColumn - 1);
+    const clicked = index.connectedRange(target, anchor, end, false, undefined, true);
     assert.equal(target.raw.slice(clicked.start, clicked.end).trim(), 'an', 'the insertion start maps to the same missing letters');
     if (gap === ' ') assert.equal(index.connectedRange(target, at, at), null,
       'ordinary caret does not select whitespace-adjacent changes');
     const patched = api.previewEdits(html, item.options[0].edits);
-    assert.ok(patched.includes('an'), 'replacement retains the missing PDF letters');
+    assert.equal(patched, '<p>Folgerung\nanschließt</p>', 'replacement consumes the original whitespace exactly once');
+  }
+});
+
+test('space markers cover changed spaces and adjacent insertions without changing replacement ranges', () => {
+  const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({
+    set innerHTML(text) { this.content = { textContent: text === '&nbsp;' ? '\u00a0' : text }; }
+  }) } });
+  for (const [html, pdf, space] of [
+    ['So wenig', 'So’wenig', 2], ['So wenig', 'SoX wenig', null],
+    ['So wenig', 'So Xwenig', 2], ['So&nbsp;wenig', 'So’wenig', 2],
+    ['Sowenig', 'SoXwenig', null]
+  ]) {
+    const markup = '<p>' + html + '</p>', index = locator.sourceIndex(markup), target = locator.sourceIndex(pdf);
+    index.rememberConnection(0, index.raw.length, target, { start: 0, end: target.raw.length });
+    const [mark] = index.sourceDecorations(index.connectionPairs([target]), { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) });
+    assert.equal(mark.range.startColumn - 1, space === null ? 5 : index.starts[space]);
+    assert.equal(mark.range.endColumn - 1, space === null ? 5 : index.ends[space]);
+    assert.equal(mark.options.before?.inlineClassName, space === null ? 'mew-ocr-diff-insert' : undefined);
+    const from = index.rawRange(mark.range.startColumn - 1, mark.range.endColumn - 1);
+    const hit = index.connectedRange(target, from.start, from.end, false, undefined, true);
+    assert.ok(hit?.approximate, 'the highlighted space still reaches the actual difference');
+    const [item] = index.reviewCandidates([target]);
+    assert.equal(api.previewEdits(markup, item.options[0].edits), '<p>' + pdf + '</p>');
   }
 });
 
@@ -1225,7 +1525,7 @@ test('ME07-316 missing heading text marks the insertion before the closing tag a
   locator.prepareSource(index, [target], {});
   const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
   const marks = index.sourceDecorations(index.connections.get(target).map(connection => [connection, target]), model);
-  const marker = marks.find(mark => mark.options.beforeContentClassName === 'mew-ocr-diff-insert');
+  const marker = marks.find(mark => mark.options.before?.inlineClassName === 'mew-ocr-diff-insert');
   const offset = marker.range.startColumn - 1;
   assert.equal(offset, fixture.html.indexOf('</h1>'));
   const at = api.lowerBound(index.ends, offset + 1);
@@ -1265,8 +1565,35 @@ test('source decorations ignore whitespace and hyphens while preserving subseque
     assert.equal(decorate(html, pdf).length, 1, JSON.stringify([html, pdf]));
     assert.equal(mark.range.startColumn, column);
     assert.equal(mark.range.endColumn, column);
-    assert.equal(mark.options.beforeContentClassName, 'mew-ocr-diff-insert');
+    assert.equal(mark.options.before?.inlineClassName, 'mew-ocr-diff-insert');
     assert.equal(mark.options.inlineClassName, undefined);
+  }
+});
+
+test('selection boundaries include meaningful missing text regardless of character type', () => {
+  const api = engine();
+  for (const [html, pdf, start, end, expected, at, missing] of [
+    ['work', 'works', 0, 4, 'works', 4, 's'],
+    ['word', 'sword', 0, 4, 'sword', 0, 's'],
+    ['кот', 'коты', 0, 3, 'коты', 3, 'ы'],
+    ['cafe', 'cafe\u0301', 0, 4, 'cafe\u0301', 4, '\u0301'],
+    ['hello world', 'hello, world', 0, 5, 'hello,', 5, ','],
+    ['hello world', 'hello new world', 6, 11, 'new world', 6, 'new '],
+    ['中文', '中文字', 0, 2, '中文字', 2, '字'],
+    ['work', 'work★', 0, 4, 'work★', 4, '★'],
+    ['hello world', 'hello, world', 0, 11, 'hello, world', 5, ','],
+    ['中文', '中间文', 0, 2, '中间文', 1, '间']
+  ]) {
+    const locator = new api.PdfLocator(), index = new api.PdfSourceIndex(locator, { raw: html });
+    const target = new api.PdfSourceIndex(locator, { raw: pdf, parts: [] });
+    index.rememberConnection(0, html.length, target, { start: 0, end: pdf.length });
+    const hit = index.connectedRange(target, start, end);
+    assert.equal(pdf.slice(hit.start, hit.end), expected, JSON.stringify([html, pdf]));
+    target.rememberConnection(0, pdf.length, index, { start: 0, end: html.length });
+    const reverse = target.connectedRange(index, start, end, true);
+    assert.equal(pdf.slice(reverse.start, reverse.end), expected, 'reverse selections use the same boundary rule');
+    const clicked = index.connectedRange(target, at, at, false, undefined, true);
+    assert.equal(pdf.slice(clicked.start, clicked.end), missing, 'direct marker clicks retain every character type');
   }
 });
 
@@ -1447,6 +1774,9 @@ test('text candidates, font candidates and decorations reuse one traversal and r
     { html: 'Alpha beta ', pdf: 'Alpha beta ', changed: false },
     { html: 'gamma', pdf: 'GAMMA', changed: true }
   ].map(part => new Proxy(part, { get(object, key) { reads++; return object[key]; } })) };
+  let fontReads = 0;
+  const fontRuns = target.fontRuns.bind(target);
+  target.fontRuns = (...args) => { fontReads++; return fontRuns(...args); };
   const items = index.reviewCandidates([target]);
   const traversed = reads;
   const fonts = index.formatDifferences([[connection, target]]);
@@ -1457,11 +1787,16 @@ test('text candidates, font candidates and decorations reuse one traversal and r
   assert.deepEqual(Array.from(fonts, item => item.text), ['beta']);
   assert.equal(marks.filter(mark => mark.options.description === 'PDF OCR text difference').length, 1);
   assert.equal(marks.filter(mark => mark.options.description === 'PDF font difference').length, 1);
+  assert.deepEqual(index.formatDifferences([[connection, target]]), fonts, 'merging output does not mutate cached font data');
+  assert.deepEqual(index.reviewCandidates([target]), items, 'candidate generation reuses the same data');
+  assert.equal(reads, traversed, 'repeated consumers do not revisit diff parts');
+  assert.equal(fontReads, 1, 'font runs are read once across all consumers');
   target.parts[1].font.bold = false;
   target.fontVersion++;
   assert.equal(index.formatDifferences([[connection, target]]).length, 0);
   assert.ok(reads > traversed, 'new font metadata invalidates classification');
   assert.equal(index.reviewCandidates([target])[0].comparison.pdf, 'GAMMA');
+  assert.equal(fontReads, 2, 'updated font data is shared by subsequent text review');
 });
 
 test('transient mapping eviction preserves every prepared passage and recent selections', () => {

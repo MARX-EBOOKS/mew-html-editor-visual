@@ -6,6 +6,252 @@ import { launchBrowser } from './support/browser.mjs';
 import { reviewFile, popupSource, diffSource, engineSource, highlightSource, providerSource, fullReviewSource, fullProviderSource, source, readerMenu, engine } from './support/pdf-harness.mjs';
 const PdfReviewProvider = engine();
 
+test('ME08-350 ready page highlights survive a raw diff dominated by OCR whitespace', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me08-350.json', import.meta.url), 'utf8'));
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.route('http://whitespace.test/**', async route => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="editor" style="width:700px;height:500px"></div>' });
+      if (!pathname.startsWith('/monaco/') || pathname.includes('..')) return route.abort();
+      return route.fulfill({ contentType: pathname.endsWith('.css') ? 'text/css' : 'text/javascript',
+        body: await readFile(new URL('../node_modules/monaco-editor/' + pathname.slice(8), import.meta.url)) });
+    });
+    await page.goto('http://whitespace.test/');
+    await page.addScriptTag({ url: '/monaco/min/vs/loader.js' });
+    await page.evaluate(() => new Promise(resolve => {
+      require.config({ paths: { vs: '/monaco/min/vs' } }); require(['vs/editor/editor.main'], resolve);
+    }));
+    await page.addScriptTag({ content: engineSource });
+    const result = await page.evaluate(async fixture => {
+      if (!await PdfSelectionDiff.loadMonaco()) throw new Error('Monaco diff must load');
+      const locator = new PdfReviewProvider.PdfLocator({}, { document });
+      locator.indexDocument = () => { throw new Error('ready-page highlighting must not index the volume'); };
+      const index = locator.sourceIndex(fixture.source), target = new PdfSelectionDiff.PdfSourceIndex(locator, { raw: fixture.pdf });
+      locator.prepareSource(index, [target]);
+      const connection = index.connections.get(target)[0], diff = index.connectionDiff(target, connection);
+      if (!diff) throw new Error('OCR whitespace discarded the confirmed page diff');
+      const editor = monaco.editor.create(document.getElementById('editor'), { value: fixture.source });
+      const items = index.reviewCandidates([target]), marks = index.sourceDecorations(index.connectionPairs([target]), editor.getModel());
+      const collection = editor.createDecorationsCollection(marks); editor.render(true);
+      const corrected = PdfSelectionDiff.previewEdits(fixture.source, items.flatMap(item => item.options[0].edits));
+      // An unresolved whole-passage fallback must still be rejected.
+      const broad = { ...connection, editorDiff: { distance: 129,
+        parts: [{ html: index.raw, pdf: fixture.pdf, changed: true }] } };
+      const rejected = index.connectionDiff(target, broad) === null;
+      const result = { rawDistance: diff.distance, comparisons: items.map(item => item.comparison),
+        marks: marks.length, applied: collection.length, corrected, rejected };
+      editor.dispose(); return result;
+    }, fixture);
+    assert.ok(result.rawDistance > 128, 'exercise the former raw edit cutoff');
+    assert.deepEqual(result.comparisons.filter(item => item.html), [{ html: 'u', pdf: 'ü' }, { html: 'f', pdf: 's' }]);
+    assert.equal(result.marks, 4); assert.equal(result.applied, result.marks, 'all orange decorations are applied');
+    assert.ok(result.corrected.includes('verlangten daraus die')); assert.ok(result.rejected);
+  } finally { await browser.close(); }
+});
+
+test('Monaco selection matches share PDF review pointers, popup navigation and one undo group', async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.route('http://patterns.test/**', async route => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="editor" style="width:700px;height:400px"></div>' });
+      if (!pathname.startsWith('/monaco/') || pathname.includes('..')) return route.abort();
+      return route.fulfill({ contentType: pathname.endsWith('.css') ? 'text/css' : 'text/javascript',
+        body: await readFile(new URL('../node_modules/monaco-editor/' + pathname.slice('/monaco/'.length), import.meta.url)) });
+    });
+    await page.goto('http://patterns.test/');
+    await page.addScriptTag({ url: '/monaco/min/vs/loader.js' });
+    await page.evaluate(() => new Promise(resolve => {
+      require.config({ paths: { vs: '/monaco/min/vs' } });
+      require(['vs/editor/editor.main'], resolve);
+    }));
+    await page.addScriptTag({ content: '(() => {\n' + engineSource + '\n})();' });
+    await page.addStyleTag({ content: await readFile(new URL('../public/pdfdiff/replacement-review.css', import.meta.url), 'utf8') });
+    await page.evaluate(() => {
+      localStorage.setItem('mew.pdf-review.font-enabled', 'false');
+      window.editor = monaco.editor.create(document.getElementById('editor'));
+      window.pdf = {};
+      window.locator = new PdfReviewProvider.PdfLocator({}, { document });
+      locator.reviewAnchor = () => ({ left: 720, top: 100, bottom: 120 });
+      window.PdfSelection = { viewer: { pdfDocument: pdf }, locator,
+        showReviewPointer(editor, items) { window.pointed = items.map(item => [item.sourceStart, item.sourceEnd]); }, clearReviewPointer() {} };
+      window.readerMonaco = { editor, save: async () => true };
+    });
+    await page.addScriptTag({ content: fullProviderSource });
+    for (const [html, replacement] of [['wrong term', 'right term'], ['teWrm', 'teRrm'], ['term', 'teXrm'], ['term', 'termX'], ['term', 'Xterm'], ['teXrm', 'term'], ['a&amp;b', 'a&c'], ['te<b>W</b>rm', 'teRrm'], ['konterrevolution', 'kontrevolution']]) {
+      const result = await page.evaluate(async ({ html, replacement }) => {
+        await PdfReviewReady;
+        ReplacementReview.close();
+        localStorage.setItem('mew-review-preview', 'false');
+        const screenshot = html === 'konterrevolution';
+        const capital = text => text[0].toUpperCase() + text.slice(1);
+        const source = `<p title="${html.replaceAll('"', '&quot;')}">First ${screenshot ? capital(html) : html} here.</p>\n<p>Second ${html}${screenshot ? 'äre' : ''} elsewhere.</p>\n<p>Third ${html} correct.</p>\n<p>Fourth ${html} other fault.</p>\n<p>Fifth ${html}${screenshot ? 'ären' : ''}!</p>`;
+        const model = editor.getModel(); model.setValue(source);
+        const index = locator.editorSourceIndex(model), query = locator.sourceIndex(html).raw;
+        const starts = [...index.raw.matchAll(new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'))].map(match => match.index);
+        let raw = '', offset = 0;
+        for (const [at, start] of starts.entries()) {
+          raw += index.raw.slice(offset, start) + (at === 2 ? query : at === 3 ? 'OTHER' : screenshot && at === 0 ? capital(replacement) : replacement);
+          offset = start + query.length;
+        }
+        raw += index.raw.slice(offset);
+        const target = new PdfReviewProvider.PdfSourceIndex(locator, { raw });
+        index.rememberConnection(0, index.raw.length, target, { start: 0, end: raw.length });
+        const start = starts[1], end = start + query.length;
+        const notice = { html: query, pdf: replacement, source: { index, start, end }, target: { index: target } };
+        editor.setSelection(index.sourceRange(model, start, end));
+        window.dispatchEvent(new CustomEvent('pdf-selection-difference', { detail: {
+          editor, model, pdf, notices: [notice], targets: [target], interactionId: start
+        } }));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        return { source, expected: [0, 1, 4].map(at => [starts[at], starts[at] + query.length]), pointed,
+          position: document.querySelector('[data-position]').textContent };
+      }, { html, replacement });
+      assert.deepEqual(result.pointed, result.expected, `${html}: only matching faults are highlighted`);
+      assert.match(result.position, /^2 \/ [4-9]$/, 'matching selections and unrelated faults remain navigable');
+      await page.locator('[data-prev]').click();
+      assert.deepEqual(await page.evaluate(() => pointed), result.expected);
+      assert.equal(await page.locator('[data-position]').textContent(), result.position.replace(/^2/, '1'));
+      await page.locator('[data-apply]').click();
+      assert.equal(await page.evaluate(() => editor.getValue()), result.source, 'preview leaves the source unchanged');
+      assert.deepEqual(await page.evaluate(() => pointed), result.expected, 'preview retains only the matching faults');
+      assert.ok(await page.evaluate(() => editor.getModel().getAllDecorations()
+        .filter(mark => mark.options.description === 'Revision preview').length) >= result.expected.length,
+      'every matching occurrence receives character-level revision marks');
+      await page.locator('[data-save]').click();
+      await page.waitForFunction(original => editor.getValue() !== original, result.source);
+      const changed = await page.evaluate(() => editor.getValue());
+      assert.ok(changed.includes(`Third ${html} correct.`), 'correct occurrence is preserved');
+      assert.ok(changed.includes(`Fourth ${html} other fault.`), 'different fault is preserved');
+      assert.ok(!changed.includes(`Second ${html} elsewhere.`), 'matching occurrence is replaced too');
+      if (html === 'konterrevolution') {
+        assert.ok(changed.includes('First Kontrevolution here.'), 'capitalization is preserved');
+        assert.ok(changed.includes('Second kontrevolutionäre elsewhere.'), 'selected stem propagates across suffixes');
+        assert.ok(changed.includes('Fifth kontrevolutionären!'), 'different word endings are preserved');
+      }
+      await page.evaluate(() => editor.trigger('test', 'undo', null));
+      assert.equal(await page.evaluate(() => editor.getValue()), result.source, 'all matching replacements undo together');
+    }
+    for (const letter of ['w', '𠀀']) {
+      const result = await page.evaluate(async letter => {
+        ReplacementReview.close();
+        const source = `<p>${letter}elcher ${letter}eit ${letter}aren ${letter}ollte ${letter}eit</p>`;
+        const model = editor.getModel(); model.setValue(source);
+        const index = locator.editorSourceIndex(model);
+        const target = new PdfReviewProvider.PdfSourceIndex(locator, { raw: index.raw.replaceAll(letter, 'W') });
+        index.rememberConnection(0, index.raw.length, target, { start: 0, end: target.raw.length });
+        const start = index.raw.indexOf(letter, letter.length), end = start + letter.length;
+        editor.setSelection(index.sourceRange(model, start, end));
+        let searches = 0;
+        const findMatches = model.findMatches;
+        model.findMatches = function (...args) { searches++; return findMatches.apply(this, args); };
+        window.dispatchEvent(new CustomEvent('pdf-selection-difference', { detail: {
+          editor, model, pdf, notices: [{ html: letter, pdf: 'W', source: { index, start, end }, target: { index: target } }],
+          targets: [target], interactionId: start
+        } }));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        model.findMatches = findMatches;
+        const repeated = index.raw.lastIndexOf(letter);
+        return { source, pointed, expected: [[start, end], [repeated, repeated + letter.length]], searches,
+          after: source.replaceAll(`${letter}eit`, 'Weit') };
+      }, letter);
+      assert.deepEqual(result.pointed, result.expected, 'single-letter faults group only inside the same word');
+      assert.equal(result.searches, 0, 'single letters bypass Monaco occurrence matching');
+      await page.locator('[data-save]').click();
+      await page.waitForFunction(expected => editor.getValue() === expected, result.after);
+      assert.equal(await page.evaluate(() => editor.getValue()), result.after, 'the same fault in repeated words is patched; different words remain untouched');
+      await page.evaluate(() => editor.trigger('test', 'undo', null));
+      assert.equal(await page.evaluate(() => editor.getValue()), result.source);
+    }
+    // Exercise actual PDF overlays as well as the provider's matching groups.
+    await page.evaluate(() => { ReplacementReview.close(); delete window.PdfSelection; });
+    await page.addScriptTag({ content: await readFile(new URL('../public/pdfdiff/pdf-selection.js', import.meta.url), 'utf8') });
+    await page.waitForFunction(() => !!window.PdfSelection);
+    await page.evaluate(() => {
+      const stage = document.createElement('div');
+      stage.id = 'patternPdf';
+      stage.style.cssText = 'position:absolute;left:720px;top:0;width:500px;height:400px;overflow:auto';
+      stage.innerHTML = '<div class="pdfViewer"><div class="page" data-page-number="1" style="position:relative;width:500px;height:400px"><div class="textLayer" style="font:20px monospace;white-space:pre"></div></div></div>';
+      const lines = ['First teRrm here.', 'Second teRrm elsewhere.', 'Third teWrm correct.', 'Fourth teQrm other fault.'];
+      lines.forEach((text, at) => {
+        const span = document.createElement('span'); span.textContent = text;
+        span.style.cssText = `position:absolute;left:10px;top:${40 + at * 60}px`;
+        stage.querySelector('.textLayer').append(span);
+      });
+      document.body.append(stage);
+      editor.setValue(lines.map(text => `<p>${text.replace(/te[RQ]rm/, 'teWrm')}</p>`).join('\n'));
+      const div = stage.querySelector('.page');
+      PdfSelection.attachViewer({ container: stage, viewer: stage.firstChild, currentPageNumber: 1,
+        _getVisiblePages: () => ({ views: [{ id: 1 }] }), getPageView: () => ({ div }),
+        eventBus: { on() {}, off() {} }, pdfDocument: { numPages: 0 } });
+      PdfSelection.attachEditor(editor);
+      PdfSelection.setDiffHighlight(false);
+      localStorage.setItem('mew-review-preview', 'false');
+    });
+    await page.waitForSelector('.mew-ocr-diff-text');
+    await page.evaluate(() => {
+      const locator = PdfSelection.locator, index = locator.editorSourceIndex(editor.getModel());
+      const target = locator.environment.getTargets().find(target => target.layer);
+      index.rememberConnection(0, index.raw.length, target, { start: 0, end: target.raw.length });
+      PdfSelection.setDiffHighlight(true, 'source');
+    });
+    assert.equal(await page.locator('#patternPdf .mew-pdf-review-pointer').count(), 0, 'default PDF highlights are off');
+    await page.locator('.mew-ocr-diff-text').first().click({ position: { x: 1, y: 5 } });
+    await page.waitForFunction(() => document.querySelectorAll('#patternPdf .mew-pdf-review-pointer > div').length === 2, null, { timeout: 5000 });
+    const boxes = await page.locator('#patternPdf .mew-pdf-review-pointer > div').evaluateAll(marks => marks.map(mark => {
+      const box = mark.getBoundingClientRect(); return { top: box.top, width: box.width };
+    }));
+    assert.ok(boxes[1].top > boxes[0].top + 50, 'both matching PDF occurrences are highlighted');
+    assert.ok(boxes.every(box => box.width > 0 && box.width < 20), 'only changed characters are highlighted');
+    assert.equal(await page.locator('#patternPdf .mew-pdf-review-pointer.mew-review-preview').count(), 0,
+      'same-pattern highlights keep their usual color with PDF diff highlighting off');
+    const patternColors = await page.locator('#patternPdf .mew-pdf-review-pointer > div')
+      .evaluateAll(marks => marks.map(mark => getComputedStyle(mark).backgroundColor));
+    assert.equal(new Set(patternColors).size, 1, 'matching occurrences share the same color');
+    assert.equal(patternColors[0], 'rgba(255, 196, 0, 0.42)', 'active matches use the deep selection color');
+    await page.evaluate(async () => {
+      const review = await PdfReviewReady, div = document.querySelector('#patternPdf .page');
+      const pointer = review.getHighlight(div, true);
+      review.paintHighlight(div, [pointer.boxes[0]], 'rgba(255, 196, 0, 0.42)');
+    });
+    assert.equal(await page.locator('#patternPdf .mew-pdf-selection-highlight:not(.mew-pdf-review-pointer)')
+      .evaluate(node => getComputedStyle(node).visibility), 'hidden',
+      'the active occurrence cannot gain an extra selection color over its same-pattern highlight');
+    assert.equal(await page.locator('#patternPdf .mew-pdf-review-pointer')
+      .evaluate(node => getComputedStyle(node).visibility), 'visible');
+    assert.equal(await page.locator('#patternPdf .mew-pdf-default-highlight').count(), 0);
+    await page.evaluate(() => PdfSelection.setDiffHighlight(true));
+    await page.waitForFunction(() => document.querySelector('#patternPdf .mew-pdf-review-pointer:not(.mew-pdf-default-highlight)'));
+    assert.deepEqual(await page.locator('#patternPdf .mew-pdf-review-pointer > div')
+      .evaluateAll(marks => marks.map(mark => getComputedStyle(mark).backgroundColor)), patternColors);
+    await page.locator('[data-apply]').click();
+    await page.waitForFunction(() => document.querySelector('#patternPdf .mew-pdf-review-pointer.mew-review-preview'));
+    assert.deepEqual(await page.locator('#patternPdf .mew-pdf-review-pointer > div')
+      .evaluateAll(marks => marks.map(mark => getComputedStyle(mark).backgroundColor)), patternColors,
+      'Preview keeps the deep selection color');
+    await page.locator('[data-apply]').click();
+    await page.evaluate(() => { PdfSelection.setDiffHighlight(true); PdfSelection.setDiffHighlight(false); });
+    await page.waitForFunction(() => document.querySelectorAll('#patternPdf .mew-pdf-review-pointer > div').length === 2);
+    assert.equal(await page.locator('#patternPdf .mew-pdf-review-pointer.mew-review-preview').count(), 0);
+    await page.evaluate(() => ReplacementReview.close());
+    await page.waitForFunction(() => !document.querySelector('#patternPdf .mew-pdf-review-pointer'));
+    await page.evaluate(() => {
+      const model = editor.getModel(), at = model.getValue().indexOf('teWrm');
+      editor.setSelection(monaco.Range.fromPositions(model.getPositionAt(at), model.getPositionAt(at + 5)));
+    });
+    await page.waitForFunction(() => document.querySelectorAll('#patternPdf .mew-pdf-review-pointer > div').length === 2);
+    await page.evaluate(() => { ReplacementReview.close(); PdfSelection.setDiffHighlight(true); });
+    await page.waitForFunction(() => document.querySelector('#patternPdf .mew-pdf-default-highlight > div'));
+    assert.equal(await page.locator('#patternPdf .mew-pdf-default-highlight > div').first()
+      .evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(255, 166, 40, 0.18)',
+      'default PDF highlights use the light color');
+    await page.evaluate(() => PdfSelection.stop());
+  } finally { await browser.close(); }
+});
+
 test('review popup navigates immediately without full model reads and coalesces scroll layout', async () => {
   const browser = await launchBrowser();
   try {
@@ -516,7 +762,7 @@ test('Monaco standalone renders native source-line and exact character decoratio
     assert.equal(await insertion.evaluate(node => getComputedStyle(node).borderLeftWidth), '2px');
     const missing = await page.evaluate(() => {
       const model = editor.getModel();
-      const mark = model.getAllDecorations().find(item => item.options.beforeContentClassName === 'mew-ocr-diff-insert');
+      const mark = model.getAllDecorations().find(item => item.options.before?.inlineClassName === 'mew-ocr-diff-insert');
       return { offset: model.getOffsetAt(mark.range.getStartPosition()), hover: mark.options.hoverMessage.value };
     });
     assert.equal(missing.offset, 3 + (await page.evaluate(() => passage.indexOf('reading'))) + 2);
@@ -676,3 +922,78 @@ test('provider loads font/text and popup scripts before selection consumes its m
   } finally { await browser.close(); }
 });
 
+
+test('ME08-411 repeated letters and context-menu copy', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me08-411.json', import.meta.url), 'utf8'));
+  const browser = await launchBrowser();
+  try {
+    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'], viewport: { width: 1600, height: 1000 } });
+    const page = await context.newPage(), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.route('http://localhost/**', async route => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === '/') return route.fulfill({ contentType: 'text/html', body: '<div id="editor" style="width:850px;height:900px"></div><div id="stage" style="position:absolute;left:900px;top:0;width:650px;height:900px;overflow:auto"><div class="pdfViewer"><div class="page" style="position:relative;width:650px"><div class="textLayer" style="white-space:pre-wrap"><span role="presentation"></span></div></div></div></div>' });
+      if (pathname === '/api/reader/settings') return route.fulfill({ json: { diffHighlight: true, sourceDiffHighlight: true, selectionHighlight: true } });
+      const file = pathname.startsWith('/monaco/') ? '../node_modules/monaco-editor/' + pathname.slice(8) : '../public' + pathname;
+      return route.fulfill({ contentType: pathname.endsWith('.css') ? 'text/css' : 'text/javascript', body: await readFile(new URL(file, import.meta.url)) });
+    });
+    await page.goto('http://localhost/');
+    await page.addScriptTag({ url: '/monaco/min/vs/loader.js' });
+    await page.evaluate(() => new Promise(resolve => {
+      require.config({ paths: { vs: '/monaco/min/vs' } }); require(['vs/editor/editor.main'], resolve);
+    }));
+    await page.addScriptTag({ url: '/editor-core.js' });
+    await page.evaluate(fixture => {
+      window.readerMonaco = new MewEditorCore.MonacoController(monaco, document.getElementById('editor'), {
+        model: monaco.editor.createModel(fixture.source, 'html'), wordWrap: 'on', minimap: { enabled: false }
+      });
+      readerMonaco.save = async () => true;
+      window.editor = readerMonaco.editor;
+      const div = document.querySelector('.page');
+      div.querySelector('span').textContent = fixture.pdf;
+      window.mockViewer = { container: document.getElementById('stage'), viewer: document.querySelector('.pdfViewer'),
+        currentPageNumber: 1, _getVisiblePages: () => ({ views: [{ id: 1 }] }),
+        getPageView: () => ({ div }), scrollPageIntoView() {}, eventBus: { on() {}, off() {} },
+        pdfDocument: { numPages: 1, getPage: async () => ({ getTextContent: async () => ({ items: [] }) }) } };
+      window.ReaderUI = { getPdfViewer: () => mockViewer };
+    }, fixture);
+    await page.addScriptTag({ url: '/pdfdiff/pdf-selection.js' });
+    await page.waitForFunction(() => window.PdfSelection);
+    await page.evaluate(() => { PdfSelection.attachEditor(editor); PdfSelection.attachViewer(mockViewer); });
+    await page.waitForSelector('.mew-ocr-diff-text');
+    const popup = page.locator('.replacement-review');
+    await page.evaluate(() => {
+      ReplacementReview.close();
+      editor.revealPositionInCenter(editor.getModel().getPositionAt(editor.getValue().indexOf('Prahlerereien')));
+    });
+    await page.locator('.mew-ocr-diff-text').filter({ hasText: /^re$/ }).click();
+    await popup.waitFor({ state: 'visible' });
+    assert.deepEqual(await popup.locator('[data-comparison] mark').allTextContents(), ['re', '']);
+    await popup.locator('[data-save]').click();
+    assert.ok((await page.evaluate(() => editor.getValue())).includes('durch Prahlereien mit Europa'));
+    await page.evaluate(() => editor.trigger('test', 'undo'));
+    await page.waitForSelector('.mew-ocr-diff-text');
+    const selected = await page.evaluate(() => {
+      const model = editor.getModel(), at = model.getValue().indexOf('durch Prahlerereien');
+      editor.setSelection(monaco.Range.fromPositions(model.getPositionAt(at), model.getPositionAt(at + 23)));
+      editor.focus(); editor.revealRangeInCenter(editor.getSelection());
+      return model.getValueInRange(editor.getSelection());
+    });
+    await popup.waitFor({ state: 'visible' });
+    await page.waitForFunction(selected => document.querySelector('[data-comparison]')?.textContent.includes(selected), selected);
+    await page.keyboard.press('Control+c');
+    await page.waitForFunction(async selected => await navigator.clipboard.readText() === selected, selected);
+    const point = await page.evaluate(() => {
+      const r = editor.getDomNode().getBoundingClientRect(), p = editor.getScrolledVisiblePosition(editor.getSelection().getStartPosition());
+      return { x: r.left + p.left + 2, y: r.top + p.top + p.height / 2 };
+    });
+    await page.mouse.click(point.x, point.y, { button: 'right' });
+    assert.equal(await page.evaluate(() => editor.getModel().getValueInRange(editor.getSelection())), selected);
+    await page.getByRole('menuitem', { name: /^Copy/ }).click();
+    await page.waitForFunction(async selected => await navigator.clipboard.readText() === selected, selected);
+    await page.evaluate(() => editor.focus());
+    await page.keyboard.press('Control+c');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), selected);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});

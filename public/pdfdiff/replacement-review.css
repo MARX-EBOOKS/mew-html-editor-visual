@@ -10,7 +10,6 @@
 .replacement-review .monaco-diff-editor .line-insert,.replacement-review .monaco-diff-editor .line-delete{background:transparent}
 .replacement-review [data-apply][aria-pressed="true"]{background:#d58b244d;box-shadow:inset 0 0 0 1px #a87827}
 .mew-pdf-review-pointer>div{background:rgba(255,196,0,.42)!important}
-.page:has(>.mew-pdf-review-pointer:not(.mew-pdf-default-highlight))>.mew-pdf-selection-highlight:not(.mew-pdf-review-pointer){visibility:hidden}
 .mew-pdf-review-pointer.mew-pdf-default-highlight>div{background:rgba(255,166,40,.18)!important;box-shadow:inset 0 -1px #b87516}
 .replacement-review [data-comparison]{white-space:pre-wrap;overflow-wrap:anywhere;max-height:25vh;overflow:auto}
 .replacement-review mark{background:#ffa62855;color:inherit;font-weight:bold}

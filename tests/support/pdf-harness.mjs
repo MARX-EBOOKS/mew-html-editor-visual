@@ -22,6 +22,7 @@ const selectionMappingSource = mappingSource.replace('window.PdfReviewProvider =
   constructor(options = {}, environment = {}) {
     super(options, environment);
     const locator = this;
+    ${section(selectionFile, '  function sourceEntry(', '  function resetPdf(')}
     ${selectionMapping}
     Object.assign(this, { findLocations, locateSource, locateLayer });
   }

@@ -65,7 +65,7 @@
   cleanup.push(() => detachVisual());
   const status = { state: "waiting-for-pdf", pages: [], matches: 0, differences: [], error: null };
   const api = window.PdfSelection = {
-    status, locator, attachEditor, attachViewer,
+    status, locator, attachEditor, attachViewer, refresh: publishSources,
     highlight: text => select(Array.isArray(text) ? text : [text]),
     clear: () => select([]),
     showReviewPointer(editor, items, key) {
@@ -343,9 +343,9 @@
     } }));
     if (diffHighlight && index) {
       const connections = index.connectionPairs(targets);
-      const key = [index, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
+      const key = [index, review.fontEnabled, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
       if (!defaultPointer || defaultPointer.key.length !== key.length || key.some((value, i) => value !== defaultPointer.key[i]))
-        api.showReviewPointer(activeEditor, [...index.reviewCandidates(targets), ...index.formatDifferences(connections)], key);
+        api.showReviewPointer(activeEditor, [...index.reviewCandidates(targets), ...(review.fontEnabled ? index.formatDifferences(connections) : [])], key);
     }
   }
   async function discoverPdf() {
@@ -519,11 +519,11 @@
       nodes.push({ node, element, box });
     }
     for (const { node, element, box } of nodes.sort((a, b) =>
-      Math.round((a.box.top - b.box.top) / Math.min(a.box.height, b.box.height)) || a.box.left - b.box.left)) {
+      Math.round((a.box.bottom - b.box.bottom) / Math.max(a.box.height, b.box.height)) || a.box.left - b.box.left)) {
       if (previous && element !== previousElement) {
-        const lineBreak = Math.abs(box.top - previous.top) > Math.min(box.height, previous.height) * 0.5;
+        const lineBreak = Math.abs(box.bottom - previous.bottom) > Math.max(box.height, previous.height) * 0.5;
         if (lineBreak) raw += "\n";
-        else if (box.left - previous.right > Math.min(box.height, previous.height) * 0.08) raw += " ";
+        else if (box.left - previous.right > Math.max(box.height, previous.height) * 0.08) raw += " ";
       }
       if (!elementFonts.has(element)) elementFonts.set(element, fontAt?.(element));
       parts.push({ node, start: raw.length, end: raw.length + node.textContent.length, font: elementFonts.get(element) });
@@ -545,6 +545,13 @@
     const visible = locator.environment.getVisiblePages?.() || [], pageIndexes = visible.map(page => page.index);
     for (const source of new Set(entries.map(entry => entry.index).filter(Boolean)))
       locator.prepareSource(source, pageIndexes, pdf);
+    entries = entries.flatMap(entry => {
+      if (!visibleOnly && !entry.marked) return [entry];
+      const connections = entry.index?.connectionPairs([...pageIndexes, documentIndex]);
+      if (!connections?.length || connections.some(([range]) => range.start <= entry.start && range.end >= entry.end)) return [entry];
+      const ranges = connections.map(([range]) => [Math.max(entry.start, range.start), Math.min(entry.end, range.end)]).filter(([start, end]) => end > start);
+      return ranges.length ? ranges.map(([start, end]) => sourceEntry(entry.index, start, end, entry.marked)) : [entry];
+    });
     const locations = entries.map(entry => {
       let index = documentIndex, hit = null, number;
       for (const page of visible) {
@@ -555,7 +562,7 @@
       }
       if (!hit && index) hit = (entry.index && entry.index.connectedRange(index, entry.start, entry.end, false, undefined, true))
         || (!visibleOnly && index.locate(entry, entry.index && index.pageScopes.get(entry.index)?.scope));
-      if (!hit) return { entry, targets: [], queries: index && entry.index ? entry.index.patchedWords(entry.text, index) : [entry.text] };
+      if (!hit) return { entry, targets: [], queries: entry.index ? [] : [entry.text] };
       const connection = hit.connection || (entry.index && entry.index.rememberConnection(entry.start, entry.end, index, hit));
       const counterpart = index.raw.slice(hit.start, hit.end);
       const difference = hit.approximate || entry.marked && entry.text !== counterpart ? { html: entry.text, pdf: counterpart } : null;
@@ -568,7 +575,7 @@
           marked: entry.marked, text: index.raw.slice(start, end), before: index.raw.slice(Math.max(page.start, start - 160), start),
           after: index.raw.slice(end, Math.min(page.end, end + 160)) };
         if (target.difference && entry.index) target.source = { index: entry.index, start: entry.start, end: entry.end };
-        const sourceRange = entry.marked || entry.start === entry.end ? entry : connection && entry.index.connectedRange(index, start, end, true, connection);
+        const sourceRange = entry.marked || entry.start === entry.end ? entry : entry.index && entry.index.connectedRange(index, start, end, true, connection);
         if (sourceRange || hit.start === hit.end) Object.assign(target, { index: entry.index,
           start: sourceRange?.start ?? entry.start, end: sourceRange?.end ?? entry.end });
         return target;
@@ -621,8 +628,8 @@
         hit.source = target.source || target.index && { index: target.index, start: target.start, end: target.end };
         if (!focusHit) focusHit = hit;
       }
-      // Retain exact fallback highlights when rendered spacing prevents confirmation.
-      append(hit ? [hit] : index.matches(target.index ? target.index.patchedWords(target.text, index) : [target.text]));
+      // Unconfirmed default differences must not highlight unrelated occurrences.
+      append(hit ? [hit] : target.marked || target.index ? [] : index.matches([target.text]));
     }
     append(index.matches(queries));
     return { hits: [...hits.values()], focusHit };

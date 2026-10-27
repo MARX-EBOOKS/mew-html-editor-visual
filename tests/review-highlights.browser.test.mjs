@@ -5,6 +5,37 @@ import { launchBrowser } from './support/browser.mjs';
 
 const source = await readFile(new URL('../public/pdfdiff/replacement-review.js', import.meta.url), 'utf8');
 
+test('displaced OCR spaces do not paint wide bands while missing-text carets stay visible', async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div id="text" style="position:relative;width:700px;height:100px"><span>Alpha</span><span style="display:inline-block;width:500px;white-space:pre;letter-spacing:490px"> </span><span>beta</span></div>');
+    await page.addScriptTag({ content: source });
+    const result = await page.evaluate(() => {
+      const div = document.getElementById('text'), parts = [];
+      let raw = '';
+      for (const span of div.querySelectorAll('span')) {
+        parts.push({ node: span.firstChild, start: raw.length, end: raw.length + span.textContent.length });
+        raw += span.textContent;
+      }
+      const index = { raw, partsInRange: () => parts };
+      const space = document.createRange(); space.selectNodeContents(parts[1].node);
+      const tool = ReviewHighlights.create({ document });
+      const hit = { start: 0, end: raw.length };
+      const text = tool.measureHighlights(div, index, [hit], hit);
+      const caret = tool.measureHighlights(div, { raw, partsInRange: () => [parts[1]] },
+        [{ start: 5, end: 6, difference: { html: 'missing', pdf: ' ' } }]);
+      return { boxes: text.boxes, caret: caret.boxes, raw: div.textContent, spaceWidth: space.getBoundingClientRect().width };
+    });
+    assert.equal(result.boxes.length, 2);
+    assert.ok(result.spaceWidth > 400, 'the OCR space really spans most of the page');
+    assert.ok(result.boxes.every(box => box.w > 0 && box.w < .15));
+    assert.equal(result.caret.length, 1);
+    assert.ok(result.caret[0].caret && result.caret[0].w > 0);
+    assert.equal(result.raw, 'Alpha beta');
+  } finally { await browser.close(); }
+});
+
 test('highlight tool works without PDF modules and keeps consumers and decoration caches independent', async () => {
   const browser = await launchBrowser();
   try {
@@ -22,7 +53,7 @@ test('highlight tool works without PDF modules and keeps consumers and decoratio
       const reused = first.paintHighlight(div, measured.boxes, 'orange') === painted;
       second.paintHighlight(div, caret.boxes, 'blue');
       let updates = 0, clears = 0, subscriptions = 0, builds = 0, modelChanged;
-      const mark = { containsPosition: () => true };
+      const mark = { containsPosition: () => true, isEmpty: () => true };
       const collection = { set() { updates++; }, clear() { clears++; }, length: 1, getRange: () => mark };
       const editor = {
         getDomNode: () => div, createDecorationsCollection: () => collection,

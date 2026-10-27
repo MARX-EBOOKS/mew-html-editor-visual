@@ -10,6 +10,8 @@ Run commands from the repository root after `npm ci`.
 | `npm run test:all` | All three groups; continues after failures and exits nonzero if any group fails |
 | `npm run test:monaco` | Existing focused Monaco browser entry point |
 | `npm run bench -- tmp/ocr-benchmark.json` | Real OCR mapping benchmark and optional JSON report |
+| `node tests/pdf-review-performance.mjs [report.json]` | Review candidate, fragmented decoration and cached preparation scaling |
+| `node tests/pdf-mapping-profile.mjs [fixture.json] [report.json]` | Real-page mapping profile with method call counts and costs |
 
 Suite timings and exit codes can also be saved with
 `node tests/run.mjs all --report=tmp/test-results.json`. Create the output directory first.
@@ -71,6 +73,29 @@ hardware-dependent pass threshold.
 These measure current application behavior; this test cleanup changes no production
 algorithm and makes no application speedup claim.
 
+The manual benchmarks extracted from `tmp/` use the current shared PDF harness,
+three warmups and 30 measured runs. Set `BENCH_ITERATIONS` (integer >= 5) to change
+the sample count. Both print results and accept an optional JSON report path.
+They run separately from the unit/browser suites and require no saved source
+snapshots, Git revisions, reader server or external corpus.
+
+`pdf-review-performance.mjs` retains the candidate projection, fragmented HTML
+decoration and repeated preparation workloads from `pdf-perf-benchmark.mjs` and
+`pdfdiff-comparison-cost.mjs`. Set `BENCH_SIZES=40,400,2000,3000` to select candidate
+and decoration sizes; preparation measures batches of 100 cached calls over
+1, 12 and 48 distinct PDF page indexes. Checks validate candidate offsets/text,
+decoration ranges and retained connections outside the timed region.
+
+`pdf-mapping-profile.mjs` retains the method instrumentation from
+`highlight-latency.mjs`. It defaults to `tests/fixtures/pdf-selection-me23.json`;
+an explicit fixture must contain `html` and `pages` (raw strings, `raw`, or text
+`items`). PDF text indexing precedes timing. Each sample creates a fresh HTML
+index, prepares page mappings and generates decorations and review candidates.
+Every mapped diff must reconstruct both readings. Method totals cover measured
+regions only, include nested calls and incur instrumentation overhead; do not add
+them together or compare them directly with uninstrumented timings. Neither
+extracted benchmark measures browser rendering or asserts a hardware speed limit.
+
 ## Validation snapshot: 2026-10-24
 
 The original mixed Node run passed 75/111 checks in 117.9 seconds. After splitting
@@ -93,6 +118,6 @@ return nonzero; they have not been skipped or converted into success.
 One uniform-font test also failed intermittently in a full run, then passed both
 alone and in the final unit run. This is a partial suite, not a green full regression.
 
-Raw reports from this cleanup are in `tmp/tests-clean-*`. JSON reports and this
-snapshot describe the execution environment above and should be refreshed when
-application behavior or fixtures change.
+The historical raw reports in `tmp/tests-clean-*` were removed during temporary
+file cleanup. This snapshot describes the execution environment above; rerun the
+commands to produce current reports when application behavior or fixtures change.

@@ -298,6 +298,7 @@ try {
       await page.waitForFunction(() => readerMonaco.editor.getValue().includes('<b>disk conflict</b>'));
       await click(page, 'undoBtn'); await valueEquals(page, disk);
       await page.evaluate(() => navigator.clipboard.writeText('clipboard search text'));
+      await page.evaluate(() => readerMonaco.editor.setPosition({ lineNumber: 1, column: 1 }));
       await page.locator('#findBtn').click();
       await page.waitForFunction(() => document.querySelector('.find-widget')?.classList.contains('visible'));
       await page.waitForFunction(() => document.querySelector('.find-widget .input')?.value === 'clipboard search text');
@@ -307,6 +308,19 @@ try {
       await page.keyboard.press('Control+H');
       await page.waitForFunction(() => document.querySelector('.find-widget')?.classList.contains('visible'));
       await page.keyboard.press('Escape');
+      for (const shortcut of ['Control+F', 'Control+H']) {
+        await page.evaluate(() => {
+          const { editor, model } = readerMonaco;
+          const start = model.getValue().indexOf('disk conflict');
+          editor.setSelection(monaco.Selection.fromPositions(model.getPositionAt(start), model.getPositionAt(start + 13)));
+          editor.focus();
+        });
+        await page.keyboard.press(shortcut);
+        await page.waitForFunction(() => document.querySelector('.find-widget')?.classList.contains('visible'));
+        await page.waitForTimeout(150);
+        assert.equal(await page.locator('.find-widget .input').first().inputValue(), 'disk conflict', `${shortcut} uses selection ahead of clipboard`);
+        await page.keyboard.press('Escape');
+      }
       const shortcutText = html('shortcut save');
       await type(page, shortcutText);
       await page.evaluate(() => readerMonaco.editor.focus());

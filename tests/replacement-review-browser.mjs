@@ -476,27 +476,14 @@ try {
       });
       await child.waitForFunction(() => !document.querySelector('.replacement-review').hidden && !document.querySelector('[data-apply]').disabled);
       assert.equal(await child.locator('.replacement-review').getAttribute('widgetid'), 'mew.replacement-review');
-      assert.equal(await page.locator('.replacement-review').isHidden(), true, 'reader-origin difference opens only in the owning editor window');
+      await page.locator('.replacement-review').waitFor({ state: 'visible' });
       const pageCount = page.context().pages().length;
       const comparisonBeforeSwitch = await child.locator('.replacement-review [data-comparison] > div').allTextContents();
-      await child.evaluate(() => {
-        const open = window.open;
-        window.reviewWindowTargets = [];
-        window.open = function(url, name, ...args) {
-          reviewWindowTargets.push({ url, name, reader: name === opener.name });
-          return open.call(this, url, name, ...args);
-        };
-      });
-      await child.locator('.replacement-review [data-switch]').click();
-      await page.locator('.replacement-review').waitFor({ state: 'visible' });
-      assert.equal(await child.locator('.replacement-review').isHidden(), true);
-      assert.deepEqual(await child.evaluate(() => reviewWindowTargets), [{ url: '', name: await page.evaluate(() => window.name), reader: true }], 'View PDF re-selects the existing reader window during the click');
+      assert.equal(await child.locator('.replacement-review').isVisible(), true);
       assert.equal(await page.locator('.replacement-review').getAttribute('data-side'), 'pdf');
       assert.deepEqual(await page.locator('.replacement-review [data-comparison] > div').allTextContents(), comparisonBeforeSwitch);
-      await page.locator('.replacement-review [data-switch]').click();
-      await child.locator('.replacement-review').waitFor({ state: 'visible' });
-      assert.equal(await page.locator('.replacement-review').isHidden(), true);
-      assert.equal(page.context().pages().length, pageCount, 'switching sides reuses both windows');
+      assert.equal(await child.locator('.replacement-review [data-switch]').isHidden(), true);
+      assert.equal(page.context().pages().length, pageCount, 'simultaneous review reuses both windows');
       await child.evaluate(async () => {
         ReplacementReview.register({ ...fixtureReview, id: 'split-fixture', label: '独立窗测试', provide({ source }) {
           const start = source.lastIndexOf('WRONG');

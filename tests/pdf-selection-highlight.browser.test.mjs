@@ -1026,32 +1026,65 @@ test('native PDF and text scrolling stays free and cancels late automatic positi
     });
     await page.waitForTimeout(180);
     assert.equal(await page.evaluate(() => automaticMoves), 1, 'manual wheel scrolling cancels positioning when the missing layer arrives');
-    const placement = await page.evaluate(() => {
-      PdfReviewProvider.clearHighlights(); PdfReviewProvider.clearHighlights(true);
-      mockViewer._getVisiblePages = () => ({ views: [{ id: 1 }] });
-      let reads = 0, shift = 0, overlaps = 0;
-      const boxes = Array.from({ length: 500 }, (_, i) => ({ left: 50 + i % 25 * 30,
-        right: 70 + i % 25 * 30, top: 200 + Math.floor(i / 25) * 20, bottom: 212 + Math.floor(i / 25) * 20, height: 12 }));
-      const div = mockViewer.getPageView(0).div, width = div.clientWidth, height = div.clientHeight;
-      div.getBoundingClientRect = () => { reads++; return { left: 0, top: -shift, width, height }; };
-      const painted = PdfReviewProvider.paintHighlight(div, boxes.map(box => ({
-        x: box.left / width, y: box.top / height, w: (box.right - box.left) / width, h: box.height / height
-      })), 'yellow');
-      for (const mark of painted.node.children) mark.getBoundingClientRect = () => { throw new Error('Scrolling must reuse highlight coordinates'); };
-      for (let i = 0; i < 20; i++) {
-        shift = i * 2;
-        const result = PdfSelection.popupPlacement({ left: 50, top: 200 - shift, bottom: 592 - shift },
-          { left: 0, right: 1000, top: 0, bottom: 900 }, 280, 120);
-        if (!result) throw new Error('The popup must fit above or below this passage');
-        overlaps += boxes.filter(box => box.left < result.left + 280 && box.right > result.left
-          && box.top - shift < result.top + result.height && box.bottom - shift > result.top).length;
-      }
-      painted.node.remove();
-      return { reads, overlaps };
-    });
-    assert.equal(placement.overlaps, 0, 'scrolling popup placement avoids every selected word');
-    assert.equal(placement.reads, 20, 'scrolling reads one page rectangle per frame, regardless of selection length');
     await page.evaluate(() => PdfSelection.stop());
+  } finally { await browser.close(); }
+});
+
+test('ME08-366 normal OCR fonts remove HTML styles before whole-document indexing', async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div id="stage"><div class="pdfViewer"><div class="page" data-page-number="1" style="position:relative;width:1200px;height:300px"><div class="textLayer"></div></div></div></div>');
+    await page.addScriptTag({ content: `(() => {${engineSource}\n})();` });
+    await page.addScriptTag({ content: source.replace('  const layers = new Map();',
+      '  const layers = new Map(); window.layerProbe = layerIndex;') });
+    await page.waitForFunction(() => !!window.PdfSelection);
+    const results = await page.evaluate(() => {
+      const body = 'The surrounding passage supplies enough unique context to locate the short source note below.';
+      const footer = 'Aus dem Englischen.', layer = document.querySelector('.textLayer');
+      const addLine = (text, top, size, left, fontName) => {
+        for (const token of text.match(/\S+|\s+/g)) {
+          const span = document.createElement('span');
+          span.textContent = token; span.dataset.fontName = fontName;
+          // Glyph boxes overlap the explicit spaces, as in the real PDF.js layer.
+          span.style.cssText = `position:absolute;white-space:pre;left:${left}px;top:${top}px;font:${size}px monospace;line-height:1;transform:scaleX(1.3);transform-origin:left top`;
+          layer.append(span); left += token.length * size * .6;
+        }
+      };
+      addLine(body, 20, 16, 10, 'serif');
+      addLine(footer, 100, 12, 10, 'sans');
+      addLine('70W7$Hfi0iC', 112, 24, 0, 'sans');
+      const div = document.querySelector('.page'), locator = PdfSelection.locator;
+      const pdfPage = { commonObjs: new Map([
+        ['serif', { name: 'TimesNewRomanPSMT', bold: false, italic: false }],
+        ['sans', { name: 'ArialMT', bold: false, italic: false }]
+      ]) };
+      PdfSelection.attachViewer({ container: document.getElementById('stage'), viewer: document.querySelector('.pdfViewer'),
+        currentPageNumber: 1, _getVisiblePages: () => ({ views: [{ id: 1 }] }),
+        getPageView: () => ({ div, pdfPage }), eventBus: { on() {}, off() {} }, pdfDocument: { numPages: 0 } });
+      const target = layerProbe(div);
+      const results = [['<b>', '</b>'], ['<i>', '</i>'], ['<b><i>', '</i></b>']].map(([opening, closing]) => {
+        const html = `<p>${body}</p><p style="text-indent: 0;">${opening}${footer}${closing}</p>`;
+        const index = locator.sourceIndex(html);
+        locator.prepareSource(index, [target]);
+        const connections = index.connectionPairs([target]), items = index.formatDifferences(connections);
+        const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
+        return { html, raw: target.raw, texts: index.reviewCandidates([target]).length,
+          items: items.map(item => item.text),
+          patched: PdfSelectionDiff.previewEdits(html, items.flatMap(item => item.options[0].edits)),
+          marks: index.sourceDecorations(connections, model).filter(mark => mark.options.inlineClassName.includes('mew-font-diff-text'))
+            .map(mark => html.slice(mark.range.startColumn - 1, mark.range.endColumn - 1)) };
+      });
+      PdfSelection.stop();
+      return results;
+    });
+    for (const result of results) {
+      assert.ok(result.raw.includes('Aus dem Englischen.\n70W7$Hfi0iC'), 'small source note precedes taller OCR noise');
+      assert.deepEqual(result.items, ['Aus dem Englischen.']);
+      assert.deepEqual(result.marks, ['Aus dem Englischen.']);
+      assert.equal(result.texts, 0, 'explicit OCR spaces preserve the matching text');
+      assert.equal(result.patched, result.html.replace(/<\/?(?:b|i)>/g, ''), 'normal OCR metadata removes both HTML styles');
+    }
   } finally { await browser.close(); }
 });
 

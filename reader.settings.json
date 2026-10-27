@@ -1,10 +1,11 @@
 {
   "brightness": 100,
-  "paper": "#f4edd8",
-  "ink": "#2b2925",
+  "paper": "#ffffff",
+  "ink": "#000000",
   "invert": false,
   "horizontal": false,
-  "scale": "0.8",
-  "diffHighlight": true,
+  "scale": "page-width",
+  "diffHighlight": false,
+  "sourceDiffHighlight": true,
   "selectionHighlight": true
 }

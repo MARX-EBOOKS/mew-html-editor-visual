@@ -76,6 +76,7 @@ def settings(value=None):
                 horizontal=bool(value.get('horizontal')),
                 scale=scale if isinstance(scale, str) and len(scale) <= 32 else 'page-width',
                 diffHighlight=value.get('diffHighlight') is not False,
+                sourceDiffHighlight=value.get('sourceDiffHighlight') is not False,
                 selectionHighlight=value.get('selectionHighlight') is not False)
 
 

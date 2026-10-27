@@ -103,11 +103,11 @@ for (const order of [
               .map(({ range }) => markup.slice(range.startColumn - 1, range.endColumn - 1)),
             combined: decorations.filter(mark => mark.options.description === 'PDF text and font difference')
               .every(mark => mark.options.hoverMessage.value.includes('OCR:') && mark.options.hoverMessage.value.includes('PDF 斜体')),
-            duplicateRanges: decorations.some((mark, at) => !mark.options.beforeContentClassName
-              && decorations.slice(at + 1).some(other => !other.options.beforeContentClassName
+            duplicateRanges: decorations.some((mark, at) => !mark.options.before?.inlineClassName
+              && decorations.slice(at + 1).some(other => !other.options.before?.inlineClassName
                 && mark.range.startColumn === other.range.startColumn && mark.range.endColumn === other.range.endColumn)),
             hover: decorations.flatMap(mark => [mark.options.hoverMessage].flat().map(message => message.value)),
-            carets: decorations.filter(mark => mark.options.beforeContentClassName).length,
+            carets: decorations.filter(mark => mark.options.before?.inlineClassName).length,
             replaced: PdfSelectionDiff.previewEdits(markup, text.flatMap(item => item.options[0].edits)) };
         });
         const pdf = {};

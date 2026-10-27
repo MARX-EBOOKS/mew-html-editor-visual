@@ -610,8 +610,8 @@ function onSources(event) {
   if (!editor?.createDecorationsCollection) return;
   if (index) getLocator().prepareSource(index, targets, event.detail.pdf);
   const connections = index ? index.connectionPairs(targets) : [];
-  const key = [index, enabled, editor.getModel(), ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
-  highlights.updateSource(editor, key, () => enabled && index ? index.sourceDecorations(connections, editor.getModel()) : [],
+  const key = [index, enabled, fontEnabled, editor.getModel(), ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
+  highlights.updateSource(editor, key, () => enabled && index ? index.sourceDecorations(connections, editor.getModel(), fontEnabled) : [],
     '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{display:inline-block;width:2px;border-left:2px solid #d58b24;box-sizing:border-box;position:relative;z-index:1;cursor:pointer}');
 }
 // The independent selection module publishes data, never review UI calls.
@@ -723,9 +723,7 @@ window.PdfReviewReady = (async () => {
     id: 'pdf-font', label: 'PDF 斜体／粗体探测',
     isEnabled: () => fontEnabled,
     setEnabled(value) {
-      fontEnabled = value;
-      try { localStorage.setItem('mew.pdf-review.font-enabled', String(value)); } catch { }
-      host.invalidate('pdf-ocr');
+      (readerWindow()?.PdfReviewProvider || window.PdfReviewProvider).setFontEnabled(value);
     },
     focusIndex(items, request) {
       const start = request?.notice?.source?.start;
@@ -750,6 +748,14 @@ window.PdfReviewReady = (async () => {
   })];
   window.PdfReviewProvider = {
     PdfLocator, PdfSourceIndex: toolbox.PdfSourceIndex, fontStyle, textItemFont,
+    get fontEnabled() { return fontEnabled; },
+    setFontEnabled(value) {
+      fontEnabled = value;
+      try { localStorage.setItem('mew.pdf-review.font-enabled', String(value)); } catch { }
+      host.invalidate('pdf-ocr');
+      selection()?.clearReviewPointer();
+      selection()?.refresh();
+    },
     measureHighlights: highlights.measureHighlights, paintHighlight: highlights.paintHighlight, clearHighlights: highlights.clearHighlights,
     getHighlight: highlights.getHighlight,
     selectionRange: highlights.selectionRange
