@@ -245,7 +245,9 @@
     const click = editor.onMouseUp?.(event => {
       if (event.target?.position && event.target.type !== 9) {
         ++interactionId;
-        read({ position: event.target.position, lineRange: event.target.type === 4 ? event.target.range : null });
+        read({ position: event.target.type === 6 && !event.target.detail?.injectedText
+          ? event.target.range?.getStartPosition() || event.target.position : event.target.position,
+          lineRange: event.target.type === 4 ? event.target.range : null });
       }
     });
     if (click) cleanup.push(() => click.dispose());
@@ -546,12 +548,12 @@
     const locations = entries.map(entry => {
       let index = documentIndex, hit = null, number;
       for (const page of visible) {
-        hit = page.index && entry.index && entry.index.connectedRange(page.index, entry.start, entry.end, false, undefined, entry.marked);
+        hit = page.index && entry.index && entry.index.connectedRange(page.index, entry.start, entry.end, false, undefined, true);
         if (!hit) continue;
         ({ index, number } = page);
         break;
       }
-      if (!hit && index) hit = (entry.index && entry.index.connectedRange(index, entry.start, entry.end, false, undefined, entry.marked))
+      if (!hit && index) hit = (entry.index && entry.index.connectedRange(index, entry.start, entry.end, false, undefined, true))
         || (!visibleOnly && index.locate(entry, entry.index && index.pageScopes.get(entry.index)?.scope));
       if (!hit) return { entry, targets: [], queries: index && entry.index ? entry.index.patchedWords(entry.text, index) : [entry.text] };
       const connection = hit.connection || (entry.index && entry.index.rememberConnection(entry.start, entry.end, index, hit));
@@ -610,7 +612,7 @@
     };
     let focusHit = null;
     for (const target of targets) {
-      const connection = target.index && target.index.connectedRange(index, target.start, target.end, false, undefined, target.marked);
+      const connection = target.index && target.index.connectedRange(index, target.start, target.end, false, undefined, true);
       const hit = target.range || connection || index.locate(target);
       if (hit) {
         if (target.index && !connection) target.index.rememberConnection(target.start, target.end, index, hit);
@@ -673,6 +675,7 @@
       // Keep the last mapped pointer until its replacement can be measured.
       if (result.boxes.length) {
         review.paintHighlight(div, result.boxes, options.color, true).notices = result.notices;
+        review.getHighlight(div, true)?.node.classList.toggle('mew-pdf-default-highlight', !reviewPointer);
         review.getHighlight(div, true)?.node.classList.toggle('mew-review-preview',
           pointer.editor.getDomNode()?.classList.contains('mew-review-preview') || false);
       }

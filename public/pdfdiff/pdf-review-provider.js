@@ -543,14 +543,11 @@ function content(state, item) {
   };
 }
 function pattern(value, index) {
-  // Without source context, only the selected candidate may match itself.
-  if (!index || !Number.isInteger(value.sourceStart) || !Number.isInteger(value.sourceEnd)) return value;
-  // Longer selections match their stem; single letters retain word-context matching.
-  // Fold unchanged letters only: capitalization faults must still match exactly.
-  if (value.selection && [...value.comparison.html.trim()].length > 1)
-    return JSON.stringify(['selection', getLocator().comparisonParts(value.comparison)
-      .map(part => [part.changed, part.changed ? part.html : part.html.toLowerCase(), part.changed ? part.pdf : part.pdf.toLowerCase()])]);
+  if (!index) return value;
   const { raw } = index, start = value.sourceStart, end = value.sourceEnd;
+  // Unknown or foreign source context may only match the candidate itself.
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > raw.length
+    || value.pdfSource && value.pdfSource.index !== index) return value;
   let before = start, after = end;
   const word = /^[\p{L}\p{M}\p{N}_'’\-]+$/u;
   while (before > 0 && word.test(raw.slice(before - (raw.codePointAt(before - 2) > 0xffff ? 2 : 1), before)))
@@ -560,9 +557,14 @@ function pattern(value, index) {
   const prefix = raw.slice(before, start), suffix = raw.slice(end, after);
   if ([...raw.slice(before, after)].length < 2
     && [...(prefix + (value.comparison?.pdf ?? value.text ?? '') + suffix)].length < 2) return value;
-  return JSON.stringify([!!value.font, ...(value.font ? [value.text,
-  ...['italic', 'bold'].flatMap(key => [value.htmlFont[key], value.font[key]])] : [value.comparison?.html, value.comparison?.pdf]),
-    prefix, suffix]);
+  // Selections retain the same word boundaries as individual text/format faults.
+  // Fold unchanged selection text only; changed capitalization remains significant.
+  const change = value.selection && [...value.comparison.html.trim()].length > 1
+    ? ['selection', getLocator().comparisonParts(value.comparison).map(part =>
+      [part.changed, part.changed ? part.html : part.html.toLowerCase(), part.changed ? part.pdf : part.pdf.toLowerCase()])]
+    : value.font ? [value.text, ...['italic', 'bold'].flatMap(key => [value.htmlFont[key], value.font[key]])]
+      : [value.comparison?.html, value.comparison?.pdf];
+  return JSON.stringify([!!value.font, change, prefix, suffix]);
 }
 function matchingItems(item, context, items) {
   const key = item && pattern(item, context.index);
