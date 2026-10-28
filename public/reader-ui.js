@@ -425,8 +425,8 @@
   }
 
   function changePdfScale(direction) {
-    if (direction > 0) pdfViewer?.increaseScale();
-    else if (direction < 0) pdfViewer?.decreaseScale();
+    if (pdfViewer && direction) pdfViewer.currentScale =
+      Math.min(10, Math.max(0.25, pdfViewer.currentScale + direction * 0.25));
   }
 
   function handlePdfScaleShortcut(event) {
@@ -613,7 +613,10 @@
       frameId("stage").addEventListener("scroll", () => {
         if (pdfPageTimer !== null) schedulePdfPage();
       }, { passive: true });
-      eventBus.on("pagerendered", () => {
+      eventBus.on("pagerendered", ({ source: view }) => {
+        const layer = view.textLayer?.div;
+        if (layer && view.imageCoordinates && !layer.querySelector(".textLayerImages"))
+          layer.prepend(new pdfjs.TextLayerImages(view.imagesRightClickMinSize, view.imageCoordinates, view.viewport, () => view.canvas).render());
         clearTimeout(pdfCacheTimer);
         pdfCacheTimer = setTimeout(trimPdfCache, 200);
       });

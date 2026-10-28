@@ -21,8 +21,9 @@
       for (const hit of hits) {
         let noticeBox = null;
         const caret = hit.start === hit.end || !!hit.difference && !index.raw.slice(hit.start, hit.end).trim();
+        const at = caret && hit.endBias ? Math.max(0, hit.start - 1) : hit.start;
         // Reading order can differ from DOM order; measure the indexed text nodes.
-        for (const part of index.partsInRange(hit.start, caret ? hit.start : hit.end)) {
+        for (const part of index.partsInRange(at, caret ? at : hit.end)) {
           range ||= (div.ownerDocument || document).createRange();
           range.setStart(part.node, Math.max(0, hit.start - part.start));
           range.setEnd(part.node, Math.max(0, Math.min(part.node.length, (caret ? hit.start : hit.end) - part.start)));

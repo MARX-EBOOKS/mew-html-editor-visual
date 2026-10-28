@@ -175,7 +175,7 @@ async function loadMonaco() {
 function normalized(raw, result = { text: "", starts: [], ends: [] }, base = 0) {
   let previous = result.text.at(-1) || "";
   const units = [], { starts, ends } = result;
-  for (const match of raw.matchAll(/((?<=[\p{L}\p{N}])[-\u2010\u2011]\s*\n\s*(?=[\p{L}\p{N}]))|([a-zA-Z0-9]+)|(\s+)|[\s\S]/gu)) {
+  for (const match of raw.matchAll(/((?<=[\p{L}\p{N}])[-\u2010\u2011]\s*\n\s*(?=[\p{L}\p{N}]))|([a-zA-Z0-9]+)|(\s+)|(\.(?:\s*\.){2,})|[\s\S]/gu)) {
     const char = match[0], start = base + match.index, offset = start + char.length;
     if (match[1] || char === "\u00ad") continue;
     if (match[2]) {
@@ -183,7 +183,7 @@ function normalized(raw, result = { text: "", starts: [], ends: [] }, base = 0) 
       for (let i = 0; i < char.length; i++) { starts.push(start + i); ends.push(start + i + 1); }
       continue;
     }
-    const value = match[3] ? ' ' : char >= '!' && char <= '~' ? char.toLowerCase() : char.normalize("NFKC").toLowerCase().replace(/ſ/g, "s").replace(/ß/g, "ss")
+    const value = match[3] ? ' ' : match[4] ? char.replace(/\s/g, '') : char >= '!' && char <= '~' ? char.toLowerCase() : char.normalize("NFKC").toLowerCase().replace(/ſ/g, "s").replace(/ß/g, "ss")
       .replace(/[‘’‚]/g, "'").replace(/[“”„]/g, '"').replace(/\s/g, " ");
     for (const unit of value) {
       if (unit === " " && previous === " ") { ends[ends.length - 1] = offset; continue; }
@@ -283,8 +283,9 @@ class PdfSourceIndex {
     Object.assign(this, { locator }, values);
     this.normalized ||= normalized(this.raw);
   }
-  connectionPairs(targets = []) {
-    return targets.filter(Boolean).flatMap(target => (this.connections.get(target) || []).map(connection => [connection, target]))
+  connectionPairs(targets = [], prepared = false) {
+    // Default marks keep their prepared diff while selections update the live mapping cache.
+    return targets.filter(Boolean).flatMap(target => (prepared && this.pageScopes.get(target)?.connections || this.connections.get(target) || []).map(connection => [connection, target]))
       .sort(([, x], [, y]) => Number(!!x.pages) - Number(!!y.pages) || Number(!!y.layer) - Number(!!x.layer));
   }
   connectionDiff(target, connection) {
@@ -293,6 +294,7 @@ class PdfSourceIndex {
       const diff = { distance: 0, parts: [] };
       let a = 0, b = 0, left = 0, right = 0;
       const compareTo = (endA = html.length, endB = pdf.length) => {
+        if (endA < left || endB < right) return; // Expanded glyphs share raw positions; never consume them twice.
         const next = textDiff(html.slice(left, endA), pdf.slice(right, endB), true);
         diff.distance += next.distance;
         for (const part of next.parts) appendPart(diff.parts, part.html, part.pdf, part.changed);
@@ -302,15 +304,18 @@ class PdfSourceIndex {
       for (const span of connection.spans || []) {
         a += span.html.length; b += span.pdf.length;
         const trailing = span.html.length - span.html.trimEnd().length;
-        if (!span.changed && trailing < span.html.length)
+        if (!span.changed && trailing < span.html.length) {
+          compareTo(connection.left?.starts[a - span.html.length], connection.right?.starts[b - span.pdf.length]);
           compareTo(connection.left?.ends[a - trailing - 1], connection.right?.ends[b - trailing - 1]);
+        }
       }
       compareTo();
       connection.editorDiff = diff;
     }
     const diff = connection.editorDiff;
-    if (diff.distance > 128 && diff.parts.some(part => part.changed
-      && Math.max(significantText(part.html).length, significantText(part.pdf).length) > 128)) return null;
+    diff.reliable ??= diff.distance <= 128 || !diff.parts.some(part => part.changed
+      && Math.max(significantText(part.html).length, significantText(part.pdf).length) > 128);
+    if (!diff.reliable) return null;
     let a = 0, b = 0;
     diff.ranges ||= diff.parts.map(part => [a, a += part.html.length, b, b += part.pdf.length, part]);
     return diff;
@@ -319,16 +324,17 @@ class PdfSourceIndex {
     return rangeAt(model, this.starts[start] ?? this.source.length,
       (end > start ? this.ends[end - 1] : this.starts[start]) ?? this.source.length);
   }
-  reviewCandidates(targets = [], notice = null, connections = this.connectionPairs(targets), edits = true) {
-    const items = [], seen = [];
-    function claim(start, end) {
-      const low = lowerBound(seen, start, range => range.start);
-      if (seen[low]?.start === start || low && seen[low - 1].end > start
-        || seen[low] && seen[low].start < end && seen[low].end > start) return false;
-      seen.splice(low, 0, { start, end });
-      return true;
-    }
-    const add = (start, parts, pdfRaw = '', pdfStart = 0, connection = null) => {
+  missingRange(target, start, end, selectionStart = start, selectionEnd = end) {
+    const ordered = (this.connections.get(target) || []).toSorted((a, b) => a.start - b.start);
+    const before = ordered.findLast(c => c.end <= start), after = ordered.find(c => c.start >= end);
+    if (!before && !after) return null;
+    const a = before ? this.connectedRange(target, selectionStart, before.end)?.start ?? before.targetEnd : 0;
+    const b = after ? this.connectedRange(target, after.start, selectionEnd)?.end ?? after.targetStart : target.raw.length;
+    return b < a ? null : { start: a, end: target.raw.slice(a, b).trim() ? b : a, endBias: !!before };
+  }
+  reviewCandidates(targets = [], notice = null, connections = this.connectionPairs(targets, true), edits = true) {
+    const items = [];
+    const add = (start, parts, pdfRaw = '', pdfStart = 0, connection = null, missing = false) => {
       const projection = [];
       let left = start, right = pdfStart;
       for (const part of parts || []) {
@@ -347,7 +353,10 @@ class PdfSourceIndex {
         pdfStart += part.pdf.length;
         if (part.changed && significantText(part.html, this, from) !== significantText(part.pdf)
           && (!connection || connections.find(([other]) => other === connection || other.start <= from && other.end >= end
-            && (from < end || other.end > from || other.start === from))?.[0] === connection) && claim(from, end)) {
+            && (from < end || other.end > from || other.start === from))?.[0] === connection)) {
+          const low = lowerBound(items, from, item => item.sourceStart);
+          if (items[low]?.sourceStart === from || low && items[low - 1].sourceEnd > from
+            || items[low] && items[low].sourceStart < end && items[low].sourceEnd > from) continue;
           const lineStart = pdfRaw.lastIndexOf('\n', Math.max(0, at - 1)) + 1;
           const nextLine = pdfRaw.indexOf('\n', at + part.pdf.length);
           const lineEnd = nextLine < 0 ? pdfRaw.length : nextLine;
@@ -359,10 +368,10 @@ class PdfSourceIndex {
           const before = this.raw.slice(a, from), after = this.raw.slice(end, b);
           const preview = { html: this.raw.slice(a, b), pdf: before + part.pdf + after };
           this.locator.comparisonParts(preview, [{ html: before, pdf: before, changed: false }, part, { html: after, pdf: after, changed: false }]);
-          items.push({
-            id: `${from}:${end}`, sourceStart: from, sourceEnd: end, preview,
+          items.splice(low, 0, {
+            id: `${from}:${end}`, sourceStart: from, sourceEnd: end, preview, ...(missing ? { missing: true } : {}),
             comparison: { html: part.html, pdf: part.pdf }, options: [
-              { id: 'pdf', label: '替换', edits: edits ? this.textEdits(from, end, part.pdf) : [] }
+              { id: 'pdf', label: '替换', edits: edits && !missing ? this.textEdits(from, end, part.pdf) : [] }
             ]
           });
         }
@@ -372,8 +381,20 @@ class PdfSourceIndex {
       add(connection.start, this.connectionDiff(target, connection)?.parts, target.raw, connection.targetStart, connection);
     if (notice?.source && this.raw.slice(notice.source.start, notice.source.end) === notice.html)
       add(notice.source.start, this.locator.comparisonParts(notice));
-    return items.sort((a, b) => a.sourceStart - b.sourceStart || a.sourceEnd - b.sourceEnd);
+    // Unmapped gaps in a recovered file are HTML additions with no reliable OCR counterpart.
+    const target = (targets.length ? targets : connections.map(([, target]) => target)).find(target => target?.sourcePages?.length);
+    if (target && (this.pageScopes.get(target)?.prepared || connections.some(([connection, index]) => index === target && connection.recovered))) {
+      const ordered = connections.filter(([connection, index]) => (index === target || index.layer)
+        && this.connectionDiff(index, connection)).map(([connection]) => connection).sort((a, b) => a.start - b.start);
+      let start = this.raw.length - this.raw.trimStart().length;
+      for (const range of [...ordered, { start: this.raw.trimEnd().length }]) {
+        if (range.start > start) add(start, [{ html: this.raw.slice(start, range.start), pdf: '', changed: true }], '', 0, null, true);
+        start = Math.max(start, range.end ?? range.start);
+      }
+    }
+    return items;
   }
+
   fontRuns(start = 0, end = this.raw.length) {
     const runs = [];
     const parts = this.parts ? this.partsInRange(start, end)
@@ -537,12 +558,12 @@ class PdfSourceIndex {
     const at = this.starts[start] ?? this.ends[start - 1] ?? 0;
     return { start: at, end: at };
   }
-  sourceDecorations(connections, model, fonts = true) {
+  sourceDecorations(connections, model, fonts = true, text = true, targets = connections.map(([, target]) => target)) {
     const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
-    const differences = this.reviewCandidates([], null, connections, false).map(item => ({
+    const differences = (text ? this.reviewCandidates(targets, null, connections, false) : []).map(item => ({
       start: item.sourceStart, end: item.sourceEnd, text: true,
       insertions: item.sourceStart === item.sourceEnd ? [item.sourceStart] : [],
-      messages: ['HTML: ' + escape(item.comparison.html) + '\n\nOCR: ' + escape(item.comparison.pdf)]
+      messages: [item.missing ? 'PDF OCR 缺少相关文字。' : 'HTML: ' + escape(item.comparison.html) + '\n\nOCR: ' + escape(item.comparison.pdf)]
     }));
     for (const item of fonts ? this.formatDifferences(connections, false) : []) {
       const formats = item.formats || [item];
@@ -608,7 +629,9 @@ class PdfSourceIndex {
     const cached = this.pageScopes.get(page);
     if (cached && (!connect || cached.prepared)) return cached.scope;
     const from = page.normalized, to = this.normalized, text = from.text;
-    let scope = this.locate({ text: page.raw, before: "", after: "" });
+    let scope = connect && page.sourcePages?.length
+      && this.rememberConnection(0, this.raw.length, page, { start: 0, end: page.raw.length }, { recover: true })
+      ? { start: 0, end: this.raw.length } : this.locate({ text: page.raw, before: "", after: "" });
     if (scope && connect) this.rememberConnection(scope.start, scope.end, page, { start: 0, end: page.raw.length });
     for (const prepare of connect ? [true, false] : [false]) {
       if (scope) break;
@@ -649,15 +672,19 @@ class PdfSourceIndex {
           const [b, y] = extendPageRange(from.text, to.text, range.b, range.y, 1);
           // Edge expansion can make adjacent anchor groups overlap. Compare their union
           // so a joined OCR word is not counted twice and selections can cross the seam.
-          const merged = previous && (previous.end === to.starts[x] && previous.targetEnd > from.starts[a]
+          const merged = previous && (previous.end <= to.starts[x] && previous.targetEnd > from.starts[a]
             || previous.end > to.starts[x] && previous.targetEnd === from.starts[a])
             && this.rememberConnection(previous.start, Math.max(previous.end, to.ends[y - 1]), page,
               { start: previous.targetStart, end: Math.max(previous.targetEnd, from.ends[b - 1]) });
           if (merged) this.connections.set(page, this.connections.get(page).filter(item => item !== previous));
-          if (previous && previous.end < to.starts[x] && previous.targetEnd < from.starts[a])
-            this.rememberConnection(previous.end, to.starts[x], page, { start: previous.targetEnd, end: from.starts[a] });
+          if (previous ? previous.end < to.starts[x] && previous.targetEnd < from.starts[a]
+            : page.sourcePages?.length && to.starts[x] <= 2048)
+            this.rememberConnection(previous?.end ?? this.raw.length - this.raw.trimStart().length, to.starts[x], page,
+              { start: previous?.targetEnd ?? 0, end: from.starts[a] }, { recover: !!(page.sourcePages?.length || page.layer) });
           previous = merged || this.rememberConnection(to.starts[x], to.ends[y - 1], page, { start: from.starts[a], end: from.ends[b - 1] });
         }
+        if (page.sourcePages?.length && previous && this.raw.length - previous.end <= 2048 && significantText(this.raw.slice(previous.end)))
+          this.rememberConnection(previous.end, this.raw.trimEnd().length, page, { start: previous.targetEnd, end: page.raw.trimEnd().length }, { recover: true });
       }
       if (!anchors.every((anchor, i) => !i || anchor.start > anchors[i - 1].start)) continue;
       const first = anchors[0], last = anchors.at(-1);
@@ -668,7 +695,7 @@ class PdfSourceIndex {
       scope = { start: Math.max(to.starts[start], firstPage?.start ?? 0), end: Math.min(to.ends[end - 1], lastPage?.end ?? this.raw.length) };
     }
     if (scope) scope.normalized = this.normalizedRange(scope.start, scope.end);
-    this.pageScopes.set(page, { scope, prepared: connect });
+    this.pageScopes.set(page, { scope, prepared: connect, connections: connect ? this.connections.get(page) || [] : undefined });
     return scope;
   }
   *matchPositions(needle, { text }, anchors) {
@@ -729,6 +756,7 @@ class PdfSourceIndex {
     return tied ? null : { ...best, start: best.start + offset, end: best.end + offset };
   }
   rememberConnection(start, end, target, hit, alignment) {
+    if (start > end || hit.start > hit.end) return null;
     const cached = this.connections.get(target) || [];
     const existing = cached.find(item => item.start === start && item.end === end
       && item.targetStart === hit.start && item.targetEnd === hit.end);
@@ -736,10 +764,28 @@ class PdfSourceIndex {
     const left = alignment?.left || this.normalizedRange(start, end),
       right = alignment?.right || target.normalizedRange(hit.start, hit.end);
     if (!left.text && !right.text) return null;
-    const diff = alignment?.diff || textDiff(left.text, right.text, true, 128);
-    if (diff.distance > 128) return null;
+    const diff = alignment?.diff || textDiff(left.text, right.text, true);
+    if (diff.distance > 128 && diff.parts.some(part => part.changed && Math.max(part.html.length, part.pdf.length) > 128)
+      || alignment?.recover && diff.distance > 32 && !diff.parts.some(part => !part.changed && /[\p{L}\p{N}]{3}/u.test(part.html))) {
+      if (!alignment?.recover) return null;
+      // Recover word runs, keeping bounded OCR differences in the normal diff path.
+      const words = text => text.match(/\S+\s*|\s+/gu) || [];
+      const coarse = localTextDiff(words(left.text), words(right.text), true, 128), recovered = [];
+      let a = 0, b = 0;
+      for (const part of coarse.parts) {
+        const x = a, y = b;
+        a += part.html.length; b += part.pdf.length;
+        if (!/[\p{L}\p{N}]/u.test(part.html) || part.changed && !textDiff(part.html, part.pdf, true).parts
+          .some(span => !span.changed && /[\p{L}\p{N}]{3}/u.test(span.html))) continue;
+        const connection = this.rememberConnection(start + left.starts[x], start + left.ends[a - 1], target,
+          { start: hit.start + right.starts[y], end: hit.start + right.ends[b - 1] });
+        if (connection) recovered.push(Object.assign(connection, { recovered: true }));
+      }
+      this.connections.set(target, [...recovered, ...cached]);
+      return null;
+    }
     const connection = { start, end, targetStart: hit.start, targetEnd: hit.end, left, right, distance: diff.distance, spans: diff.parts };
-    this.connections.set(target, [connection, ...cached.filter(item => item.start !== start || item.end !== end)].slice(0, Math.max(16, Math.ceil(this.raw.length / 64))));
+    this.connections.set(target, [connection, ...cached.filter(item => item.start !== start || item.end !== end)].slice(0, Math.max(16, this.raw.length)));
     return connection;
   }
   connectedRange(target, start, end, reverse = false, connection, marked = false) {

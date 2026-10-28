@@ -342,10 +342,10 @@
       index
     } }));
     if (diffHighlight && index) {
-      const connections = index.connectionPairs(targets);
-      const key = [index, review.fontEnabled, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
+      const connections = index.connectionPairs(targets, true);
+      const key = [index, review.textEnabled, review.fontEnabled, ...targets, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
       if (!defaultPointer || defaultPointer.key.length !== key.length || key.some((value, i) => value !== defaultPointer.key[i]))
-        api.showReviewPointer(activeEditor, [...index.reviewCandidates(targets), ...(review.fontEnabled ? index.formatDifferences(connections) : [])], key);
+        api.showReviewPointer(activeEditor, [...(review.textEnabled !== false ? index.reviewCandidates(targets, null, connections) : []), ...(review.fontEnabled ? index.formatDifferences(connections) : [])], key);
     }
   }
   async function discoverPdf() {
@@ -430,8 +430,8 @@
       const notice = painted?.notices?.filter(({ box }) => box
         && event.clientX >= page.left + box.x * page.width - 3 && event.clientX <= page.left + (box.x + box.w) * page.width + 3
         && event.clientY >= page.top + box.y * page.height && event.clientY <= page.top + (box.y + box.h) * page.height)
-        .sort(({ box: a }, { box: b }) => Math.max(a.x - x, x - a.x - a.w, 0) - Math.max(b.x - x, x - b.x - b.w, 0)
-          || Math.abs(x - a.x - a.w / 2) - Math.abs(x - b.x - b.w / 2))[0];
+        .sort(({ box: a, missing: am }, { box: b, missing: bm }) => Math.max(a.x - x, x - a.x - a.w, 0) - Math.max(b.x - x, x - b.x - b.w, 0)
+          || Math.abs(x - a.x - a.w / 2) - Math.abs(x - b.x - b.w / 2) || Number(!!bm) - Number(!!am))[0];
       if (notice) { notifiedSelection = null; publishDifferences(div, painted, [notice], true); }
       return;
     }
@@ -562,10 +562,27 @@
       }
       if (!hit && index) hit = (entry.index && entry.index.connectedRange(index, entry.start, entry.end, false, undefined, true))
         || (!visibleOnly && index.locate(entry, entry.index && index.pageScopes.get(entry.index)?.scope));
+      const missingTargets = [...pageIndexes, documentIndex, ...(locator.environment.getTargets?.() || [])];
+      const missing = (!hit || entry.marked && entry.start === entry.end) && window.PdfReviewProvider?.textEnabled !== false && entry.index?.reviewCandidates(missingTargets, null, undefined, false)
+        .find(item => item.missing && (entry.start === entry.end ? entry.marked && entry.start >= item.sourceStart && entry.start <= item.sourceEnd
+          : entry.start < item.sourceEnd && entry.end > item.sourceStart));
+      if (missing) {
+        const source = { index: entry.index, start: entry.start < entry.end ? entry.start : missing.sourceStart,
+          end: entry.start < entry.end ? entry.end : missing.sourceEnd };
+        const difference = { html: entry.index.raw.slice(source.start, source.end), pdf: '', missing: true };
+        const targets = visible.flatMap(({ number, index }) => {
+          if (!index?.raw.trim()) return [];
+          const range = entry.index.missingRange(index, missing.sourceStart, missing.sourceEnd, entry.start, entry.end)
+            || documentIndex?.sourcePages?.includes(number) && { start: 0, end: index.raw.length };
+          return range && range.end > range.start ? [{ pageNumber: number, range,
+            start: source.start, end: source.end, marked: true, text: '', source, difference }] : [];
+        });
+        return { entry, targets, notice: { ...difference, source } };
+      }
       if (!hit) return { entry, targets: [], queries: entry.index ? [] : [entry.text] };
       const connection = hit.connection || (entry.index && entry.index.rememberConnection(entry.start, entry.end, index, hit));
       const counterpart = index.raw.slice(hit.start, hit.end);
-      const difference = hit.approximate || entry.marked && entry.text !== counterpart ? { html: entry.text, pdf: counterpart } : null;
+      const difference = hit.approximate || entry.text !== counterpart ? { html: entry.text, pdf: counterpart } : null;
       const pages = index.pages || [{ number, start: 0, end: index.raw.length, parts: index.parts }];
       const targets = pages.filter(page => hit.start === hit.end ? hit.start >= page.start && hit.start <= page.end
         : hit.start < page.end && hit.end > page.start).map(page => {
@@ -580,7 +597,8 @@
           start: sourceRange?.start ?? entry.start, end: sourceRange?.end ?? entry.end });
         return target;
       });
-      return { entry, targets };
+      return { entry, targets, notice: entry.marked && difference && {
+        ...difference, source: entry.index && { index: entry.index, start: entry.start, end: entry.end } } };
     });
     // Default markers use prepared source pages; explicit searches may read the volume.
     if (visibleOnly || documentIndex || locations.every(location => location.targets.length)) return locations;
@@ -614,7 +632,7 @@
     const append = matches => {
       for (const hit of matches) {
         const key = `${hit.start}:${hit.end}`;
-        if (!hits.has(key)) hits.set(key, hit);
+        if (!hits.has(key) || hit.difference?.missing) hits.set(key, hit);
       }
     };
     let focusHit = null;
@@ -639,9 +657,10 @@
     if (!index) return { boxes: [], count: 0, pending: true };
     const key = JSON.stringify([queries, targets.map(target =>
       [target.text, target.before, target.after, target.difference, target.range, target.start, target.end, target.marked])]);
+    const source = targets.find(target => target.source)?.source.index || contexts[0]?.index;
     let cached = pageResults.get(index);
-    if (!cached || cached.source !== contexts[0]?.index) {
-      cached = { source: contexts[0]?.index, results: new Map() };
+    if (!cached || cached.source !== source) {
+      cached = { source, results: new Map() };
       pageResults.set(index, cached);
     }
     if (cached.results.has(key)) return cached.results.get(key);
@@ -693,12 +712,12 @@
     // Publish mapping data only. The review adapter chooses where and how to show it.
     const editor = activeEditor, model = editor?.getModel(), selected = selectionRevision;
     if (notices.length) setTimeout(function publish() {
-      if ((!diffHighlight && !sourceDiffHighlight) || !pointer && !selectionHighlight || stopped || selected !== selectionRevision || notifiedSelection === selected
-        || !div.isConnected || painted && (!painted.node.isConnected || review.getHighlight(div, pointer) !== painted)) return;
+      if ((!diffHighlight && !sourceDiffHighlight && !notices[0].missing) || !pointer && !selectionHighlight || stopped || selected !== selectionRevision || notifiedSelection === selected
+        || div && !div.isConnected || painted && (!painted.node.isConnected || review.getHighlight(div, pointer) !== painted)) return;
       // Opening review selects its candidate; wait until the user's drag ends.
       if (selecting) { pendingDifference = publish; return; }
       notifiedSelection = selected;
-      const box = notices[0].box, page = div.getBoundingClientRect();
+      const box = notices[0].box, page = div?.getBoundingClientRect();
       const anchor = box && { left: page.left + box.x * page.width, top: page.top + box.y * page.height,
         bottom: page.top + (box.y + box.h) * page.height };
       window.dispatchEvent(new CustomEvent('pdf-selection-difference', { detail: {
@@ -728,6 +747,8 @@
     }
     const locations = locationSearch.locations;
     publishSources();
+    if (locations?.some(location => location.notice && !location.targets.length))
+      publishDifferences(null, null, locations.flatMap(location => location.notice && !location.targets.length ? [location.notice] : []), true);
     const exact = locations?.flatMap(location => location.targets) || [];
     const queries = locations?.filter(location => !location.targets.length).flatMap(location => location.queries || [location.entry.text]) || [];
     if (!positioned && exact.length) {
