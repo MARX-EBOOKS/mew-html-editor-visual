@@ -285,7 +285,7 @@
     return { configure, refresh, scheduleRefresh, filter, setActive, collapse, reveal, creationDirectory };
   })();
 
-  function mountTagPanel({ tags, attrs, storageKey, onTag, onAttr, onNavigate, onEditorScale }) {
+  async function mountTagPanel({ tags, attrs, storageKey, onTag, onAttr, onNavigate, onEditorScale }) {
     byId('tagBar').innerHTML = [
       ...tags.map((tag, index) => `<button class="tag" data-i="${index}" title="${escapeHtml(tag.title)}">${escapeHtml(tag.label)}</button>`),
       '<span class="spacer"></span>',
@@ -304,6 +304,8 @@
     };
     let oldLayout = {};
     try { oldLayout = JSON.parse(localStorage.getItem('mew-editor-layout-v1') || '{}'); } catch {}
+    const readerLinked = new URLSearchParams(location.search).has('readerSession');
+    let settingsLoaded = false;
     const tagPanel = window.MewTagPanel.mount({
       content: '#tagBar',
       host: '.editorPane',
@@ -315,8 +317,23 @@
         document.documentElement.style.setProperty('--editor-scale', scale);
         onEditorScale(scale);
       },
+      onScaleChange(patch) {
+        if (settingsLoaded) fetch('/api/reader/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).catch(() => notify('无法保存缩放设置', true));
+      },
       editorSelector: '#monacoEditor'
     });
+    if (readerLinked) {
+      try {
+        const response = await fetch('/api/reader/settings');
+        if (!response.ok) throw new Error('无法读取缩放设置');
+        const settings = await response.json();
+        for (const target of ['editor', 'tag']) {
+          const scale = settings[`${target}Scale`];
+          tagPanel.setScale(target, typeof scale === 'number' && Number.isFinite(scale) ? scale : 1);
+        }
+        settingsLoaded = true;
+      } catch { notify('无法读取缩放设置', true); }
+    }
   }
 
   function editorScale() {

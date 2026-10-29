@@ -44,15 +44,22 @@
   } catch {}
   let visualDocument = null, detachVisual = () => {};
   let pairedWindow = null, pairedSession = "";
+  function currentEditor() {
+    try { return window.ReaderUI?.getSourceEditor
+      ? window.ReaderUI.getSourceEditor(pairedWindow && !pairedWindow.closed ? pairedWindow.mewWorkbench : null)
+      : activeEditor; } catch { return null; }
+  }
+  const sourcePages = () => window.ReaderUI?.getPdfSourcePages?.();
   const locator = new review.PdfLocator(options, {
-    document, getPdf: () => viewer?.pdfDocument,
+    document, getPdf: () => viewer?.pdfDocument, getSourcePages: sourcePages,
     getTargets() {
-      const pdf = viewer?.pdfDocument, numbers = window.ReaderUI?.getPdfSourcePages?.();
+      const pdf = viewer?.pdfDocument, numbers = sourcePages();
+      if (window.ReaderUI?.getSourceEditor && !currentEditor()) return [];
       return [...new Set([...layers.values()].filter(page => page.pdf === pdf
-        && (!numbers?.length || numbers.includes(Number(page.layer.closest('.page')?.dataset.pageNumber)))).concat(
-        locator.getDocumentIndex(pdf, numbers) || [], locator.getDocumentIndex(pdf) || []))];
+        && (!numbers || numbers.includes(Number(page.layer.closest('.page')?.dataset.pageNumber)))).concat(
+        locator.getDocumentIndex(pdf, numbers) || []))];
     },
-    getVisiblePages: () => visiblePages().map(number => ({ number, index: layerIndex(viewer.getPageView(number - 1)?.div) })),
+    getVisiblePages: () => visiblePages().filter(number => !sourcePages() || sourcePages().includes(number)).map(number => ({ number, index: layerIndex(viewer.getPageView(number - 1)?.div) })),
     isCurrent: pdf => !stopped && viewer?.pdfDocument === pdf,
     async waitForIdle(pdf) {
       while (!stopped && viewer?.pdfDocument === pdf
@@ -122,7 +129,7 @@
       delete window.PdfSelection;
     },
     get viewer() { return viewer; },
-    get editor() { return activeEditor; },
+    get editor() { return currentEditor(); },
     get enabled() { return diffHighlight; },
     get sourceEnabled() { return sourceDiffHighlight; },
     get interactionId() { return interactionId; }
@@ -155,7 +162,7 @@
     layers.get(div)?.observer.disconnect(); return layers.delete(div);
   }
   function currentPointer(pointer) {
-    return pointer.pdf === viewer?.pdfDocument && pointer.model === pointer.editor.getModel()
+    return pointer.pdf === viewer?.pdfDocument && pointer.editor === currentEditor() && pointer.model === pointer.editor.getModel()
       && pointer.version === pointer.model.getVersionId?.();
   }
   function sourceEntry(index, start, end, marked, text = index.raw.slice(start, end)) {
@@ -207,6 +214,7 @@
   }
   function attachEditor(editor) {
     editor = editor?.editor || editor;
+    if (window.ReaderUI?.getSourceEditor && editor !== currentEditor()) return;
     const editorApi = editor?.getDomNode?.()?.ownerDocument.defaultView.monaco || window.monaco;
     if (editorApi && editor?.getOption?.(editorApi.editor.EditorOption.inDiffEditor)) return;
     if (!editor?.onDidChangeCursorSelection || editors.has(editor)) return;
@@ -221,7 +229,7 @@
     let readTimer = null;
     cleanup.push(() => clearTimeout(readTimer));
     const read = event => {
-      if (syncingPdf) return;
+      if (syncingPdf || window.ReaderUI?.getSourceEditor && editor !== currentEditor()) return;
       if (event?.changes || readTimer !== null) {
         if (event?.changes) lastEdit = event.isFlush ? -Infinity : performance.now();
         if (readTimer === null) select([]);
@@ -240,7 +248,7 @@
       }) : [];
       if (!marked && !ranges.some(range => model.getOffsetAt(range.getEndPosition()) > model.getOffsetAt(range.getStartPosition()))) { select([]); if (viewer) queueWarm(); return; }
       const index = locator.editorSourceIndex(model);
-      if (viewer && index.preparedPdf !== viewer.pdfDocument) queueWarm();
+      if (viewer && index.preparation?.pdf !== viewer.pdfDocument) queueWarm();
       const entries = ranges.map(range => {
         const start = model.getOffsetAt(range.getStartPosition()), end = model.getOffsetAt(range.getEndPosition());
         const { start: a, end: b } = index.rawRange(start, end);
@@ -335,10 +343,9 @@
   }
   function warm(numbers = visiblePages()) {
     if (!viewer?.pdfDocument) return;
-    const pdf = viewer?.pdfDocument, model = activeEditor?.getModel(), source = model && locator.editorSourceIndex(model);
+    const pdf = viewer?.pdfDocument, model = currentEditor()?.getModel(), source = model && locator.editorSourceIndex(model);
     for (const div of layers.keys()) if (!div.isConnected) clearLayer(div);
-    const pages = numbers.map(number => layerIndex(viewer.getPageView(number - 1)?.div));
-    locator.prepareSource(source, pages, pdf);
+    for (const number of numbers) layerIndex(viewer.getPageView(number - 1)?.div);
     const scope = window.ReaderUI?.getPdfSourcePages?.();
     if (source && scope?.length && !locator.getDocumentIndex(pdf, scope))
       void locator.indexDocument(pdf, scope).catch(error => console.warn('[PDF selection highlight] Source pages unavailable:', error));
@@ -347,17 +354,20 @@
   function publishSources() {
     if (performance.now() - lastEdit < editIdleDelay) return;
     const pdf = viewer?.pdfDocument;
-    const index = activeEditor?.getModel() && locator.editorSourceIndex(activeEditor.getModel());
+    const editor = currentEditor();
+    const index = editor?.getModel() && locator.editorSourceIndex(editor.getModel());
     const targets = locator.environment.getTargets();
     window.dispatchEvent(new CustomEvent('pdf-selection-sources', { detail: {
-      editor: activeEditor, pdf, targets, enabled: sourceDiffHighlight,
+      editor: editor || activeEditor, pdf, targets, enabled: sourceDiffHighlight,
       index
     } }));
     if (diffHighlight && index) {
-      const connections = index.connectionPairs(targets, true);
+      const { connections, items } = index.differences;
       const key = [index, review.textEnabled, review.fontEnabled, ...(review.fontStyles || []), ...targets, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
       if (!defaultPointer || defaultPointer.key.length !== key.length || key.some((value, i) => value !== defaultPointer.key[i]))
-        api.showReviewPointer(activeEditor, [...(review.textEnabled !== false ? index.reviewCandidates(targets, null, connections) : []), ...(review.fontEnabled ? index.formatDifferences(connections, true, review.fontStyles) : [])], key);
+        api.showReviewPointer(editor, review.fontEnabled && review.fontStyles?.length === 1
+          ? index.formatDifferences(connections, true, review.fontStyles, items.filter(item => !item.font && review.textEnabled !== false))
+          : items.filter(item => item.font ? review.fontEnabled : review.textEnabled !== false), key);
     }
   }
   async function discoverPdf() {
@@ -455,6 +465,7 @@
     for (const div of pages) {
       const layer = div.querySelector(".textLayer");
       if (!layer || !range.intersectsNode(layer)) continue;
+      if (sourcePages() && !sourcePages().includes(Number(div.dataset.pageNumber))) return;
       const index = layerIndex(div);
       let start = null, end = null;
       for (const part of index.parts) {
@@ -466,8 +477,10 @@
       if (start !== null) chunks.push({ div, index, start, end });
     }
     if (!chunks.length) return;
-    let editor = activeEditor;
-    try { editor = (!pairedWindow?.closed && pairedWindow?.mewWorkbench?.editor) || editor; } catch { /* editor is navigating */ }
+    let editor = currentEditor();
+    if (!window.ReaderUI?.getSourceEditor) {
+      try { editor = (!pairedWindow?.closed && pairedWindow?.mewWorkbench?.editor) || editor; } catch { /* editor is navigating */ }
+    }
     const model = editor?.getModel();
     if (!model || !editor.setSelection) return;
     activeEditor = editor;
@@ -554,11 +567,11 @@
     return index;
   }
   function findLocations(pdf, entries, visibleOnly = false) {
-    const documentIndex = locator.getDocumentIndex(pdf) || (entries.every(entry => entry.index)
-      && locator.getDocumentIndex(pdf, window.ReaderUI?.getPdfSourcePages?.()));
+    const scope = window.ReaderUI?.getPdfSourcePages?.();
+    const documentIndex = locator.getDocumentIndex(pdf, scope);
     const visible = locator.environment.getVisiblePages?.() || [], pageIndexes = visible.map(page => page.index);
     for (const source of new Set(entries.map(entry => entry.index).filter(Boolean)))
-      locator.prepareSource(source, pageIndexes, pdf);
+      source?.diff(pageIndexes, pdf);
     entries = entries.flatMap(entry => {
       if (!visibleOnly && !entry.marked) return [entry];
       const connections = entry.index?.connectionPairs([...pageIndexes, documentIndex]);
@@ -613,13 +626,13 @@
       return { entry, targets, notice: entry.marked && difference && {
         ...difference, source: entry.index && { index: entry.index, start: entry.start, end: entry.end } } };
     });
-    // Default markers use prepared source pages; explicit searches may read the volume.
+    // Reader searches stay within the current file's corresponding PDF pages.
     if (visibleOnly || documentIndex || locations.every(location => location.targets.length)) return locations;
-    return locator.indexDocument(pdf).then(index => index ? findLocations(pdf, entries) : locations);
+    return locator.indexDocument(pdf, scope).then(index => index ? findLocations(pdf, entries) : locations);
   }
   function locateSource(index, chunks) {
     const first = chunks[0], last = chunks.at(-1);
-    locator.prepareSource(index, chunks.map(chunk => chunk.index), viewer?.pdfDocument);
+    index?.diff(chunks.map(chunk => chunk.index), viewer?.pdfDocument);
     const entry = {
       text: chunks.map(({ index, start, end }) => index.raw.slice(start, end)).join("\n"),
       before: first.index.raw.slice(Math.max(0, first.start - 160), first.start),
@@ -723,7 +736,7 @@
   }
   function publishDifferences(div, painted, notices, pointer = false) {
     // Publish mapping data only. The review adapter chooses where and how to show it.
-    const editor = activeEditor, model = editor?.getModel(), selected = selectionRevision;
+    const editor = currentEditor(), model = editor?.getModel(), selected = selectionRevision;
     if (notices.length) setTimeout(function publish() {
       if ((!diffHighlight && !sourceDiffHighlight && !notices[0].missing) || !pointer && !selectionHighlight || stopped || selected !== selectionRevision || notifiedSelection === selected
         || div && !div.isConnected || painted && (!painted.node.isConnected || review.getHighlight(div, pointer) !== painted)) return;

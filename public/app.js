@@ -307,8 +307,8 @@ function openFileWindow() {
   url.searchParams.delete("readerSession");
   window.open(url, "_blank");
 }
-async function save() {
-  const d = doc();
+async function save({ model } = {}) {
+  const d = model ? [...state.docs.values()].find(d => d.model === model) : doc();
   if (!d) return notify("Open a file first");
   const savedText = d.content;
   try {
@@ -569,7 +569,7 @@ async function initMonaco(api) {
     if (key === 's') { event.preventDefault(); if (event.shiftKey) saveAs(); else save(); }
     else if (key === 'n' && !event.shiftKey) { event.preventDefault(); newFile(); }
   });
-  ui.mountTagPanel({
+  await ui.mountTagPanel({
     tags, attrs, storageKey: TAG_PANEL_KEY,
     onTag: editTag,
     onAttr: insertAttr,

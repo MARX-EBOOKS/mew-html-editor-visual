@@ -157,7 +157,13 @@
   const get = name => fields[name] ||= panel.querySelector(`[data-${name}]`);
   function workspace() {
     const owner = session?.editor.getDomNode()?.ownerDocument.defaultView;
-    return owner?.mewWorkbench || owner?.readerMonaco;
+    return owner === window ? owner.mewWorkbench || owner.readerMonaco : null;
+  }
+  function editorDirty(state = session) {
+    const owner = state?.editor.getDomNode()?.ownerDocument.defaultView;
+    return owner?.mewWorkbench
+      ? [...owner.mewWorkbench.documents.values()].find(doc => doc.model === state.model)?.dirty
+      : owner?.document.getElementById('saveBtn')?.classList.contains('dirty');
   }
   function message(text) { get('status').textContent = text; get('status').hidden = !text; }
   function current() { return session?.items[session.position]; }
@@ -311,8 +317,9 @@
     const canApply = ready && session.provider.apply && session.content?.apply !== false;
     get('apply').disabled = !currentVersion || !item || busy;
     for (const name of ['advance', 'all']) get(name).disabled = !canApply;
-    get('save').textContent = session?.manualSave ? '保存修改' : '替换&保存';
-    get('save').disabled = !workspace()?.save || busy || !(session?.manualSave ? session.editor.getModel() === session.model : canApply);
+    const saveOnly = editorDirty() ?? session?.manualSave;
+    get('save').textContent = saveOnly ? '保存修改' : '替换&保存';
+    get('save').disabled = !workspace()?.save || busy || !(saveOnly ? session.editor.getModel() === session.model : canApply);
     const blocked = !currentVersion || !!session?.applying;
     get('prev').disabled = blocked || session.position <= 0;
     get('next').disabled = blocked || session.position >= session.items.length - 1;
@@ -356,13 +363,11 @@
     const dirtyIndicator = ownerWindow?.document.getElementById(ownerWindow.mewWorkbench ? 'tabs' : 'saveBtn');
     const dirtyObserver = new MutationObserver(() => {
       if (!session?.needsSave || target.getModel() !== session.model) return;
-      const dirty = ownerWindow.mewWorkbench
-        ? [...ownerWindow.mewWorkbench.documents.values()].find(doc => doc.model === session.model)?.dirty
-        : dirtyIndicator.classList.contains('dirty');
-      if (dirty !== false) return;
+      if (editorDirty() !== false) return;
       session.needsSave = false; session.manualSave = false;
-      if (valid()) render(true);
-      else { message('已保存。差异更新中…'); controls(); }
+      controls();
+      if (valid()) message(session.content?.message || '');
+      else message('已保存。差异更新中…');
     });
     if (dirtyIndicator) dirtyObserver.observe(dirtyIndicator, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
     disposals.push(() => dirtyObserver.disconnect());
@@ -406,6 +411,7 @@
   function render(preserveSelection = false, mirrored = false) {
     if (!session) return;
     const item = current();
+    session.needsSave = editorDirty() ?? session.needsSave;
     session.content = session.provider.content?.(session, item) || {};
     const content = session.content;
     let previewEnabled = false;
@@ -528,7 +534,7 @@
       const result = await saved.provider.apply({ editor: saved.editor, model: saved.model,
         source: saved.source, version: saved.version, items: saved.items,
         position: saved.position, choices: saved.choices, context: { ...saved.context } }, all);
-      if (session !== saved) return;
+      if (session !== saved) return true;
       const source = saved.model.getValue(), changed = source !== saved.source;
       Object.assign(saved, { items: result.items, choices: result.choices || saved.choices,
         position: result.position, context: result.context || saved.context,
@@ -537,7 +543,7 @@
       Object.assign(saved.context, { source: saved.source, version: saved.version });
       if (saved.context.request) saved.context.request = { ...saved.context.request, snapshot: null };
       if (!valid()) { stale(); return; }
-      render();
+      if (!saved.saving) render();
       return true;
     } catch (error) {
       if (session !== saved) return;
@@ -565,9 +571,9 @@
       get('switch').textContent = layout.switchLabel || '';
     }
     const left = Math.max(8, rect?.left || 8), right = Math.min(innerWidth - 8, rect?.right || innerWidth - 8);
-    panel.style.width = compact ? 'max-content' : `${Math.max(0, Math.min(460, right - left))}px`;
-    panel.style.maxWidth = `${Math.max(0, Math.min(compact ? 280 : 460, right - left))}px`;
-    panel.style.maxHeight = `${Math.max(100, Math.min(innerHeight - 16, (rect?.height || innerHeight) * (compact ? .45 : .7)))}px`;
+    panel.style.width = compact ? 'max-content' : `${Math.max(0, Math.min(640, right - left))}px`;
+    panel.style.maxWidth = `${Math.max(0, Math.min(compact ? 560 : 640, right - left))}px`;
+    panel.style.maxHeight = `${Math.max(100, Math.min(innerHeight - 16, (rect?.height || innerHeight) * .75))}px`;
     if (widget) { widgetEditor.layoutContentWidget(widget); return; }
     const range = session?.anchor;
     const position = !pdfSide && range ? target.getScrolledVisiblePosition({ lineNumber: range.startLineNumber, column: range.startColumn }) : null;
@@ -608,18 +614,20 @@
   async function save() {
     const saved = session, owner = workspace();
     if (!saved || !owner?.save || get('save').disabled) return;
+    const saveOnly = editorDirty(saved) ?? saved.manualSave;
     saved.saving = true; controls();
     try {
-      if (!saved.manualSave && !await apply(false)) return;
+      if (!saveOnly && valid() && current() && !await apply(false)) return;
       // A popup refresh must not cancel saving an already applied replacement.
-      if (saved.editor.getModel() !== saved.model) throw new Error('文件已切换，未保存替换。');
+      if (!owner.documents && saved.editor.getModel() !== saved.model) throw new Error('文件已切换，未保存替换。');
       saved.manualSave = true;
       const source = saved.model.getValue();
-      const result = await owner.save({ followPdf: false });
+      const result = await owner.save({ followPdf: false, model: saved.model });
       if (result === false) throw new Error('保存失败，修改仍未保存，请重试。');
       if (session === saved && saved.model.getValue() === source) {
         saved.needsSave = false; saved.manualSave = false;
-        if (valid()) render();
+        if (valid() && !saveOnly) render();
+        else if (valid()) message(saved.content?.message || '');
         else message('已保存。差异更新中…');
       }
     }

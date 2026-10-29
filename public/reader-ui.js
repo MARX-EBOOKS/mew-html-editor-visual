@@ -687,7 +687,7 @@
       saved = { ...legacy, ...saved };
       try {
         const settings = await fetch("/api/reader/settings").then((r) => r.ok ? r.json() : {});
-        pdfSettings = normalizedPdfSettings({ ...settings, ...saved });
+        pdfSettings = normalizedPdfSettings({ ...saved, ...settings });
         for (const target of ["editor", "tag"]) {
           const scale = settings[`${target}Scale`];
           tagPanel?.setScale(target, typeof scale === "number" && Number.isFinite(scale) ? scale : 1);
@@ -829,6 +829,7 @@
     byId, editorScale: () => editorScale, isDark: () => body.classList.contains("dark"),
     getVisualDocument: () => visualFrame.contentDocument,
     getPdfViewer: () => pdfViewer,
+    getSourceEditor: workbench => listeners.sourceEditor?.(workbench),
     getPdfSourcePages: () => (pdfPageLabels || []).flatMap((label, index) => {
       const page = Number(String(label).match(/^(\d+)/)?.[1]);
       return page >= sourcePageRange[0] && page < sourcePageRange[1] ? [index + 1] : [];

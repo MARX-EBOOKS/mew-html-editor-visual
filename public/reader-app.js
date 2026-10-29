@@ -38,6 +38,8 @@
   let locateRevision = 0;
   let combineRequest = null;
   const editorPathCache = new Map();
+  const documents = new Map();
+
 
   async function api(url, options) {
     const response = await fetch(url, options);
@@ -106,7 +108,6 @@
     source = new MonacoController(monaco, byId("monacoEditor"), {
       page: "reader", scale: ui.editorScale(), dark: ui.isDark(), readOnly: true
     });
-    source.setModel(source.createModel({ text: "", language: "html", uri: monaco.Uri.parse("mew-reader:///page.html"), onChange: () => updateWorkingCopy(source.getValue()) }));
     tagEditor = new tagPanel.TagEditor(source);
     source.editor.onDidChangeCursorSelection(({ selection }) => {
       ui.setPosition(selection.positionLineNumber, selection.positionColumn);
@@ -126,7 +127,7 @@
         else if (tagMap.has(shortcut)) editTag(tagMap.get(shortcut));
       });
     }
-    window.readerMonaco = { editor: source.editor, model: source.model, save, showSource: () => setMode('source'),
+    window.readerMonaco = { editor: source.editor, get model() { return source.model; }, save, showSource: () => setMode('source'),
       reviewFiles() {
         const pages = currentVolume()?.pages || [], volume = state.volume;
         return { current: state.page, files: [...pages], async open(page) {
@@ -180,6 +181,7 @@
   }
 
   function updateWorkingCopy(text = currentSource()) {
+    if (state.workspaceMode === "reader") return state.document.content;
     text = state.document.textFromEditor(text);
     state.document.update(text);
     if (state.mode === "visual") source.setValue(text, true, "reader.visual");
@@ -252,6 +254,14 @@
     for (const page of candidates) {
       try {
         const url = `/api/reader/page/${encodeURIComponent(volume.id)}/${page}`;
+        const key = `${volume.id}:${page}`;
+        if (documents.has(key)) {
+          const document = documents.get(key);
+          await document.refresh();
+          if (document.model && document.textFromEditor(document.model.getValue()) !== document.content)
+            document.model.setValue(document.content);
+          return { page, document, editorPath: editorPathCache.get(key) };
+        }
         const data = await api(url);
         const document = new DocumentModel({
           ...data,
@@ -261,6 +271,7 @@
             body: JSON.stringify(snapshot)
           })
         });
+        documents.set(key, document);
         return { page, document, editorPath: data.path || null };
       } catch (error) {
         // Missing local/remote files fall back to the previous available page.
@@ -328,12 +339,21 @@
       // HTML fallback page. Volumes without a PDF retain navigation memory.
       if (!volume.pdfUrl) rememberPdfPage(state.pdfPage);
       if (editorPath) editorPathCache.set(`${volume.id}:${page}`, editorPath);
+      if (!readerOnly && source.model) previousDocument.viewState = source.editor.saveViewState();
       state.document = document;
       if (!readerOnly) {
+        document.model ||= source.createModel({ text: document.content, language: "html",
+          uri: monaco.Uri.from({ scheme: "mew-reader", path: `/${volume.id}/${page}.html` }),
+          onChange: model => {
+            document.update(document.textFromEditor(model.getValue()));
+            if (state.document === document) { markDirty(); updateHistoryButtons(); }
+          }
+        });
+        source.setModel(document.model);
         source.setEditable(document.editable);
-        source.setValue(document.content);
         markDirty();
-        setMode(state.mode, { resetSourceScroll: true });
+        setMode(state.mode, { resetSourceScroll: !document.viewState });
+        if (document.viewState) source.editor.restoreViewState(document.viewState);
       } else syncUrl();
       if (volumeChanged) ui.renderToc(volume.shortTitle, volume.toc);
       renderNavigation();
@@ -356,6 +376,7 @@
   }
 
   async function save(options = {}) {
+    if (state.workspaceMode === "reader") return false;
     const followPdf = options.followPdf !== false;
     if (state.page == null) return true;
     updateWorkingCopy();
@@ -676,6 +697,11 @@
     ui.init({
       theme: dark => { if (monaco) core.setMonacoTheme(monaco, dark); },
       editorScale: value => source?.setScale(value),
+      sourceEditor: workbench => {
+        if (state.workspaceMode !== "reader") return source?.editor;
+        const model = workbench?.documents.get(editorPathCache.get(`${state.volume}:${state.page}`))?.model;
+        return model && workbench.editor.getModel() === model ? workbench.editor : null;
+      },
       mode: () => setMode(), save, undo, redo, volume: changeVolume,
       splitView: enterSplitView, combinedView: restoreCombinedView,
       page: (page) => navigate(state.volume, page), adjacent,
