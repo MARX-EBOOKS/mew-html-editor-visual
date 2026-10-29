@@ -174,7 +174,7 @@ class PdfLocator {
       const end = index.raw.slice(hit.start, hit.end).trim() ? hit.end : hit.start;
       const bounds = { left: Infinity, top: Infinity, bottom: -Infinity };
       const range = this.document.createRange();
-      for (const part of index.partsInRange(hit.start, end)) {
+      for (const part of index.fontRuns(hit.start, end, true)) {
         range.setStart(part.node, Math.max(0, Math.min(part.node.length, hit.start - part.start)));
         range.setEnd(part.node, Math.max(0, Math.min(part.node.length, end - part.start)));
         for (const box of range.getClientRects()) if (box.height && (box.width || end === hit.start)) {
@@ -397,7 +397,11 @@ function presentation(context, item) {
   const destination = side === 'pdf' ? reader : source;
   return {
     side, switchable: split, switchLabel: side === 'pdf' ? '查看HTML' : '查看PDF', host: destination.ReplacementReview, window: destination,
-    container: viewer()?.container, eventBus: viewer()?.eventBus, anchor
+    container: viewer()?.container, eventBus: viewer()?.eventBus, anchor,
+    highlights: side === 'pdf' ? [anchor,
+      ...(context.highlightedItems || []).filter(value => value !== item).map(value => getLocator().reviewAnchor(value, context.index)),
+      ...[...(viewer()?.container?.querySelectorAll('.mew-pdf-selection-highlight > div') || [])].map(node => node.getBoundingClientRect())
+    ].filter(Boolean) : []
   };
 }
 function isCurrent(context) {
@@ -452,7 +456,7 @@ function reviewItems(index, notice, model) {
     for (const match of query && model.findMatches?.(query, false, false, false, null, false) || []) {
       const from = model.getOffsetAt({ lineNumber: match.range.startLineNumber, column: match.range.startColumn });
       const to = model.getOffsetAt({ lineNumber: match.range.endLineNumber, column: match.range.endColumn });
-      const { start, end } = index.rawRange(from, to);
+      const start = toolbox.lowerBound(index.ends, from + 1), end = toolbox.lowerBound(index.starts, to);
       const html = index.raw.slice(start, end);
       if (start === selected.sourceStart || index.starts[start] !== from || index.ends[end - 1] !== to
         || html.toLowerCase() !== notice.html.toLowerCase()) continue;
@@ -489,14 +493,14 @@ function reviewItems(index, notice, model) {
   const positions = new Map();
   let cursor = 0;
   for (const item of formats) {
-    item.range = toolbox.rangeAt(model, index.starts[item.sourceStart], index.ends[item.sourceEnd - 1]);
     while (cursor < text.length && text[cursor].sourceEnd < item.sourceStart) cursor++;
     const nearby = text[cursor];
     positions.set(item, nearby && nearby.sourceStart <= item.sourceEnd ? nearby.sourceStart : item.sourceStart);
   }
   const order = item => positions.get(item) ?? item.sourceStart;
   return [...text, ...formats].sort((a, b) => order(a) - order(b) || Number(!!a.font) - Number(!!b.font))
-    .map(item => ({ ...item, pdfSource: { index, start: item.sourceStart, end: item.sourceEnd } }));
+    .map(item => ({ ...item, range: item.font || item.missing ? toolbox.rangeAt(model, item.sourceStart, item.sourceEnd, index) : item.range,
+      pdfSource: { index, start: item.sourceStart, end: item.sourceEnd } }));
 }
 function selectionCandidate(index, notice, model, candidates) {
   const source = notice?.source;
@@ -506,7 +510,7 @@ function selectionCandidate(index, notice, model, candidates) {
   return {
     id: `${source.start}:${source.end}`, sourceStart: source.start, sourceEnd: source.end,
     selection: true, comparison: notice, ...(notice.missing ? { missing: true } : {}),
-    range: index.sourceRange(model, source.start, source.end),
+    range: toolbox.rangeAt(model, source.start, source.end, index),
     options: [{ id: 'pdf', label: '替换', edits: selected.flatMap(item => item.options[0].edits) }]
   };
 }
@@ -523,8 +527,7 @@ function content(state, item) {
       range: toolbox.rangeAt(state.model, segment.start, segment.end), options: { inlineClassName: item.missing ? 'mew-review-proposed' : 'mew-review-format', stickiness: 1 }
     })) : [],
     apply: !!edits.length,
-    range: item?.missing ? state.context.index.sourceRange(state.model, item.sourceStart, item.sourceEnd)
-      : item?.range || (edits.length ? toolbox.rangeAt(state.model, Math.min(...edits.map(edit => edit.start)), Math.max(...edits.map(edit => edit.end))) : null),
+    range: item?.range || (edits.length ? toolbox.rangeAt(state.model, Math.min(...edits.map(edit => edit.start)), Math.max(...edits.map(edit => edit.end))) : null),
     options: [], applyLabel: item?.font ? '替换格式' : '替换', advance: false, expanded: false
   };
 }
@@ -586,9 +589,11 @@ const review = {
   refreshAfterEdit: refreshCandidates,
   onSelect(item, context, items, previewEnabled = false) {
     context.editor.getDomNode()?.classList.toggle('mew-review-preview', previewEnabled);
-    selection()?.showReviewPointer(context.editor, matchingItems(item, context, items));
+    context.highlightedItems = matchingItems(item, context, items);
+    selection()?.showReviewPointer(context.editor, context.highlightedItems);
   },
   onClose(context) {
+    delete context.highlightedItems;
     context.editor.getDomNode()?.classList.remove('mew-review-preview');
     selection()?.clearReviewPointer(context.editor);
   }
@@ -672,7 +677,7 @@ function bind() {
 }
 window.PdfReviewReady = (async () => {
   if (!window.PdfSelectionDiff) await import('./pdf-selection-diff.js');
-  await window.PdfSelectionDiff.loadMonaco();
+  await window.PdfSelectionDiff.ready;
   toolbox = window.PdfSelectionDiff;
   ({ significantText } = toolbox);
   if (!window.ReplacementReview || !window.ReviewHighlights) await import('./replacement-review.js');

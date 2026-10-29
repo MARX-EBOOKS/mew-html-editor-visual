@@ -14,7 +14,7 @@
   if (!window.PdfReviewReady) await import('./pdf-review-provider.js');
   const review = await window.PdfReviewReady;
   if (window.PdfSelection) return;
-  const { significantText, PdfSourceIndex } = window.PdfSelectionDiff;
+  const { significantText, PdfSourceIndex, lowerBound } = window.PdfSelectionDiff;
   const options = {
     viewerModuleUrl: "/vendor/pdfjs/web/pdf_viewer.mjs",
     color: "rgba(255, 196, 0, 0.42)", wholeWords: false,
@@ -251,7 +251,7 @@
       if (viewer && index.preparation?.pdf !== viewer.pdfDocument) queueWarm();
       const entries = ranges.map(range => {
         const start = model.getOffsetAt(range.getStartPosition()), end = model.getOffsetAt(range.getEndPosition());
-        const { start: a, end: b } = index.rawRange(start, end);
+        const a = lowerBound(index.ends, start + 1), b = lowerBound(index.starts, end);
         return sourceEntry(index, a, b, marked, end > start ? undefined : "");
       });
       select(entries.map(entry => entry.text), entries, true);
@@ -493,7 +493,8 @@
     report("idle", { mode: "pdf-selection", differences: difference ? [difference] : [] });
     if (!hit) return; // An ambiguous match must not move the editor selection.
     publishSources();
-    const target = index.sourceRange(model, hit.start, hit.end);
+    const target = window.PdfSelectionDiff.rangeAt(model, index.starts[hit.start] ?? index.source.length,
+      (hit.end > hit.start ? index.ends[(hit.end) - 1] : index.starts[hit.start]) ?? index.source.length);
     syncingPdf = true;
     try {
       editor.setSelection(target);
@@ -638,11 +639,11 @@
       before: first.index.raw.slice(Math.max(0, first.start - 160), first.start),
       after: last.index.raw.slice(last.end, last.end + 160)
     };
-    const left = index.sourcePageScope(first.index, true), right = index.sourcePageScope(last.index, true);
     let hit = chunks.length === 1 && index.connectedRange(first.index, first.start, first.end, true);
     if (!hit) {
-      const scope = left && right && left.start <= right.start ? { start: left.start, end: right.end } : null;
-      hit = index.locate(entry, scope && { ...scope, normalized: left === right ? left.normalized : undefined });
+      const left = index.pageScopes.get(first.index)?.scope, right = index.pageScopes.get(last.index)?.scope;
+      const scope = left === right ? left : left && right && left.start <= right.start ? { start: left.start, end: right.end } : null;
+      hit = index.locate(entry, scope);
     }
     const html = hit && index.raw.slice(hit.start, hit.end);
     const differs = hit && significantText(html, index, hit.start) !== significantText(entry.text);

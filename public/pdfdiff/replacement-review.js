@@ -23,7 +23,7 @@
         const caret = hit.start === hit.end || !!hit.difference && !index.raw.slice(hit.start, hit.end).trim();
         const at = caret && hit.endBias ? Math.max(0, hit.start - 1) : hit.start;
         // Reading order can differ from DOM order; measure the indexed text nodes.
-        for (const part of index.partsInRange(at, caret ? at : hit.end)) {
+        for (const part of index.fontRuns(at, caret ? at : hit.end, true)) {
           range ||= (div.ownerDocument || document).createRange();
           range.setStart(part.node, Math.max(0, hit.start - part.start));
           range.setEnd(part.node, Math.max(0, Math.min(part.node.length, (caret ? hit.start : hit.end) - part.start)));
@@ -437,7 +437,8 @@
         const span = document.createElement(part.changed ? 'mark' : 'span'); span.textContent = part.text; line.append(span);
         if (part.changed && current()?.selection) { span.style.cursor = 'pointer'; span.onclick = () => { if (!valid()) return;
           const parts = current().comparison.comparisonDiff.parts, at = row.parts.indexOf(part), start = current().sourceStart + parts.slice(0, at).reduce((offset, value) => offset + value.html.length, 0), owner = session.context.index.locator.document.defaultView;
-          session.editor.setSelection(session.context.index.sourceRange(session.model, start, start + parts[at].html.length)); owner.dispatchEvent(new owner.CustomEvent('pdf-selection-difference', { detail: { ...session.context, ...session.context.request, interactionId: undefined, snapshot: null, notices: [{ ...parts[at], source: { index: session.context.index, start, end: start + parts[at].html.length } }] } })); }; }
+          session.editor.setSelection(session.context.toolbox.rangeAt(session.model, session.context.index.starts[start] ?? session.context.index.source.length,
+            (start + parts[at].html.length > start ? session.context.index.ends[(start + parts[at].html.length) - 1] : session.context.index.starts[start]) ?? session.context.index.source.length)); owner.dispatchEvent(new owner.CustomEvent('pdf-selection-difference', { detail: { ...session.context, ...session.context.request, interactionId: undefined, snapshot: null, notices: [{ ...parts[at], source: { index: session.context.index, start, end: start + parts[at].html.length } }] } })); }; }
       }
       get('comparison').append(line);
     }
@@ -560,11 +561,24 @@
     const end = fragment?.bottom ?? anchor + (position?.height || 20);
     const roomAbove = Math.max(0, anchor - top - 8), roomBelow = Math.max(0, bottom - end - 8);
     const useAbove = roomAbove >= height || roomAbove >= roomBelow;
-    const available = Math.min(height, useAbove ? roomAbove : roomBelow);
-    // Only the current anchor positions the popup when preview paints matching diffs.
+    let available = Math.min(height, useAbove ? roomAbove : roomBelow);
+    let y = useAbove ? anchor - available - 8 : end + 8;
+    if (pdfSide && layout.highlights?.length) {
+      let edge = top;
+      available = 0;
+      // Each free band ends above a highlight or starts below one.
+      for (const box of [...layout.highlights, { top: bottom + 8, bottom }].sort((a, b) => a.top - b.top)) {
+        const end = Math.min(bottom, box.top - 8), room = Math.min(height, Math.max(0, end - edge));
+        if (room > available) {
+          available = room;
+          y = end <= anchor ? end - room : edge;
+        }
+        edge = Math.max(edge, box.bottom + 8);
+      }
+    }
     panel.style.visibility = !available ? 'hidden' : '';
     panel.style.maxHeight = `${available}px`;
-    panel.style.top = `${useAbove ? anchor - available - 8 : end + 8}px`;
+    panel.style.top = `${y}px`;
     panel.style.left = `${Math.max(left, Math.min(right - panel.offsetWidth, fragment?.left ?? left + (position?.left || 0)))}px`;
   }
   get('close').onclick = close;
