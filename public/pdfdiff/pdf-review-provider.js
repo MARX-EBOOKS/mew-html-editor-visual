@@ -32,7 +32,7 @@ class PdfLocator {
   comparisonParts(value, parts) {
     const { html, pdf } = value;
     if (value.comparisonDiff?.html !== html || value.comparisonDiff.pdf !== pdf)
-      value.comparisonDiff = { html, pdf, parts: parts || toolbox.textDiff(html, pdf, true)?.parts || [{ html, pdf, changed: false }] };
+      value.comparisonDiff = { html, pdf, parts: (parts || toolbox.textDiff(html, pdf, true)?.parts || [{ html, pdf, changed: false }]).map(part => ({ ...part, changed: part.changed && toolbox.significantText(part.html) !== toolbox.significantText(part.pdf) })) };
     return value.comparisonDiff.parts;
   }
   comparisonRows(value, compact = true) {
@@ -276,7 +276,7 @@ class PdfLocator {
     const names = new Map();
     if (spans.length === items.length && spans.every((span, i) => span.textContent === items[i].str))
       spans.forEach((span, i) => names.set(span, items[i]));
-    return element => {
+    return Object.assign(element => {
       const item = names.get(element);
       const observed = item && textItemFont(data?.fonts, item);
       if (observed) return observed;
@@ -291,7 +291,7 @@ class PdfLocator {
           ? { ...style, bold: null, italic: null, reason: '字体渲染模式检查中' } : style);
       }
       return fonts.get(key);
-    };
+    }, { items: names });
   }
   async indexDocument(pdf, numbers) {
     let documents = this.documents.get(pdf);
@@ -375,7 +375,7 @@ class PdfLocator {
       full.sourcePageScope(source, true);
       for (const item of full.connections.get(source) || [])
         source.rememberConnection(item.targetStart, item.targetEnd, full, { start: item.start, end: item.end }, {
-          left: item.right, right: item.left, diff: {
+          diff: {
             distance: item.distance,
             parts: item.spans.map(span => ({ html: span.pdf, pdf: span.html, changed: span.changed }))
           }
@@ -404,7 +404,7 @@ class PdfLocator {
 
 // PDF comparison is one review provider. Selection synchronization remains independent.
 let host, toolbox, significantText, fallbackLocator, highlights;
-let enabled = true, fontEnabled = true;
+let enabled = true, fontStyles = ['italic', 'bold'];
 function readerWindow() {
   if (window.ReaderUI?.getPdfViewer) return window;
   try { if (window.opener && !window.opener.closed && window.opener.ReaderUI?.getPdfViewer) return window.opener; } catch { }
@@ -448,7 +448,7 @@ async function provide(context) {
   const index = context.index = getLocator().editorSourceIndex(context.model);
   context.targets = [...new Set([full, ...(getLocator().environment.getTargets?.() || [])])];
   getLocator().prepareSource(index, context.targets, pdf);
-  if (fontEnabled) await getLocator().indexFonts(pdf, index, context.signal, pages);
+  if (fontStyles.length) await getLocator().indexFonts(pdf, index, context.signal, pages);
   return context.signal.aborted || !isCurrent(context) ? [] : reviewItems(index, context.targets, null, context.model);
 }
 function refreshCandidates(context, offset) {
@@ -507,7 +507,7 @@ function reviewItems(index, targets, notice, model) {
         || item.sourceStart >= value.sourceEnd && item.sourceEnd > value.sourceEnd;
     }), ...selections].sort((a, b) => a.sourceStart - b.sourceStart);
   }
-  const formats = fontEnabled ? index.formatDifferences(index.connectionPairs(targets || [], true)) : [];
+  const formats = fontStyles.length ? index.formatDifferences(index.connectionPairs(targets || [], true), true, fontStyles) : [];
   const positions = new Map();
   let cursor = 0;
   for (const item of formats) {
@@ -587,7 +587,7 @@ function apply(state, all) {
     if (value.font) formats.push(value);
     else edits.push(...value.options[0].edits);
   }
-  if (fontEnabled && formats.length) for (const candidate of state.context.index.formatDifferences(state.context.index.connectionPairs(state.context.targets || [], true)))
+  if (fontStyles.length && formats.length) for (const candidate of state.context.index.formatDifferences(state.context.index.connectionPairs(state.context.targets || [], true), true, fontStyles))
     if (formats.some(value => candidate.sourceStart < value.sourceEnd && candidate.sourceEnd > value.sourceStart))
       edits.push(...candidate.options[0].edits);
   const checked = toolbox.validateEdits(state.source, edits);
@@ -606,7 +606,7 @@ const review = {
   refreshAfterEdit: refreshCandidates,
   onSelect(item, context, items, previewEnabled = false) {
     context.editor.getDomNode()?.classList.toggle('mew-review-preview', previewEnabled);
-    selection()?.showReviewPointer(context.editor, matchingItems(item, context, items));
+    selection()?.showReviewPointer(context.editor, item ? [item] : []);
   },
   onClose(context) {
     context.editor.getDomNode()?.classList.remove('mew-review-preview');
@@ -618,23 +618,22 @@ function onSources(event) {
   if (!editor?.createDecorationsCollection) return;
   if (index) getLocator().prepareSource(index, targets, event.detail.pdf);
   const connections = index ? index.connectionPairs(targets, true) : [];
-  const key = [index, highlighted, enabled, fontEnabled, editor.getModel(), ...targets, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
-  highlights.updateSource(editor, key, () => highlighted && index ? index.sourceDecorations(connections, editor.getModel(), fontEnabled, enabled, targets) : [],
-    '.mew-ocr-diff-line{border-left:3px solid #d58b24;margin-left:3px;cursor:pointer}.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24;cursor:pointer}.mew-ocr-diff-insert{display:inline-block;width:2px;border-left:2px solid #d58b24;box-sizing:border-box;position:relative;z-index:1;cursor:pointer}');
+  const key = [index, highlighted, enabled, ...fontStyles, editor.getModel(), ...targets, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
+  highlights.updateSource(editor, key, () => highlighted && index ? index.sourceDecorations(connections, editor.getModel(), fontStyles, enabled, targets) : []);
 }
 // The independent selection module publishes data, never review UI calls.
 let listeningWindow = null;
 let dismissed = null;
 function onClose(event) {
-  if (!['pdf-ocr', 'pdf-font'].includes(event.detail.id)) return;
+  if (!['pdf-ocr', 'pdf-font', 'pdf-bold'].includes(event.detail.id)) return;
   const { editor, model } = event.detail;
   dismissed = { editor, model, version: model.getVersionId?.(), range: editor.getSelection()?.toString(), interaction: selection()?.interactionId };
 }
 function onDifference(event) {
-  if (!enabled && !fontEnabled) return;
+  if (!enabled && !fontStyles.length) return;
   const data = event.detail, editor = data.editor, model = editor?.getModel();
   const readerHost = listeningWindow?.ReplacementReview;
-  const destination = ['pdf-ocr', 'pdf-font'].some(id => readerHost?.isOpenFor(id, editor)) ? readerHost
+  const destination = ['pdf-ocr', 'pdf-font', 'pdf-bold'].some(id => readerHost?.isOpenFor(id, editor)) ? readerHost
     : editor?.getDomNode()?.ownerDocument.defaultView.ReplacementReview || readerHost;
   if (destination !== host || data.pdf !== viewer()?.pdfDocument || (data.model && model !== data.model)) return;
   if (dismissed?.editor === editor && dismissed.model === model && dismissed.version === model?.getVersionId?.()
@@ -655,10 +654,10 @@ function onDifference(event) {
         === toolbox.normalized(notice.target.index.raw.slice(notice.target.start, notice.target.end)).text) {
         index.rememberConnection(notice.source.start, notice.source.end, notice.target.index, { start: notice.target.start, end: notice.target.end });
       }
-      const differences = fontEnabled ? index.formatDifferences(index.connectionPairs(targets, true)) : [];
+      const differences = fontStyles.length ? index.formatDifferences(index.connectionPairs(targets, true), true, fontStyles) : [];
       const item = differences.find(item => item.sourceStart < notice.source.end && item.sourceEnd > notice.source.start);
       if (item) {
-        void host.openForSelection(enabled ? 'pdf-ocr' : 'pdf-font', editor, item.id,
+        void host.openForSelection(enabled ? 'pdf-ocr' : fontStyles.includes('italic') ? 'pdf-font' : 'pdf-bold', editor, item.id,
           { ...data, targets, notice, kind: 'font' }); return;
       }
     }
@@ -697,7 +696,6 @@ window.PdfReviewReady = (async () => {
   if (!window.ReplacementReview || !window.ReviewHighlights) await import('./replacement-review.js');
   host = window.ReplacementReview;
   try { enabled = localStorage.getItem('mew.pdf-review.enabled') !== 'false'; } catch { }
-  try { fontEnabled = localStorage.getItem('mew.pdf-review.font-enabled') !== 'false'; } catch { }
   fallbackLocator = new PdfLocator({}, {
     document, getPdf: () => viewer()?.pdfDocument,
     isCurrent: pdf => viewer()?.pdfDocument === pdf,
@@ -724,15 +722,15 @@ window.PdfReviewReady = (async () => {
     setEnabled(value) {
       enabled = value;
       try { localStorage.setItem('mew.pdf-review.enabled', String(value)); } catch { }
-      host.invalidate('pdf-font');
+      for (const id of ['pdf-font', 'pdf-bold']) host.invalidate(id);
       selection()?.refresh();
     }
-  }), host.register({
+  }), ...['italic', 'bold'].map(key => host.register({
     ...review,
-    id: 'pdf-font', label: 'PDF 斜体／粗体探测',
-    isEnabled: () => fontEnabled,
+    id: key === 'italic' ? 'pdf-font' : 'pdf-bold', label: key === 'italic' ? 'PDF 斜体探测' : 'PDF 粗体探测',
+    isEnabled: () => fontStyles.includes(key),
     setEnabled(value) {
-      (readerWindow()?.PdfReviewProvider || window.PdfReviewProvider).setFontEnabled(value);
+      (readerWindow()?.PdfReviewProvider || window.PdfReviewProvider).setFontEnabled(value, key);
     },
     focusIndex(items, request) {
       const start = request?.notice?.source?.start;
@@ -742,7 +740,7 @@ window.PdfReviewReady = (async () => {
       const source = request?.notice?.source;
       return source && item.sourceStart < source.end && item.sourceEnd > source.start;
     }
-  }), host.register({
+  })), host.register({
     id: 'pdf-selection', label: 'PDF 差异高亮', toggleOnly: true, available: () => !!selection(),
     isEnabled: () => selection()?.enabled === true,
     setEnabled(value) { selection()?.setDiffHighlight(value); }
@@ -757,12 +755,15 @@ window.PdfReviewReady = (async () => {
   })];
   window.PdfReviewProvider = {
     PdfLocator, PdfSourceIndex: toolbox.PdfSourceIndex, fontStyle, textItemFont,
-    get fontEnabled() { return fontEnabled; },
+    get fontEnabled() { return fontStyles.length > 0; },
+    get fontStyles() { return fontStyles; },
     get textEnabled() { return enabled; },
-    setFontEnabled(value) {
-      fontEnabled = value;
-      try { localStorage.setItem('mew.pdf-review.font-enabled', String(value)); } catch { }
-      host.invalidate('pdf-ocr');
+    setFontEnabled(value, key, persist = true) {
+      for (const style of key ? [key] : ['italic', 'bold']) {
+        fontStyles = ['italic', 'bold'].filter(name => name === style ? value : fontStyles.includes(name));
+        if (persist) selection()?.savePreference(`${style}Detection`, !!value, '无法保存字体探测设置');
+      }
+      for (const id of ['pdf-ocr', 'pdf-font', 'pdf-bold']) host.invalidate(id);
       selection()?.clearReviewPointer();
       selection()?.refresh();
     },
@@ -778,7 +779,7 @@ window.PdfReviewReady = (async () => {
     const pdf = viewer()?.pdfDocument, api = selection(), state = `${api?.enabled}:${api?.sourceEnabled}:${api?.selectionEnabled}`;
     if (previousPdf !== pdf) {
       previousPdf = pdf;
-      for (const id of ['pdf-ocr', 'pdf-font']) host.invalidate(id, context => context.pdf !== pdf);
+      for (const id of ['pdf-ocr', 'pdf-font', 'pdf-bold']) host.invalidate(id, context => context.pdf !== pdf);
     }
     if (previousApi !== api || previousEnabled !== state) {
       previousApi = api; previousEnabled = state; host.refreshMenu();

@@ -142,6 +142,7 @@
     model: null, automaticLayout: true, fontFamily: 'Consolas, "Cascadia Mono", monospace',
     fontSize: 14, lineHeight: 21, tabSize: 2, wordWrap: "on", minimap: { enabled: false },
     find: { addExtraSpaceOnTop: false },
+    cursorStyle: "line", cursorWidth: 2, cursorBlinking: "smooth", cursorSmoothCaretAnimation: "explicit",
     // Monaco 0.55.1 在快速切换模型时可能取消 occurrence 请求并报错。
     occurrencesHighlight: "off", scrollBeyondLastLine: false, padding: { top: 14, bottom: 14 },
     colorDecorators: true, defaultColorDecorators: "never",

@@ -92,15 +92,13 @@
       }
     }
     function clearMarks() {
-      for (const state of marks.values()) { state.collection.clear(); state.dispose?.(); state.style?.remove(); }
+      for (const state of marks.values()) { state.collection.clear(); state.dispose?.(); }
       marks.clear();
     }
-    function updateSource(editor, key, decorations, css) {
+    function updateSource(editor, key, decorations) {
       let state = marks.get(editor);
       if (!state) {
-        const doc = editor.getDomNode()?.ownerDocument || document, style = css ? doc.createElement('style') : null;
-        if (style) { style.textContent = css; doc.head.append(style); }
-        state = { collection: editor.createDecorationsCollection(), style };
+        state = { collection: editor.createDecorationsCollection() };
         const subscription = editor.onDidChangeModel?.(() => { state.key = null; state.collection.clear(); });
         state.dispose = () => subscription?.dispose();
         marks.set(editor, state);
@@ -119,10 +117,12 @@
       // A text drag owns its full range, even when it ends on a diff marker.
       if (!event?.lineRange && !range.isEmpty?.()) return null;
       const collection = marks.get(editor)?.collection, position = event?.position || range.getStartPosition();
+      const node = editor.getDomNode?.(), box = event?.clientX !== undefined && node?.getBoundingClientRect();
       for (let i = 0; i < (collection?.length || 0); i++) {
         const mark = collection.getRange(i);
         if (event?.lineRange ? mark?.intersectRanges(event.lineRange) : mark?.containsPosition(position)
-          && (mark.isEmpty() || position.lineNumber !== mark.endLineNumber || position.column !== mark.endColumn)) return mark;
+          && (mark.isEmpty() || event?.source === 'keyboard' || position.lineNumber !== mark.endLineNumber || position.column !== mark.endColumn
+            || box && event.clientX < box.left + editor.getScrolledVisiblePosition(position)?.left * box.width / node.offsetWidth)) return mark;
         // Missing text beside a space must also be reachable from that space.
         if (!event?.lineRange && mark?.isEmpty() && position.lineNumber === mark.startLineNumber
           && position.column + 1 === mark.startColumn && /^\s$/u.test(editor.getModel().getValueInRange({
@@ -438,7 +438,6 @@
           range: session.context.toolbox.rangeAt(session.model, edit.start, edit.end),
           options: edit.options || { description: 'Revision preview', stickiness: 1, showIfCollapsed: true,
             inlineClassName: edit.end > edit.start ? 'mew-review-current' : undefined,
-            beforeContentClassName: edit.start === edit.end && edit.text ? 'mew-review-insert' : undefined,
             after: edit.text ? { content: edit.text, inlineClassName: 'mew-review-proposed', cursorStops: 0 } : undefined }
         })), ...(previewEnabled ? content.previewDecorations || [] : [])]);
     }

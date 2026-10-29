@@ -14,6 +14,7 @@
   const listeners = {};
   let initialized = false;
   let editorScale = 1;
+  let panelSettingsLoaded = false;
   const footer = window.MewEditorCore.footer;
   let pendingPdfOptions = null;
   let pdfRuntimePromise = null, pdfViewer = null, pdfLinkService = null, pdfLoadingTask = null;
@@ -366,7 +367,7 @@
     value = displaySettings;
     const color = (input, fallback) => /^#[0-9a-f]{6}$/i.test(String(input)) ? String(input).toLowerCase() : fallback;
     const scale = typeof value.scale === "string" && value.scale.length <= 32 ? value.scale : PDF_DEFAULTS.scale;
-    return { ...PDF_DEFAULTS, ...value, brightness: Math.max(50, Math.min(160, Number(value.brightness) || 100)), paper: color(value.paper, PDF_DEFAULTS.paper), ink: color(value.ink, PDF_DEFAULTS.ink), invert: Boolean(value.invert), horizontal: Boolean(value.horizontal), scale };
+    return { brightness: Math.max(50, Math.min(160, Number(value.brightness) || 100)), paper: color(value.paper, PDF_DEFAULTS.paper), ink: color(value.ink, PDF_DEFAULTS.ink), invert: Boolean(value.invert), horizontal: Boolean(value.horizontal), scale };
   }
   function applyPdfSettings() {
     const stage = frameId("stage");
@@ -684,7 +685,15 @@
       if (localStorage.getItem("readerImageInverted") != null) legacy.invert = localStorage.getItem("readerImageInverted") === "1";
       if (localStorage.getItem("readerPdfScaleValue")) legacy.scale = localStorage.getItem("readerPdfScaleValue");
       saved = { ...legacy, ...saved };
-      try { pdfSettings = normalizedPdfSettings({ ...(await fetch("/api/reader/settings").then((r) => r.ok ? r.json() : {})), ...saved }); } catch { pdfSettings = normalizedPdfSettings(saved); }
+      try {
+        const settings = await fetch("/api/reader/settings").then((r) => r.ok ? r.json() : {});
+        pdfSettings = normalizedPdfSettings({ ...settings, ...saved });
+        for (const target of ["editor", "tag"]) {
+          const scale = settings[`${target}Scale`];
+          tagPanel?.setScale(target, typeof scale === "number" && Number.isFinite(scale) ? scale : 1);
+        }
+      } catch { pdfSettings = normalizedPdfSettings(saved); }
+      panelSettingsLoaded = true;
       applyPdfSettings();
       frameId("zoomIn").onclick = () => changePdfScale(1); frameId("zoomOut").onclick = () => changePdfScale(-1);
       bindScaleInput(frameId("zoomValue"), applyPdfScaleInput, showPdfScaleValue);
@@ -827,13 +836,16 @@
   };
 
 /* 编辑工具面板由 index.html 与 reader.html 共用同一个控制器。 */
-window.MewTagPanel?.mount({
+const tagPanel = window.MewTagPanel?.mount({
   content: "#tagBar",
   host: ".text-pane",
   storageKey: "readerDockPanels.v1",
   headerSelector: ".site-header",
   footerSelector: ".page-footer",
   setEditorScale: scale => window.ReaderUI?.setEditorScale(scale),
+  onScaleChange: patch => {
+    if (panelSettingsLoaded) fetch("/api/reader/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).catch(() => {});
+  },
   editorSelector: "#sourcePane,#monacoEditor,#visualEditor",
   editorReadyEvent: "reader-visual-ready",
   layoutEvents: ["reader-mode-change"],

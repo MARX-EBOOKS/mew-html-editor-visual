@@ -38,6 +38,8 @@
       diffHighlight = settings.diffHighlight !== false;
       sourceDiffHighlight = (settings.sourceDiffHighlight ?? settings.diffHighlight) !== false;
       selectionHighlight = settings.selectionHighlight !== false;
+      for (const key of ['italic', 'bold']) review.setFontEnabled(settings[`${key}Detection`] !== false, key, false);
+      window.ReplacementReview.refreshMenu();
     }
   } catch {}
   let visualDocument = null, detachVisual = () => {};
@@ -45,9 +47,10 @@
   const locator = new review.PdfLocator(options, {
     document, getPdf: () => viewer?.pdfDocument,
     getTargets() {
-      const pdf = viewer?.pdfDocument;
-      return [...new Set([...layers.values()].filter(page => page.pdf === pdf).concat(
-        locator.getDocumentIndex(pdf, window.ReaderUI?.getPdfSourcePages?.()) || [], locator.getDocumentIndex(pdf) || []))];
+      const pdf = viewer?.pdfDocument, numbers = window.ReaderUI?.getPdfSourcePages?.();
+      return [...new Set([...layers.values()].filter(page => page.pdf === pdf
+        && (!numbers?.length || numbers.includes(Number(page.layer.closest('.page')?.dataset.pageNumber)))).concat(
+        locator.getDocumentIndex(pdf, numbers) || [], locator.getDocumentIndex(pdf) || []))];
     },
     getVisiblePages: () => visiblePages().map(number => ({ number, index: layerIndex(viewer.getPageView(number - 1)?.div) })),
     isCurrent: pdf => !stopped && viewer?.pdfDocument === pdf,
@@ -65,7 +68,7 @@
   cleanup.push(() => detachVisual());
   const status = { state: "waiting-for-pdf", pages: [], matches: 0, differences: [], error: null };
   const api = window.PdfSelection = {
-    status, locator, attachEditor, attachViewer, refresh: publishSources,
+    status, locator, attachEditor, attachViewer, savePreference, refresh: publishSources,
     highlight: text => select(Array.isArray(text) ? text : [text]),
     clear: () => select([]),
     showReviewPointer(editor, items, key) {
@@ -75,7 +78,10 @@
       if (!model || !viewer?.pdfDocument || key && !diffHighlight || !items?.length && !key) return;
       const index = locator.editorSourceIndex(model), entries = items.map(({ sourceStart, sourceEnd }) => sourceEntry(index, sourceStart, sourceEnd, true));
       const pointer = { editor, model, version: model.getVersionId?.(), pdf: viewer?.pdfDocument, entries, key };
-      if (key) defaultPointer = pointer; else reviewPointer = pointer;
+      if (key) defaultPointer = pointer;
+      else if (!selectionHighlight) reviewPointer = pointer;
+      else if (!entries.every(entry => contexts.some(context => context.index === index && context.start <= entry.start && context.end >= entry.end)))
+        return select(entries.map(entry => entry.text), entries, true);
       schedule();
     },
     clearReviewPointer(editor) {
@@ -142,7 +148,12 @@
     listen(diffButton, 'click', () => api.setDiffHighlight(!diffHighlight));
   }
   function clearLayers() { for (const div of layers.keys()) clearLayer(div); }
-  function clearLayer(div) { layers.get(div)?.observer.disconnect(); layers.delete(div); }
+  function clearLayer(div, records) {
+    if (records && !records.some(({ type, target, addedNodes, removedNodes }) => type === 'childList'
+      ? [...addedNodes, ...removedNodes].some(node => node.textContent)
+      : type === 'characterData' || target !== layers.get(div)?.layer && target.textContent)) return false;
+    layers.get(div)?.observer.disconnect(); return layers.delete(div);
+  }
   function currentPointer(pointer) {
     return pointer.pdf === viewer?.pdfDocument && pointer.model === pointer.editor.getModel()
       && pointer.version === pointer.model.getVersionId?.();
@@ -178,7 +189,7 @@
       review.clearHighlights();
       report(viewer ? "idle" : "waiting-for-pdf", { pages: [], matches: 0, mode: null, differences: [], error: null });
     }
-    schedule(-1);
+    schedule();
     return api;
   }
   function schedule(delay = 0) {
@@ -247,6 +258,7 @@
         ++interactionId;
         read({ position: event.target.type === 6 && !event.target.detail?.injectedText
           ? event.target.range?.getStartPosition() || event.target.position : event.target.position,
+          clientX: event.event?.posx,
           lineRange: event.target.type === 4 ? event.target.range : null });
       }
     });
@@ -343,9 +355,9 @@
     } }));
     if (diffHighlight && index) {
       const connections = index.connectionPairs(targets, true);
-      const key = [index, review.textEnabled, review.fontEnabled, ...targets, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
+      const key = [index, review.textEnabled, review.fontEnabled, ...(review.fontStyles || []), ...targets, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
       if (!defaultPointer || defaultPointer.key.length !== key.length || key.some((value, i) => value !== defaultPointer.key[i]))
-        api.showReviewPointer(activeEditor, [...(review.textEnabled !== false ? index.reviewCandidates(targets, null, connections) : []), ...(review.fontEnabled ? index.formatDifferences(connections) : [])], key);
+        api.showReviewPointer(activeEditor, [...(review.textEnabled !== false ? index.reviewCandidates(targets, null, connections) : []), ...(review.fontEnabled ? index.formatDifferences(connections, true, review.fontStyles) : [])], key);
     }
   }
   async function discoverPdf() {
@@ -492,7 +504,7 @@
     const layer = div?.querySelector(".textLayer");
     if (!layer || !layer.getClientRects().length) return null;
     const cached = layers.get(div);
-    if (cached?.layer === layer && cached.pdf === viewer?.pdfDocument && cached.width === div.clientWidth && cached.height === div.clientHeight && !cached.observer.takeRecords().length) return cached;
+    if (cached?.layer === layer && cached.pdf === viewer?.pdfDocument && cached.width === div.clientWidth && cached.height === div.clientHeight && !clearLayer(div, cached.observer.takeRecords())) return cached;
     clearLayer(div);
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT), parts = [];
     const number = Number(div.dataset.pageNumber) || viewer?.currentPageNumber;
@@ -515,7 +527,9 @@
       while (element !== layer && !spanSet.has(element)) element = element.parentNode;
       if (element === layer) element = node.parentElement;
       measurement.selectNodeContents(node);
-      const box = measurement.getBoundingClientRect();
+      const item = fontAt.items?.get(element);
+      const box = item ? { bottom: -item.transform[5], height: item.height,
+        left: item.transform[4], right: item.transform[4] + item.width } : measurement.getBoundingClientRect();
       nodes.push({ node, element, box });
     }
     for (const { node, element, box } of nodes.sort((a, b) =>
@@ -529,8 +543,8 @@
       parts.push({ node, start: raw.length, end: raw.length + node.textContent.length, font: elementFonts.get(element) });
       raw += node.textContent; previous = box; previousElement = element;
     }
-    const observer = new MutationObserver(() => {
-      clearLayer(div);
+    const observer = new MutationObserver(records => {
+      if (!clearLayer(div, records)) return;
       queueWarm(number);
       if (contexts.length || reviewPointer) schedule();
     });
@@ -571,9 +585,8 @@
           end: entry.start < entry.end ? entry.end : missing.sourceEnd };
         const difference = { html: entry.index.raw.slice(source.start, source.end), pdf: '', missing: true };
         const targets = visible.flatMap(({ number, index }) => {
-          if (!index?.raw.trim()) return [];
-          const range = entry.index.missingRange(index, missing.sourceStart, missing.sourceEnd, entry.start, entry.end)
-            || documentIndex?.sourcePages?.includes(number) && { start: 0, end: index.raw.length };
+          const range = index?.raw.trim() && (entry.index.missingRange(index, missing.sourceStart, missing.sourceEnd, entry.start, entry.end)
+            || documentIndex?.sourcePages?.includes(number) && { start: 0, end: index.raw.length });
           return range && range.end > range.start ? [{ pageNumber: number, range,
             start: source.start, end: source.end, marked: true, text: '', source, difference }] : [];
         });
@@ -684,10 +697,10 @@
   }
   async function refreshReviewPointer() {
     const pointer = reviewPointer || defaultPointer;
-    if (!pointer) return;
+    if (!pointer || contexts.length) { review.clearHighlights(true); return; }
     if (stopped || !currentPointer(pointer)) { api.clearReviewPointer(pointer.editor); return; }
     const found = findLocations(pointer.pdf, pointer.entries, !reviewPointer), locations = Array.isArray(found) ? found : await found;
-    if ((reviewPointer || defaultPointer) !== pointer) return;
+    if (contexts.length || (reviewPointer || defaultPointer) !== pointer) return;
     if (!currentPointer(pointer)) { api.clearReviewPointer(pointer.editor); return; }
     const visible = new Set(), targets = locations.flatMap(location => location.targets);
     for (const number of visiblePages()) {
@@ -759,18 +772,19 @@
       if (focus) {
         positioned = true;
         const container = instance.container, rect = container.getBoundingClientRect(), box = view.div.getBoundingClientRect();
+        const sx = rect.width / container.offsetWidth, sy = rect.height / container.offsetHeight;
         const left = box.left + (view.div.clientLeft + focus.x * view.div.clientWidth) * box.width / view.div.offsetWidth,
           top = box.top + (view.div.clientTop + focus.y * view.div.clientHeight) * box.height / view.div.offsetHeight;
-        const vertical = top < rect.top + container.clientTop || top + focus.h * box.height > rect.top + container.clientTop + container.clientHeight;
-        const horizontal = left < rect.left + container.clientLeft || left + focus.w * box.width > rect.left + container.clientLeft + container.clientWidth;
+        const vertical = top < rect.top + container.clientTop * sy || top + focus.h * box.height > rect.top + (container.clientTop + container.clientHeight) * sy;
+        const horizontal = left < rect.left + container.clientLeft * sx || left + focus.w * box.width > rect.left + (container.clientLeft + container.clientWidth) * sx;
         if (vertical || horizontal) {
           // Revealing text near the page bottom must not expose mostly the next
           // page: PDF.js would report that page and switch the paired HTML file.
-          const bottom = rect.top + container.clientTop + container.clientHeight,
-            right = rect.left + container.clientLeft + container.clientWidth;
+          const bottom = rect.top + (container.clientTop + container.clientHeight) * sy,
+            right = rect.left + (container.clientLeft + container.clientWidth) * sx;
           container.scrollBy({
-            top: vertical ? Math.min(top - rect.top - 48, Math.max(0, box.bottom - bottom)) : 0,
-            left: horizontal ? Math.min(left - rect.left - 24, Math.max(0, box.right - right)) : 0
+            top: vertical ? Math.min((top - rect.top) / sy - 48, Math.max(0, (box.bottom - bottom) / sy)) : 0,
+            left: horizontal ? Math.min((left - rect.left) / sx - 24, Math.max(0, (box.right - right) / sx)) : 0
           });
         }
       } else if (!scrolled && (!visiblePages().includes(target.pageNumber)
