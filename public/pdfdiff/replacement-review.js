@@ -157,13 +157,7 @@
   const get = name => fields[name] ||= panel.querySelector(`[data-${name}]`);
   function workspace() {
     const owner = session?.editor.getDomNode()?.ownerDocument.defaultView;
-    return owner === window ? owner.mewWorkbench || owner.readerMonaco : null;
-  }
-  function editorDirty(state = session) {
-    const owner = state?.editor.getDomNode()?.ownerDocument.defaultView;
-    return owner?.mewWorkbench
-      ? [...owner.mewWorkbench.documents.values()].find(doc => doc.model === state.model)?.dirty
-      : owner?.document.getElementById('saveBtn')?.classList.contains('dirty');
+    return owner?.mewWorkbench || owner?.readerMonaco;
   }
   function message(text) { get('status').textContent = text; get('status').hidden = !text; }
   function current() { return session?.items[session.position]; }
@@ -280,9 +274,8 @@
         ? change.text.length - change.rangeLength : change.rangeOffset - offset
     ), 0);
     saved.manualPending = true;
-    if (event) { saved.needsSave = true; saved.manualSave = true; }
     clearTimeout(manualTimer);
-    message('正在自动重新计算差异…' + (saved.needsSave ? ' 内容已修改，请保存。' : '')); controls();
+    message('正在自动重新计算差异…'); controls();
     if (!composing) manualTimer = setTimeout(() => void refreshAfterEdit(saved), 350);
   }
   function refreshAfterEdit(saved) {
@@ -317,9 +310,7 @@
     const canApply = ready && session.provider.apply && session.content?.apply !== false;
     get('apply').disabled = !currentVersion || !item || busy;
     for (const name of ['advance', 'all']) get(name).disabled = !canApply;
-    const saveOnly = editorDirty() ?? session?.manualSave;
-    get('save').textContent = saveOnly ? '保存修改' : '替换&保存';
-    get('save').disabled = !workspace()?.save || busy || !(saveOnly ? session.editor.getModel() === session.model : canApply);
+    get('save').disabled = !workspace()?.save || !canApply;
     const blocked = !currentVersion || !!session?.applying;
     get('prev').disabled = blocked || session.position <= 0;
     get('next').disabled = blocked || session.position >= session.items.length - 1;
@@ -356,21 +347,9 @@
     const context = { ...requestData?.snapshot?.context, editor: target, model, source, version, signal: controller.signal, toolbox: window.PdfSelectionDiff, request: requestData };
     subscribe(target, 'onDidChangeModel', () => close());
     subscribe(target, 'onDidChangeModelContent', event => {
-      if (event.isFlush || !session) close();
+      if (!session) close();
       else if (!session.applying) stale(event);
     });
-    const ownerWindow = target.getDomNode()?.ownerDocument.defaultView;
-    const dirtyIndicator = ownerWindow?.document.getElementById(ownerWindow.mewWorkbench ? 'tabs' : 'saveBtn');
-    const dirtyObserver = new MutationObserver(() => {
-      if (!session?.needsSave || target.getModel() !== session.model) return;
-      if (editorDirty() !== false) return;
-      session.needsSave = false; session.manualSave = false;
-      controls();
-      if (valid()) message(session.content?.message || '');
-      else message('已保存。差异更新中…');
-    });
-    if (dirtyIndicator) dirtyObserver.observe(dirtyIndicator, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-    disposals.push(() => dirtyObserver.disconnect());
     subscribe(target, 'onDidCompositionStart', () => { composing = true; clearTimeout(manualTimer); });
     subscribe(target, 'onDidCompositionEnd', () => {
       composing = false;
@@ -378,8 +357,7 @@
     });
     // Keep an opening session so typing while extraction runs schedules a fresh calculation.
     session = { provider, editor: target, model, source, version, context, items: [], position: 0,
-      choices: new Map(),
-      manualSave: requestData?.snapshot?.manualSave || false, needsSave: requestData?.snapshot?.needsSave || false };
+      choices: new Map() };
     subscribe(target, 'onDidScrollChange', queuePlace);
     if (placement?.container) {
       const container = placement.container;
@@ -400,7 +378,7 @@
       if (found < 0) found = provider.focusIndex?.(items, requestData) ?? -1;
       Object.assign(session, { items,
         position: found >= 0 ? found : Math.max(0, Math.min(fallbackPosition, items.length - 1)),
-        manualSave: snapshot?.manualSave || false, needsSave: snapshot?.needsSave || false, choices: new Map(items.map(item => [item.id, snapshot?.choices.get(item.id) || item.options[0].id])) });
+        choices: new Map(items.map(item => [item.id, snapshot?.choices.get(item.id) || item.options[0].id])) });
       render(!!requestData, !!requestData?.mirror);
     } catch (error) { if (request === generation) {
       if (provider.isCurrent && !provider.isCurrent(context)) stale();
@@ -411,14 +389,13 @@
   function render(preserveSelection = false, mirrored = false) {
     if (!session) return;
     const item = current();
-    session.needsSave = editorDirty() ?? session.needsSave;
     session.content = session.provider.content?.(session, item) || {};
     const content = session.content;
     let previewEnabled = false;
     try { previewEnabled = localStorage.getItem(previewKey) === 'true'; } catch {}
     get('apply').setAttribute('aria-pressed', String(previewEnabled));
     get('options').replaceChildren(); controls();
-    message((content.message || '') + (session.needsSave ? ' 内容已修改，请保存。' : '')); comparison(content.comparison);
+    message(content.message || ''); comparison(content.comparison);
     get('title').textContent = content.title || session.provider.label;
     for (const name of ['advance', 'expanded', 'all']) get(name).hidden = content[name] === false;
     if (item) {
@@ -535,11 +512,10 @@
         source: saved.source, version: saved.version, items: saved.items,
         position: saved.position, choices: saved.choices, context: { ...saved.context } }, all);
       if (session !== saved) return true;
-      const source = saved.model.getValue(), changed = source !== saved.source;
+      const source = saved.model.getValue();
       Object.assign(saved, { items: result.items, choices: result.choices || saved.choices,
         position: result.position, context: result.context || saved.context,
         source, version: saved.model.getVersionId?.() });
-      if (changed) saved.needsSave = true;
       Object.assign(saved.context, { source: saved.source, version: saved.version });
       if (saved.context.request) saved.context.request = { ...saved.context.request, snapshot: null };
       if (!valid()) { stale(); return; }
@@ -614,20 +590,16 @@
   async function save() {
     const saved = session, owner = workspace();
     if (!saved || !owner?.save || get('save').disabled) return;
-    const saveOnly = editorDirty(saved) ?? saved.manualSave;
     saved.saving = true; controls();
     try {
-      if (!saveOnly && valid() && current() && !await apply(false)) return;
+      if (!await apply(false)) return;
       // A popup refresh must not cancel saving an already applied replacement.
       if (!owner.documents && saved.editor.getModel() !== saved.model) throw new Error('文件已切换，未保存替换。');
-      saved.manualSave = true;
       const source = saved.model.getValue();
       const result = await owner.save({ followPdf: false, model: saved.model });
       if (result === false) throw new Error('保存失败，修改仍未保存，请重试。');
       if (session === saved && saved.model.getValue() === source) {
-        saved.needsSave = false; saved.manualSave = false;
-        if (valid() && !saveOnly) render();
-        else if (valid()) message(saved.content?.message || '');
+        if (valid()) render();
         else message('已保存。差异更新中…');
       }
     }
@@ -670,7 +642,7 @@
       if (session?.provider.id === saved.provider.id && session.editor === saved.editor && session.model === saved.model) {
         ++generation; clearTimeout(manualTimer);
         Object.assign(session, { source: saved.source, version: saved.version, items: saved.items, position: saved.position,
-          choices: new Map(saved.choices), needsSave: saved.needsSave, manualSave: saved.manualSave,
+          choices: new Map(saved.choices),
           context: { ...saved.context, request }, stale: false, manualPending: false });
         render(true, true);
       } else void open(saved.provider.id, saved.editor, saved.items[saved.position]?.id, saved.position, request);

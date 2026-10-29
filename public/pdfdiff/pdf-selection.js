@@ -364,7 +364,7 @@
     if (diffHighlight && index) {
       const { connections, items } = index.differences;
       const key = [index, review.textEnabled, review.fontEnabled, ...(review.fontStyles || []), ...targets, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
-      if (!defaultPointer || defaultPointer.key.length !== key.length || key.some((value, i) => value !== defaultPointer.key[i]))
+      if (!defaultPointer || !currentPointer(defaultPointer) || defaultPointer.key.length !== key.length || key.some((value, i) => value !== defaultPointer.key[i]))
         api.showReviewPointer(editor, review.fontEnabled && review.fontStyles?.length === 1
           ? index.formatDifferences(connections, true, review.fontStyles, items.filter(item => !item.font && review.textEnabled !== false))
           : items.filter(item => item.font ? review.fontEnabled : review.textEnabled !== false), key);

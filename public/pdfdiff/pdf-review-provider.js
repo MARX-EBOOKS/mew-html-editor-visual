@@ -586,7 +586,7 @@ const review = {
   refreshAfterEdit: refreshCandidates,
   onSelect(item, context, items, previewEnabled = false) {
     context.editor.getDomNode()?.classList.toggle('mew-review-preview', previewEnabled);
-    selection()?.showReviewPointer(context.editor, item ? [item] : []);
+    selection()?.showReviewPointer(context.editor, matchingItems(item, context, items));
   },
   onClose(context) {
     context.editor.getDomNode()?.classList.remove('mew-review-preview');

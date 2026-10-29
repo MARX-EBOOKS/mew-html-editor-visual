@@ -83,6 +83,7 @@
     if (message.type === "editor-ready") return announceReaderPage();
     if (message.type !== "editor-page" || !message.path) return;
     const revision = ++locateRevision;
+    if (message.path === editorPathCache.get(`${state.volume}:${state.page}`)) return;
     try {
       const target = await api(`/api/reader/locate?path=${encodeURIComponent(message.path)}`);
       if (revision !== locateRevision || combineRequest) return;
@@ -459,9 +460,8 @@
     renderNavigation();
     syncUrl();
     if (!(await openPairedEditor(popup))) return false;
-    // Reload through the pure-reader entry path so this window releases the
-    // already-created Monaco instance instead of merely hiding its DOM.
-    location.reload();
+    // Keep the PDF and its subscriptions alive while selection moves to the paired editor.
+    window.PdfSelection?.refresh();
     return true;
   }
 
@@ -722,6 +722,8 @@
       pdfPageChange: ({ pageNumber, pageLabel, url }) => {
         const volume = currentVolume();
         if (!volume || (url && url !== volume.pdfUrl)) return;
+        const pageChanged = currentPdfPage?.volume !== volume.id || (currentPdfPage?.pageNumber != null
+          ? currentPdfPage.pageNumber !== pageNumber : currentPdfPage?.pageLabel !== pageLabel);
         currentPdfPage = { volume: volume.id, pageNumber, pageLabel };
         const page = rememberPdfPage(pageLabel);
         if (page == null) return;
@@ -731,8 +733,10 @@
         // Several PDF pages can map to the same HTML file. Keep its working
         // copy instead of starting a redundant asynchronous reload.
         if (volume.pages.filter(candidate => candidate <= page).at(-1) === state.page) {
-          ++state.navigationRevision;
-          ++locateRevision;
+          if (pageChanged) {
+            ++state.navigationRevision;
+            ++locateRevision;
+          }
           state.pendingPdfNavigation = null;
           return;
         }

@@ -639,7 +639,9 @@
     pdfToc = []; drawToc();
     pdfUrl = url; setPdfStatus(url ? "正在载入 PDF…" : "此卷未配置 PDF");
     pdfViewer.setDocument(null); pdfLinkService.setDocument(null); pdfPageLabels = null;
-    const oldTask = pdfLoadingTask; pdfLoadingTask = null; await oldTask?.destroy();
+    const oldTask = pdfLoadingTask; pdfLoadingTask = null;
+    // Each document owns its worker; teardown must not block the next volume.
+    void oldTask?.destroy().catch(error => console.warn("PDF 清理失败：", error));
     if (!url || revision !== pdfRevision) return;
     try {
       // Range loading keeps large scans off the network/worker until needed.
