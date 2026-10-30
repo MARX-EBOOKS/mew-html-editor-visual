@@ -139,6 +139,7 @@
   'use strict';
   const providers = new Map();
   const previewKey = 'mew-review-preview';
+  const editorSuggestions = new Map();
   let session = null, generation = 0, pending = null, view = null, previewModels = [], disposals = [], lastRequest = null;
   let widget = null, widgetEditor = null, noticeAnchor = null, noticeLayout = null, manualTimer = null, composing = false;
   let placementFrame = null, returningToWindow = !document.hasFocus();
@@ -164,6 +165,142 @@
   function selectedEdits(all = false) {
     return session.content?.[all ? 'allEdits' : 'edits'] || (all ? session.items : session.provider.matchingItems?.(current(), session.context, session.items) || [current()])
       .flatMap(item => item?.options.find(value => value.id === session.choices.get(item.id))?.edits || []);
+  }
+  // Providers supply current, validated replacement plans; Monaco owns both menus.
+  function bindSuggestions(editor, provide) {
+    const owner = editor.getDomNode()?.ownerDocument.defaultView;
+    if (owner && owner !== window) return owner.ReplacementReview?.bindSuggestions(editor, provide);
+    if (editorSuggestions.has(editor)) {
+      if (provide) editorSuggestions.get(editor).provide = provide;
+      return;
+    }
+    const api = owner?.monaco;
+    if (!api) return;
+    editor.updateOptions({ glyphMargin: true });
+    editor.getDomNode()?.classList.add('mew-review-suggestions');
+    const state = { provide }, listeners = [];
+    editorSuggestions.set(editor, state);
+    const plans = (model, range) => {
+      if (editor.getModel() !== model || editor.getOption(api.editor.EditorOption.readOnly)) return [];
+      const active = session?.editor === editor && valid();
+      const values = state.provide?.(model) || (active ? session.items.flatMap(item => item.options) : []);
+      const start = model.getOffsetAt(range.getStartPosition()), end = model.getOffsetAt(range.getEndPosition());
+      return values.flatMap(value => {
+        if (!value.edits?.length || !(value.range ? value.range.start <= end && value.range.end >= start
+          : value.edits.some(edit => edit.start <= end && edit.end >= start))) return [];
+        try { return [{ ...value, edits: window.PdfSelectionDiff.validateEdits(model.getValue(), value.edits) }]; }
+        catch { return []; }
+      });
+    };
+    // Route our native Preview actions to the existing revision highlights.
+    const controller = editor.getContribution('editor.contrib.codeActionController');
+    const widgets = controller._actionWidgetService;
+    let hovering = false;
+    const clearHover = () => {
+      if (!hovering) return;
+      hovering = false;
+      const active = session?.editor === editor && valid() && get('apply').getAttribute('aria-pressed') === 'true';
+      paintRevision(editor, editor.getModel(), [session, active], active ? selectedEdits() : [], active ? session.content.previewDecorations : []);
+    };
+    controller._actionWidgetService = {
+      get isVisible() { return widgets.isVisible; }, hide: widgets.hide.bind(widgets)
+    };
+    controller._actionWidgetService.show = (id, supportsPreview, items, delegate, ...args) => {
+      if (items.some(item => item.item?.action.reviewPreview)) items = [{ kind: 'header', label: '替换与预览' },
+        ...items.filter(item => item.kind !== 'header' || item.group?.kind?.value !== '')];
+      widgets.show(id, supportsPreview, items, { ...delegate, onHover(action, token) {
+        if (action.action.reviewPreview) { hovering = true; action.action.reviewPreview(); }
+        else clearHover();
+        return delegate.onHover?.(action, token);
+      }, onHide(didCancel) { clearHover(); delegate.onHide?.(didCancel); } }, ...args);
+      const node = editor.getDomNode()?.querySelector('.action-widget');
+      if (node) node.onmouseout = event => {
+        if (!node.contains(event.relatedTarget) || !event.relatedTarget?.closest?.('.action')) clearHover();
+      };
+    };
+    const applyCodeAction = controller.applyCodeAction;
+    controller.applyCodeAction = function(action, retrigger, preview, reason) {
+      hovering = false;
+      return preview && action.action.reviewPreview ? action.action.reviewPreview()
+        : applyCodeAction.call(this, action, retrigger, preview, reason);
+    };
+    listeners.push({ dispose: () => { controller.applyCodeAction = applyCodeAction; controller._actionWidgetService = widgets; } });
+    const codeActions = {
+      provideCodeActions(model, range) {
+        return { actions: plans(model, range).map(value => ({
+          title: value.title || value.edits.map(edit => edit.text || '删除此处文字').join('、'), kind: 'replace',
+          reviewPreview() {
+            if (editor.getModel() === model && model.getVersionId() === this.edit.edits[0].versionId
+              && !editor.getOption(api.editor.EditorOption.readOnly)) paintRevision(editor, model, [this], value.edits);
+          },
+          edit: { edits: value.edits.map(edit => ({ resource: model.uri, versionId: model.getVersionId(),
+            textEdit: { range: window.PdfSelectionDiff.rangeAt(model, edit.start, edit.end), text: edit.text } })) }
+        })), dispose() {} };
+      }
+    };
+    let actionRegistration;
+    state.refreshActions = () => {
+      actionRegistration?.dispose();
+      actionRegistration = api.languages.registerCodeActionProvider('*', codeActions, { providedCodeActionKinds: ['replace'] });
+    };
+    state.refreshActions();
+    listeners.push({ dispose: () => actionRegistration.dispose() });
+    // Match built-in language providers' priority so HTML completions cannot hide review suggestions.
+    listeners.push(api.languages.registerCompletionItemProvider(api.languages.getLanguages().map(language => language.id), {
+      provideCompletionItems(model, position) {
+        const range = new api.Range(position.lineNumber, position.column, position.lineNumber, position.column);
+        return { suggestions: plans(model, range).flatMap(value => {
+          const start = Math.min(value.range?.start ?? Infinity, ...value.edits.map(edit => edit.start)),
+            end = Math.max(value.range?.end ?? 0, ...value.edits.map(edit => edit.end));
+          const replacementRange = window.PdfSelectionDiff.rangeAt(model, start, end);
+          const text = window.PdfSelectionDiff.previewEdits(model.getValue().slice(start, end),
+            value.edits.map(edit => ({ ...edit, start: edit.start - start, end: edit.end - start })));
+          if (replacementRange.startLineNumber !== replacementRange.endLineNumber || /[\r\n]/.test(text)) return [];
+          return [{
+          label: { label: text || '删除此处文字', description: '对照替换' },
+          kind: api.languages.CompletionItemKind.Text,
+          detail: value.label,
+          documentation: value.edits.map(edit => `${JSON.stringify(model.getValue().slice(edit.start, edit.end))} → ${JSON.stringify(edit.text)}`).join('\n'),
+          filterText: model.getValue().slice(start, model.getOffsetAt(position)),
+          sortText: '0000', insertText: text, range: replacementRange
+        }]; }), incomplete: true };
+      }
+    }));
+    let timer, inComposition = false;
+    const suggest = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const model = editor.getModel(), position = editor.getPosition();
+        if (!inComposition && editor.hasTextFocus() && model && position
+          && plans(model, new api.Range(position.lineNumber, position.column, position.lineNumber, position.column)).length)
+          editor.trigger('replacement-review', 'editor.action.triggerSuggest', {});
+      }, 180);
+    };
+    listeners.push(editor.onDidType(suggest), editor.onDidPaste(suggest),
+      editor.onDidChangeModelContent(() => revisionMarks.updateSource(editor, [], () => [])),
+      editor.onDidChangeCursorPosition(() => clearTimeout(timer)),
+      editor.onDidCompositionStart(() => { inComposition = true; clearTimeout(timer); }),
+      editor.onDidCompositionEnd(() => { inComposition = false; suggest(); }),
+      editor.onDidDispose(() => state.dispose()));
+    state.dispose = () => { clearTimeout(timer); listeners.forEach(listener => listener.dispose()); editorSuggestions.delete(editor);
+      editor.getDomNode()?.classList.remove('mew-review-suggestions'); };
+  }
+  function paintRevision(editor, model, key, edits, decorations = []) {
+    const source = model.getValue(), toolbox = window.PdfSelectionDiff;
+    revisionMarks.updateSource(editor, key, () => [...edits.flatMap(edit => {
+      if (edit.options) return [edit];
+      let offset = edit.start;
+      return toolbox.textDiff(source.slice(edit.start, edit.end), edit.text, true).parts.flatMap(part => {
+        const start = offset;
+        offset += part.html.length;
+        return part.changed ? [{ start, end: offset, text: part.pdf }] : [];
+      });
+    }).map(edit => ({
+      range: toolbox.rangeAt(model, edit.start, edit.end),
+      options: edit.options || { description: 'Revision preview', stickiness: 1, showIfCollapsed: true,
+        inlineClassName: edit.end > edit.start ? 'mew-review-current' : undefined,
+        after: edit.text ? { content: edit.text, inlineClassName: 'mew-review-proposed', cursorStops: 0 } : undefined }
+    })), ...decorations]);
   }
   function presentation() { return session?.provider.presentation?.(session.context, current()) || noticeLayout; }
   function opposite(state) {
@@ -225,7 +362,7 @@
   }
   function mount(target) {
     const api = target?.getDomNode()?.ownerDocument.defaultView.monaco;
-    if (!target?.addContentWidget || !api) return;
+    if (!api || !['addContentWidget', 'layoutContentWidget', 'removeContentWidget'].every(name => typeof target?.[name] === 'function')) return;
     widgetEditor = target;
     widget = {
       getId: () => 'mew.replacement-review', getDomNode: () => panel,
@@ -238,7 +375,7 @@
       }
     };
     panel.dataset.contentWidget = '';
-    panel.style.top = ''; panel.style.left = '';
+    panel.style.cssText = '';
     target.addContentWidget(widget);
   }
   function close(dismiss = true, restoreFocus = true, position = null) {
@@ -248,8 +385,9 @@
     disposals.splice(0).forEach(dispose => dispose());
     revisionMarks.clearMarks();
     clearPreview(); panel.hidden = true; lastRequest = null; noticeAnchor = noticeLayout = null;
-    if (widget) { widgetEditor.removeContentWidget(widget); widget = widgetEditor = null; document.body.append(panel); delete panel.dataset.contentWidget; panel.style.cssText = ''; }
+    if (widget) { widgetEditor.removeContentWidget(widget); widget = widgetEditor = null; document.body.append(panel); delete panel.dataset.contentWidget; panel.removeAttribute('widgetid'); panel.style.cssText = ''; }
     const previous = session; session = null;
+    editorSuggestions.get(previous?.editor)?.refreshActions();
     previous?.provider.onClose?.(previous.context);
     if (dismiss && previous && previous.editor.getModel() === previous.model) {
       const selected = previous.editor.getSelection();
@@ -336,6 +474,7 @@
     get('switch').textContent = placement?.switchLabel || '';
     get('title').textContent = provider?.label || '审阅'; get('options').replaceChildren(); get('comparison').replaceChildren(); controls();
     if (!provider || !target?.getModel()) { message('请先打开可编辑的文件。'); place(); return; }
+    bindSuggestions(target);
     if (provider.isEnabled?.() === false) { message('请先在菜单中启用此功能。'); place(); return; }
     if (placement?.side !== 'pdf') {
       target.getDomNode()?.ownerDocument.defaultView.readerMonaco?.showSource?.();
@@ -345,6 +484,7 @@
     const model = target.getModel(), source = model.getValue(), version = model.getVersionId?.();
     const context = { ...requestData?.snapshot?.context, editor: target, model, source, version, signal: controller.signal, toolbox: window.PdfSelectionDiff, request: requestData };
     subscribe(target, 'onDidChangeModel', () => close());
+    subscribe(target, 'onDidDispose', () => close(false, false));
     subscribe(target, 'onDidChangeModelContent', event => {
       if (!session) close();
       else if (!session.applying) stale(event);
@@ -357,7 +497,9 @@
     // Keep an opening session so typing while extraction runs schedules a fresh calculation.
     session = { provider, editor: target, model, source, version, context, items: [], position: 0,
       choices: new Map() };
-    subscribe(target, 'onDidScrollChange', queuePlace);
+    // Monaco tracks content widgets while scrolling; only fallback positioning needs this.
+    if (!widget) subscribe(target, 'onDidScrollChange', queuePlace);
+    subscribe(target, 'onDidLayoutChange', queuePlace);
     if (placement?.container) {
       const container = placement.container;
       container.addEventListener('scroll', queuePlace); disposals.push(() => container.removeEventListener('scroll', queuePlace));
@@ -393,6 +535,7 @@
     let previewEnabled = false;
     try { previewEnabled = localStorage.getItem(previewKey) === 'true'; } catch {}
     get('apply').setAttribute('aria-pressed', String(previewEnabled));
+    editorSuggestions.get(session.editor)?.refreshActions();
     get('options').replaceChildren(); controls();
     message(content.message || ''); comparison(content.comparison);
     get('title').textContent = content.title || session.provider.label;
@@ -414,21 +557,8 @@
       session.provider.onSelect?.(item, session.context, session.items, previewEnabled);
     } else session.provider.onClose?.(session.context);
     if (session.editor.getDomNode()?.ownerDocument === document) {
-      revisionMarks.updateSource(session.editor, [session.model, session.version ?? session.source, item, session.choices.get(item?.id), previewEnabled],
-        () => [...(previewEnabled ? selectedEdits() : []).flatMap(edit => {
-          if (edit.options) return [edit];
-          let offset = edit.start;
-          return session.context.toolbox.textDiff(session.source.slice(edit.start, edit.end), edit.text, true).parts.flatMap(part => {
-            const start = offset;
-            offset += part.html.length;
-            return part.changed ? [{ start, end: offset, text: part.pdf }] : [];
-          });
-        }).map(edit => ({
-          range: session.context.toolbox.rangeAt(session.model, edit.start, edit.end),
-          options: edit.options || { description: 'Revision preview', stickiness: 1, showIfCollapsed: true,
-            inlineClassName: edit.end > edit.start ? 'mew-review-current' : undefined,
-            after: edit.text ? { content: edit.text, inlineClassName: 'mew-review-proposed', cursorStops: 0 } : undefined }
-        })), ...(previewEnabled ? content.previewDecorations || [] : [])]);
+      paintRevision(session.editor, session.model, [session.model, session.version ?? session.source, item, session.choices.get(item?.id), previewEnabled],
+        previewEnabled ? selectedEdits() : [], previewEnabled ? content.previewDecorations : []);
     }
     void preview(); place(session.editor);
     const peer = !mirrored && opposite(session);
@@ -617,6 +747,7 @@
   panel.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Escape') close(); });
   window.addEventListener('blur', () => { if (!document.hasFocus()) returningToWindow = true; });
   window.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.isComposing) revisionMarks.clearMarks();
     if (event.key === 'Escape' && !event.isComposing && !panel.hidden) {
       event.preventDefault(); event.stopPropagation();
       close(true, panel.contains(document.activeElement));
@@ -630,6 +761,7 @@
     const returning = event.returningToWindow = returningToWindow || !document.hasFocus();
     returningToWindow = false;
     if (panel.hidden || returning || event.composedPath().includes(panel)) return;
+    if (event.target.closest?.('.lightBulbWidget, [class*="codicon-gutter-lightbulb"], .action-widget')) return;
     const position = session?.editor.getTargetAtClientPoint(event.clientX, event.clientY)?.position;
     const api = session?.editor.getDomNode()?.ownerDocument.defaultView.monaco;
     if (position && session.anchor && api?.Range.containsPosition(session.anchor, position)) return;
@@ -640,9 +772,9 @@
   window.addEventListener('storage', event => {
     if ((event.key === previewKey || event.key === null) && valid()) render(true, true);
   });
-  window.addEventListener('pagehide', () => { close(); view?.dispose(); });
+  window.addEventListener('pagehide', () => { close(); view?.dispose(); for (const state of editorSuggestions.values()) state.dispose(); });
   window.ReplacementReview = {
-    open, openForSelection, showNotice, close, refreshMenu: updateMenu,
+    open, openForSelection, showNotice, close, bindSuggestions, refreshMenu: updateMenu,
     mirror(saved, request) {
       if (session?.provider.id === saved.provider.id && session.editor === saved.editor && session.model === saved.model) {
         ++generation; clearTimeout(manualTimer);

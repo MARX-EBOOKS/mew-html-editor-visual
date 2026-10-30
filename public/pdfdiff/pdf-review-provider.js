@@ -501,11 +501,15 @@ function reviewItems(index, notice, model) {
     positions.set(item, nearby && nearby.sourceStart <= item.sourceEnd ? nearby.sourceStart : item.sourceStart);
   }
   const order = item => positions.get(item) ?? item.sourceStart;
-  const data = { index, model, enabled, fontKey, connections, formats, entries: [], edits: [], groups: new Map(), choices: new Map() };
+  const data = { index, model, enabled, fontKey, connections, formats, entries: [], edits: [], plans: [], groups: new Map(), choices: new Map() };
   data.items = [...text, ...formats].sort((a, b) => order(a) - order(b) || Number(!!a.font) - Number(!!b.font)).map(item => {
     const value = { ...item, range: item.font || item.missing ? toolbox.rangeAt(model, item.sourceStart, item.sourceEnd, index) : item.range,
       pdfSource: index.locator.sourceEntry(index, item.sourceStart, item.sourceEnd, true) };
     const key = pattern(value, index);
+    if (!value.missing) data.plans.push(value.font ? { ...value.options[0],
+      title: `替换格式：${value.text}（${fontSummary(value.formats)}）`,
+      range: { start: index.starts[value.sourceStart], end: index.ends[value.sourceEnd - 1] }
+    } : value.options[0]);
     let group = data.groups.get(key);
     if (!group) { group = { index, items: [], entries: [], edits: [] }; data.groups.set(key, group); reviewLists.set(group.items, group); }
     data.groups.set(value, group);
@@ -557,6 +561,9 @@ function pattern(value, index) {
     before -= raw.codePointAt(before - 2) > 0xffff ? 2 : 1;
   while (after < raw.length && word.test(String.fromCodePoint(raw.codePointAt(after))))
     after += raw.codePointAt(after) > 0xffff ? 2 : 1;
+  if (!value.font && value.options?.[0]) value.options[0].range = {
+    start: index.starts[before] ?? index.source.length,
+    end: after > before ? index.ends[after - 1] : index.starts[before] ?? index.source.length };
   const prefix = raw.slice(before, start), suffix = raw.slice(end, after);
   if ([...raw.slice(before, after)].length < 2
     && [...(prefix + (value.comparison?.pdf ?? value.text ?? '') + suffix)].length < 2) return value;
@@ -626,6 +633,8 @@ function onSources(event) {
   if (!editor?.createDecorationsCollection) return;
   if (index) index.targets = targets;
   const model = editor.getModel(), data = index && reviewItems(index, null, model);
+  host.bindSuggestions(editor, currentModel => editor === selection()?.editor && viewer()?.pdfDocument
+    ? reviewItems(getLocator().editorSourceIndex(currentModel), null, currentModel).plans : []);
   if (editor.addAction && !editor.getAction('mew.pdf-difference')) {
     const action = editor.addAction({
       id: 'mew.pdf-difference', label: '查看 PDF 差异',
