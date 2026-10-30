@@ -369,13 +369,13 @@
       .statusbar .context strong,.statusbar .context small { font-size:11px; font-weight:400; }
     `;
     document.head.append(style);
-    let timer, navigate;
-    for (const [id, direction] of [['prevFileBtn',-1],['nextFileBtn',1]]) {
-      host.querySelector('#'+id).onclick = () => navigate?.(direction);
-    }
+    let timer;
     return {
       host,
-      setNavigation(handler) { navigate = handler; },
+      setNavigation(handler) {
+        host.querySelector('#prevFileBtn').onclick = () => handler(-1);
+        host.querySelector('#nextFileBtn').onclick = () => handler(1);
+      },
       setAvailable(previous, next) {
         host.querySelector('#prevFileBtn').disabled = !previous;
         host.querySelector('#nextFileBtn').disabled = !next;

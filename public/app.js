@@ -411,12 +411,10 @@ function modelFor(d) {
       onChange: model => {
         const wasDirty = d.dirty;
         d.update(d.textFromEditor(model.getValue()));
-        if (d === doc()) {
-          if (wasDirty !== d.dirty) markDirty();
-          else scheduleSessionBackup();
-          scheduleEditorRefresh();
-        } else if (wasDirty !== d.dirty) renderTabs();
+        const active = d === doc();
+        if (wasDirty !== d.dirty) { if (active) markDirty(); else renderTabs(); }
         else scheduleSessionBackup();
+        if (active) scheduleEditorRefresh();
       }
     });
   }

@@ -195,7 +195,7 @@
     });
   }
 
-  const notify = (message, persistent) => footer.notify(message, persistent);
+  const { notify, setPosition } = footer;
 
   const pageButtons = [
     ["prevBtn", "hasPrevious", "Alt+←", " & 保存"], ["nextPageBtn", "hasNext", "Alt+→", " & 保存"],
@@ -207,10 +207,6 @@
     for (const [id, , title, suffix] of pageButtons) {
       if (byId(id)) byId(id).title = title + (dirty ? suffix : "");
     }
-  }
-
-  function setPosition(line, column) {
-    footer.setPosition(line, column);
   }
 
   function setHistoryButtons(canUndo, canRedo) {
@@ -362,9 +358,6 @@
 
   const frameId = (id) => pdfFrame?.querySelector(`#${id}`);
   function normalizedPdfSettings(value = {}) {
-    // Diff highlighting is saved independently; PDF controls must not overwrite it.
-    const { diffHighlight, sourceDiffHighlight, selectionHighlight, ...displaySettings } = value;
-    value = displaySettings;
     const color = (input, fallback) => /^#[0-9a-f]{6}$/i.test(String(input)) ? String(input).toLowerCase() : fallback;
     const scale = typeof value.scale === "string" && value.scale.length <= 32 ? value.scale : PDF_DEFAULTS.scale;
     return { brightness: Math.max(50, Math.min(160, Number(value.brightness) || 100)), paper: color(value.paper, PDF_DEFAULTS.paper), ink: color(value.ink, PDF_DEFAULTS.ink), invert: Boolean(value.invert), horizontal: Boolean(value.horizontal), scale };
@@ -690,10 +683,7 @@
       try {
         const settings = await fetch("/api/reader/settings").then((r) => r.ok ? r.json() : {});
         pdfSettings = normalizedPdfSettings({ ...saved, ...settings });
-        for (const target of ["editor", "tag"]) {
-          const scale = settings[`${target}Scale`];
-          tagPanel?.setScale(target, typeof scale === "number" && Number.isFinite(scale) ? scale : 1);
-        }
+        tagPanel?.restoreScales(settings);
       } catch { pdfSettings = normalizedPdfSettings(saved); }
       panelSettingsLoaded = true;
       applyPdfSettings();

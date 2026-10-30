@@ -450,7 +450,14 @@
       updateWindowDock();
     };
     toggle?.addEventListener("click", () => setVisible(panel.hidden));
-    return { panel, setDock, setScale, setVisible, state };
+    return { panel, setDock, setScale, setVisible, state,
+      restoreScales(settings) {
+        for (const target of ["editor", "tag"]) {
+          const scale = settings[`${target}Scale`];
+          setScale(target, typeof scale === "number" && Number.isFinite(scale) ? scale : 1);
+        }
+      }
+    };
   }
   window.MewTagPanel = { mount, tags, attrs, tagMap, tagForKeyEvent, blockTagNames, TagEditor };
 })();

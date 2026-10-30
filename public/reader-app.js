@@ -25,7 +25,7 @@
     pdfPage: null,
     document: new DocumentModel({ editable: false }),
     mode: "source",
-    workspaceMode: initialParams.get("view") === "reader" ? "reader" : "combined",
+    workspaceMode: document.body.classList.contains("reader-only") || initialParams.get("view") === "reader" ? "reader" : "combined",
     syncSession: requestedSession,
     navigationRevision: 0,
     pendingPdfNavigation: null
@@ -431,6 +431,8 @@
       else popup.location.replace(url);
       pairedWindow = popup;
       announceReaderPage();
+      await api("/api/reader/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ splitView: true }) })
+        .catch(error => notify(`无法保存分窗设置：${error.message}`, true));
       return true;
     } catch (error) {
       popup.close();
@@ -497,6 +499,8 @@
     state.workspaceMode = "combined";
     ui.setWorkspaceMode("combined", state.config?.editorAvailable);
     syncUrl();
+    await api("/api/reader/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ splitView: false }) })
+      .catch(error => notify(`无法保存分窗设置：${error.message}`, true));
     location.reload();
   }
 
@@ -761,11 +765,13 @@
       }
     });
     try {
-      const [config] = await Promise.all([
+      const [config, settings] = await Promise.all([
         api("/api/reader/config"),
-        state.workspaceMode !== "reader" ? ensureEditorRuntime() : Promise.resolve()
+        api("/api/reader/settings").catch(() => ({}))
       ]);
       state.config = config;
+      if (!initialParams.has("view")) state.workspaceMode = settings.splitView === true ? "reader" : "combined";
+      if (state.workspaceMode !== "reader") await ensureEditorRuntime();
       const requestedMode = initialParams.get("mode");
       if (requestedMode === "source" || requestedMode === "visual") state.mode = requestedMode;
       if (state.workspaceMode === "reader" && !state.syncSession) state.syncSession = newSession();
@@ -780,6 +786,7 @@
       const initialPage = Number(initialParams.get("page")) ||
         (firstVolume.id === rememberedVolume && Number.isFinite(rememberedPage) && rememberedPage > 0 ? rememberedPage : firstVolume.pages[0]);
       await navigate(firstVolume.id, initialPage, true);
+      if (state.workspaceMode === "reader" && state.config.editorAvailable) await enterSplitView();
     } catch (error) {
       ui.renderNavigation({
         chapterTitle: "载入失败", chapterPage: null, pageContext: "", pageTotal: "", pageIndex: "",
@@ -795,6 +802,9 @@
     if (revision !== directoryRefreshRevision || !state.config) return;
     state.config = config;
     editorPathCache.clear();
+    if (state.workspaceMode === "reader") await announceReaderPage();
+    if (revision !== directoryRefreshRevision) return;
+    window.PdfSelection?.refresh();
     ui.renderVolumes(config.volumes, state.volume);
     renderNavigation();
     const origin = currentPdfPage;

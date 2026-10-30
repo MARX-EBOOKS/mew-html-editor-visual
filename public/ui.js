@@ -7,7 +7,7 @@
   const fileLabel = path => path.split('/').pop() || path || 'Untitled';
 
   const footer = window.MewEditorCore.footer;
-  const notify = (message, persistent) => footer.notify(message, persistent);
+  const { notify, setLanguage, setPosition } = footer;
 
   function setupLayout() {
     const key = 'mew-editor-layout-v1';
@@ -327,10 +327,7 @@
         const response = await fetch('/api/reader/settings');
         if (!response.ok) throw new Error('无法读取缩放设置');
         const settings = await response.json();
-        for (const target of ['editor', 'tag']) {
-          const scale = settings[`${target}Scale`];
-          tagPanel.setScale(target, typeof scale === 'number' && Number.isFinite(scale) ? scale : 1);
-        }
+        tagPanel.restoreScales(settings);
         settingsLoaded = true;
       } catch { notify('无法读取缩放设置', true); }
     }
@@ -589,8 +586,7 @@
     themeColors, renderPreview, clearPreview, setTheme, askClose, askFileName, bindWorkbench,
     isDark() { return document.body.classList.contains('dark'); },
     setReaderLinkedTitle() { document.title = 'MEW Monaco Editor · 阅读器联控'; },
-    setLanguage(text) { footer.setLanguage(text); },
-    setPosition(line, column) { footer.setPosition(line, column); },
+    setLanguage, setPosition,
     showMonacoError(error) { notify(`Monaco 加载失败：${error.message || error}`, true); }
   };
 })();
