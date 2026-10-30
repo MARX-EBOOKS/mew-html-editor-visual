@@ -1,16 +1,5 @@
 "use strict";
 let diffComputer = null;
-function fontSummary(runs, field) {
-  const states = [new Set(), new Set()], reasons = new Set();
-  for (const value of runs) {
-    const run = field ? value[field] : value;
-    states[0].add(run.italic); states[1].add(run.bold);
-    if (run.reason) reasons.add(run.reason);
-  }
-  return states.map((values, i) => `${i ? '粗体' : '斜体'}：${!values.size || values.has(null) ? '未知' : values.size > 1 ? '混合' : values.has(true) ? '是' : '否'}`).join('；')
-    + (reasons.size ? `（${[...reasons].join('；')}）` : '');
-}
-
 function significantText(text, index, start = 0) {
   return text.replace(/[\s\-\u00ad\u2010\u2011\d]/g, (char, offset) => /\d/.test(char)
     && !(index?.formats?.[start + offset]?.name === 'a'
@@ -544,20 +533,17 @@ class PdfSourceIndex {
     }
     return segments;
   }
-  sourceDecorations(connections, model, fonts = true, text = true, targets = connections.map(([, target]) => target), items) {
-    const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
+  sourceDecorations(connections, model, fonts = true, text = true, targets = connections.map(([, target]) => target), items, hover) {
     items ||= this.reviewCandidates(targets, null, connections, false, fonts, text);
     const decorations = [];
     for (const item of items) {
       if (item.font ? !fonts : !text) continue;
       const font = !item.comparison, start = !font && !item.comparison.html.trim() && /^\s/u.test(item.comparison.pdf) ? item.sourceEnd : item.sourceStart;
-      const message = font ? `HTML ${fontSummary(item.formats, 'htmlFont')}\n\nPDF ${fontSummary(item.formats, 'font')}`
-        : item.missing ? 'PDF OCR 缺少相关文字。' : 'HTML: ' + escape(item.comparison.html) + '\n\nOCR: ' + escape(item.comparison.pdf);
       const options = {
         description: font ? 'PDF font difference' : 'PDF OCR text difference',
         linesDecorationsClassName: 'mew-ocr-diff-line', stickiness: 1,
         inlineClassName: font ? 'mew-font-diff-text' : 'mew-ocr-diff-text',
-        hoverMessage: { value: message, isTrusted: false },
+        hoverMessage: hover?.(item),
         linesDecorationsTooltip: font ? '粗体／斜体与 PDF 不一致' : 'Text differs from PDF OCR'
       };
       const segments = this.sourceSegments(start, item.sourceEnd, font || !this.raw.slice(start, item.sourceEnd).trim());
@@ -833,8 +819,7 @@ class PdfSourceIndex {
   }
 }
 window.PdfSelectionDiff = {
-  PdfSourceIndex, normalized, lowerBound, htmlFontDefinition,
-  textDiff, fontSummary,
+  PdfSourceIndex, normalized, lowerBound, htmlFontDefinition, textDiff,
   validateEdits, previewEdits, applyEdits, rangeAt, significantText, changedRange,
   ready: import("/monaco/esm/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.js")
     .then(({ DefaultLinesDiffComputer }) => diffComputer = new DefaultLinesDiffComputer())
