@@ -52,13 +52,13 @@ function applyEdits(editor, model, version, source, edits, origin = 'review-repl
   editor.pushUndoStop?.();
   if (applied === false) throw new Error('编辑器未能应用替换');
 }
-function textDiff(left, right, details = false, limit = Infinity) {
+function textDiff(left, right, details = false, limit = Infinity, condense = false) {
   if (left === right) return { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
   // A bounded match cannot span more extra characters than its edit limit.
   if (Number.isFinite(limit) && Math.abs(left.length - right.length) > limit && Math.abs(Array.from(left).length - Array.from(right).length) > limit)
     return { distance: limit + 1, parts: details ? [{ html: left, pdf: right, changed: true }] : undefined };
-  // Bounded anchor checks and unavailable Monaco use the local engine directly.
-  if (!diffComputer || !details && Number.isFinite(limit)) return localTextDiff(left, right, details, details ? Math.min(limit, 128) : limit);
+  // Connections condense word runs before the same character refinement used by selections.
+  if (condense || !diffComputer || !details && Number.isFinite(limit)) return localTextDiff(left, right, details, condense ? limit : details ? Math.min(limit, 128) : limit);
   const fallback = details ? localTextDiff(left, right, true, 128) : null;
   if (fallback?.distance <= 128) return fallback;
   try {
@@ -106,7 +106,7 @@ function textDiff(left, right, details = false, limit = Infinity) {
 function localTextDiff(left, right, details = false, limit = Infinity, equal = (a, b) => a === b, substitutions = true) {
   const wordwise = details && typeof left === 'string' && !Number.isFinite(limit);
   if (wordwise) {
-    const words = text => text.match(/[\p{L}\p{N}]+\s*|[^\s]\s*|\s+/gu) || [];
+    const words = text => text.match(/[\p{L}\p{N}]+(?:[-\u2010\u2011][\p{L}\p{N}]+)*\s*|[^\s]\s*|\s+/gu) || [];
     left = words(left); right = words(right); limit = 1024;
     equal = (a, b) => a.trimEnd() === b.trimEnd() || /^[.,\s]+$/u.test(a + b);
   }
@@ -154,8 +154,11 @@ function localTextDiff(left, right, details = false, limit = Infinity, equal = (
   if (!wordwise) return { distance, parts };
   const diff = { distance: 0, parts: [] };
   let html = '', pdf = '';
-  for (const span of [...parts, null]) {
+  for (let i = 0; i <= parts.length; i++) {
+    const span = parts[i];
     html += span?.html || ''; pdf += span?.pdf || '';
+    // Refine through punctuation-only matches instead of using them as word boundaries.
+    if (span && !/[\p{L}\p{N}]/u.test((span.changed ? parts[i + 1] : span)?.html || '')) continue;
     const a = span ? html.trimEnd().length : html.length, b = span ? pdf.trimEnd().length : pdf.length;
     const next = localTextDiff(html.slice(0, a), pdf.slice(0, b), true, 128);
     diff.distance += next.distance;
@@ -258,7 +261,7 @@ class PdfSourceIndex {
     const versions = [this.formats, ...data.pages.flatMap(page => [page.parts, page.pages, page.fontVersion])];
     if (!data.differences || versions.some((version, i) => version !== data.fontVersions[i])) {
       data.differences = { index: this, connections,
-        items: this.formatDifferences(connections, true, undefined, this.reviewCandidates(data.pages, null, connections)) };
+        items: this.reviewCandidates(data.pages, null, connections, true, true, true, true) };
       data.fontVersions = versions;
     }
     return data.differences;
@@ -271,7 +274,7 @@ class PdfSourceIndex {
     const prepared = this.preparation;
     if (prepared && prepared.pdf === pdf && prepared.full === full && prepared.pages?.length === pages.length
       && pages.every((page, i) => page === prepared.pages[i] && this.connections.get(page) === prepared.connections[i])) return prepared.pairs;
-    if (full && prepared?.document !== full) full.sourcePageScope(this, true);
+    if (full && !full.sourcePages && prepared?.document !== full) full.sourcePageScope(this, true);
     for (const page of new Set([full, ...pages])) if (page && page !== prepared?.document) this.sourcePageScope(page, true);
     // Prefer whole-passage mappings over shorter quotations on adjacent pages.
     const connections = this.connectionPairs(pages, true);
@@ -297,8 +300,8 @@ class PdfSourceIndex {
   }
   // Shared range preparation for connections, selections and missing text.
   connectionDiff(target, connection, diff = connection?.editorDiff) {
-    diff ||= connection.editorDiff = localTextDiff(this.raw.slice(connection.start, connection.end),
-      target.raw.slice(connection.targetStart, connection.targetEnd), true);
+    diff ||= connection.editorDiff = textDiff(this.raw.slice(connection.start, connection.end),
+      target.raw.slice(connection.targetStart, connection.targetEnd), true, Infinity, true);
     const context = [this.formats, target?.parts, target?.pages, target?.fontVersion], refreshText = !diff.context || diff.context[0] !== this.formats;
     if (diff.context?.every((value, i) => value === context[i])) return diff.reliable ? diff : null;
     let left = 0, right = 0;
@@ -345,7 +348,9 @@ class PdfSourceIndex {
     const b = after ? this.connectedRange(target, after.start, selectionEnd)?.end ?? after.targetStart : target.raw.length;
     return b < a ? null : { start: a, end: target.raw.slice(a, b).trim() ? b : a, endBias: !!before };
   }
-  reviewCandidates(targets = [], notice = null, connections = this.connectionPairs(targets, true), edits = true) {
+  reviewCandidates(targets = [], notice = null, connections = this.connectionPairs(targets, true), edits = true, fonts = false, text = true, update = false) {
+    if (!update && !notice && connections === this.preparation?.pairs)
+      return this.formatDifferences(connections, edits, fonts, this.differences.items.filter(item => item.font || text));
     const items = [];
     const add = (start, diff, pdfRaw = '', pdfStart = 0, connection = null, missing = false) => {
       if (!diff) return;
@@ -389,12 +394,12 @@ class PdfSourceIndex {
         }
       }
     };
-    for (const [connection, target, diff] of connections)
+    for (const [connection, target, diff] of text ? connections : [])
       add(connection.start, this.connectionDiff(target, connection, diff), target.raw, connection.targetStart, connection);
-    if (notice?.source && this.raw.slice(notice.source.start, notice.source.end) === notice.html)
+    if (text && notice?.source && this.raw.slice(notice.source.start, notice.source.end) === notice.html)
       add(notice.source.start, { parts: this.locator.comparisonParts(notice) });
     // Missing text is the significant remainder outside confirmed OCR mappings.
-    const target = (targets.length ? targets : connections.map(([, target]) => target)).find(target => target?.sourcePages?.length);
+    const target = text && (targets.length ? targets : connections.map(([, target]) => target)).find(target => target?.sourcePages?.length);
     if (target && (this.pageScopes.get(target)?.prepared || connections.some(([connection, index]) => index === target && connection.recovered))) {
       const ordered = connections.flatMap(([connection, index]) => (index === target || index.layer)
         && this.connectionDiff(index, connection) ? [connection] : []).sort((a, b) => a.start - b.start);
@@ -404,7 +409,7 @@ class PdfSourceIndex {
         start = Math.max(start, range.end ?? range.start);
       }
     }
-    return items;
+    return this.formatDifferences(connections, edits, fonts, items);
   }
 
   fontRuns(start = 0, end = this.raw.length, nodes = false) {
@@ -496,7 +501,10 @@ class PdfSourceIndex {
   }
   // Reuse text alignment; changed spans require agreement on each PDF style.
   formatDifferences(connections, edits = true, keys = ['italic', 'bold'], candidates = []) {
-    if (!this.formats) return candidates;
+    keys = keys === true ? ['italic', 'bold'] : keys || [];
+    if (keys.length === 2 && candidates.some(item => item.font)) return candidates;
+    if (keys.length !== 2) candidates = candidates.filter(item => !item.font);
+    if (!this.formats || !keys.length) return candidates;
     const items = new Map();
     for (const [connection, target, diff] of connections)
       for (const item of this.connectionDiff(target, connection, diff)?.fontItems || []) {
@@ -536,12 +544,9 @@ class PdfSourceIndex {
     }
     return segments;
   }
-  sourceDecorations(connections, model, fonts = true, text = true, targets = connections.map(([, target]) => target)) {
+  sourceDecorations(connections, model, fonts = true, text = true, targets = connections.map(([, target]) => target), items) {
     const escape = text => JSON.stringify(text.trim() ? text : '').replace(/[\\`*_{}\[\]()#+.!<>|~-]/g, '\\$&');
-    const shared = connections === this.preparation?.pairs && this.differences;
-    let items = shared ? shared.items : text ? this.reviewCandidates(targets, null, connections, false) : [];
-    if (fonts && (!shared || Array.isArray(fonts) && fonts.length !== 2))
-      items = this.formatDifferences(connections, false, Array.isArray(fonts) ? fonts : undefined, items.filter(item => !item.font));
+    items ||= this.reviewCandidates(targets, null, connections, false, fonts, text);
     const decorations = [];
     for (const item of items) {
       if (item.font ? !fonts : !text) continue;

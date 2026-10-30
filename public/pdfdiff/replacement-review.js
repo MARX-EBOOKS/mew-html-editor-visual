@@ -162,7 +162,7 @@
   function message(text) { get('status').textContent = text; get('status').hidden = !text; }
   function current() { return session?.items[session.position]; }
   function selectedEdits(all = false) {
-    return (all ? session.items : session.provider.matchingItems?.(current(), session.context, session.items) || [current()])
+    return session.content?.[all ? 'allEdits' : 'edits'] || (all ? session.items : session.provider.matchingItems?.(current(), session.context, session.items) || [current()])
       .flatMap(item => item?.options.find(value => value.id === session.choices.get(item.id))?.edits || []);
   }
   function presentation() { return session?.provider.presentation?.(session.context, current()) || noticeLayout; }
@@ -178,18 +178,18 @@
       && (session.version !== undefined ? session.model.getVersionId?.() === session.version : session.model.getValue() === session.source)
       && (!session.provider.isCurrent || session.provider.isCurrent(session.context));
   }
-  function validateCandidates(result) {
-    const ids = new Set();
-    return (result.items || result).map(item => {
-      if (typeof item.id !== 'string' || ids.has(item.id) || !item.options?.length) throw new Error('候选必须有唯一 id 和修改选项');
-      ids.add(item.id);
+  function validateCandidates(result, previous) {
+    const choices = new Map(), items = result.items || result;
+    for (const item of items) {
+      if (typeof item.id !== 'string' || choices.has(item.id) || !item.options?.length) throw new Error('候选必须有唯一 id 和修改选项');
+      choices.set(item.id, result.choices?.get(item.id) || previous?.get(item.id) || item.options[0].id);
       const options = new Set();
       for (const value of item.options) {
         if (typeof value.id !== 'string' || options.has(value.id)) throw new Error('修改选项必须有唯一 id');
         options.add(value.id);
       }
-      return item;
-    });
+    }
+    return { items, choices };
   }
   function updateMenu() {
     if (!menu) return;
@@ -292,10 +292,9 @@
         : { items: await saved.provider.provide(context), position: saved.position };
       if (session !== saved || request !== generation || saved.model.getValue() !== source
         || saved.model.getVersionId?.() !== version || (saved.provider.isCurrent && !saved.provider.isCurrent(context))) return;
-      const items = validateCandidates(result);
-      Object.assign(saved, { items, position: result.position ?? saved.position,
+      const { items, choices } = validateCandidates(result, saved.choices);
+      Object.assign(saved, { items, choices, position: result.position ?? saved.position,
         context, source, version, stale: false, manualPending: false });
-      saved.choices = result.choices || new Map(saved.items.map(item => [item.id, saved.choices.get(item.id) || item.options[0].id]));
       render(true);
     } catch (error) { if (session === saved && request === generation) message(error.message); }
     })().finally(() => {
@@ -373,12 +372,12 @@
       if (request !== generation || providers.get(id) !== provider) return;
       if (target.getModel() !== model || model.getValue() !== source || model.getVersionId?.() !== version
         || (provider.isCurrent && !provider.isCurrent(context))) { stale(); return; }
-      const items = validateCandidates(result);
+      const { items, choices } = validateCandidates(result, snapshot?.choices);
       let found = items.findIndex(item => item.id === focusId);
       if (found < 0) found = provider.focusIndex?.(items, requestData) ?? -1;
       Object.assign(session, { items,
         position: found >= 0 ? found : Math.max(0, Math.min(fallbackPosition, items.length - 1)),
-        choices: new Map(items.map(item => [item.id, snapshot?.choices.get(item.id) || item.options[0].id])) });
+        choices });
       render(!!requestData, !!requestData?.mirror);
     } catch (error) { if (request === generation) {
       if (provider.isCurrent && !provider.isCurrent(context)) stale();
@@ -405,7 +404,14 @@
         input.onchange = () => { session.choices.set(item.id, value.id); render(); };
         label.append(input, document.createTextNode(value.label)); get('options').append(label);
       }
-      selectField(preserveSelection); session.provider.onSelect?.(item, session.context, session.items, previewEnabled);
+      const range = preserveSelection && session.editor.getSelection() || session.content?.range;
+      session.anchor = session.content?.range ? session.model.validateRange(session.content.range) : range;
+      if (range) {
+        session.anchorOffset = session.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
+        if (!preserveSelection) session.editor.setSelection(session.model.validateRange(range));
+        session.editor.revealRangeInCenterIfOutsideViewport(session.anchor);
+      }
+      session.provider.onSelect?.(item, session.context, session.items, previewEnabled);
     } else session.provider.onClose?.(session.context);
     if (session.editor.getDomNode()?.ownerDocument === document) {
       revisionMarks.updateSource(session.editor, [session.model, session.version ?? session.source, item, session.choices.get(item?.id), previewEnabled],
@@ -435,10 +441,9 @@
       if (row.label) line.append(`${row.label}: `);
       for (const part of row.parts || []) {
         const span = document.createElement(part.changed ? 'mark' : 'span'); span.textContent = part.text; line.append(span);
-        if (part.changed && current()?.selection) { span.style.cursor = 'pointer'; span.onclick = () => { if (!valid()) return;
-          const parts = current().comparison.comparisonDiff.parts, at = row.parts.indexOf(part), start = current().sourceStart + parts.slice(0, at).reduce((offset, value) => offset + value.html.length, 0), owner = session.context.index.locator.document.defaultView;
-          session.editor.setSelection(session.context.toolbox.rangeAt(session.model, session.context.index.starts[start] ?? session.context.index.source.length,
-            (start + parts[at].html.length > start ? session.context.index.ends[(start + parts[at].html.length) - 1] : session.context.index.starts[start]) ?? session.context.index.source.length)); owner.dispatchEvent(new owner.CustomEvent('pdf-selection-difference', { detail: { ...session.context, ...session.context.request, interactionId: undefined, snapshot: null, notices: [{ ...parts[at], source: { index: session.context.index, start, end: start + parts[at].html.length } }] } })); }; }
+        if (part.changed && part.source && session?.provider.selectComparison) {
+          span.style.cursor = 'pointer'; span.onclick = () => { if (valid()) session.provider.selectComparison(session.context, part); };
+        }
       }
       get('comparison').append(line);
     }
@@ -471,17 +476,6 @@
     if (pending && lastRequest?.id === id && lastRequest.editor === target && lastRequest.focusId === focusId) return;
     return open(id, target, focusId, 0, request);
   }
-  function selectField(preserveSelection) {
-    const range = preserveSelection && session.editor.getSelection() || session.content?.range;
-    session.anchor = session.content?.range ? session.model.validateRange(session.content.range) : range;
-    if (range) {
-      session.anchorOffset = session.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
-      if (!preserveSelection) {
-        session.editor.setSelection(session.model.validateRange(range));
-      }
-      session.editor.revealRangeInCenterIfOutsideViewport(session.anchor);
-    }
-  }
   async function preview() {
     if (get('expanded').hidden || !get('expanded').open || !valid() || !current()) return;
     const saved = session, request = ++generation;
@@ -509,9 +503,7 @@
     saved.applying = true; controls();
     try {
       // Providers receive candidate data; session lifecycle remains owned here.
-      const result = await saved.provider.apply({ editor: saved.editor, model: saved.model,
-        source: saved.source, version: saved.version, items: saved.items,
-        position: saved.position, choices: saved.choices, context: { ...saved.context } }, all);
+      const result = await saved.provider.apply({ ...saved, context: { ...saved.context } }, all);
       if (session !== saved) return true;
       const source = saved.model.getValue();
       Object.assign(saved, { items: result.items, choices: result.choices || saved.choices,
@@ -601,7 +593,7 @@
   };
   get('advance').onclick = () => void apply(false);
   get('all').onclick = () => apply(true);
-  async function save() {
+  get('save').onclick = async () => {
     const saved = session, owner = workspace();
     if (!saved || !owner?.save || get('save').disabled) return;
     saved.saving = true; controls();
@@ -619,8 +611,7 @@
     }
     catch (error) { if (session === saved) message(error.message); }
     finally { saved.saving = false; controls(); }
-  }
-  get('save').onclick = () => save();
+  };
   get('file').onchange = () => void preview();
   get('expanded').ontoggle = () => { void preview(); place(); };
   panel.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Escape') close(); });
@@ -636,7 +627,7 @@
   }, true);
   document.addEventListener('pointerdown', event => {
     // The click that returns to this window must not dismiss its review popup.
-    const returning = returningToWindow || !document.hasFocus();
+    const returning = event.returningToWindow = returningToWindow || !document.hasFocus();
     returningToWindow = false;
     if (panel.hidden || returning || event.composedPath().includes(panel)) return;
     const position = session?.editor.getTargetAtClientPoint(event.clientX, event.clientY)?.position;

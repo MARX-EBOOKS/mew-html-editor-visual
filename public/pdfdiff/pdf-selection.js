@@ -59,7 +59,7 @@
         && (!numbers || numbers.includes(Number(page.layer.closest('.page')?.dataset.pageNumber)))).concat(
         locator.getDocumentIndex(pdf, numbers) || []))];
     },
-    getVisiblePages: () => visiblePages().filter(number => !sourcePages() || sourcePages().includes(number)).map(number => ({ number, index: layerIndex(viewer.getPageView(number - 1)?.div) })),
+    getVisiblePages: (numbers = sourcePages()) => visiblePages().filter(number => !numbers || numbers.includes(number)).map(number => ({ number, index: layerIndex(viewer.getPageView(number - 1)?.div) })),
     isCurrent: pdf => !stopped && viewer?.pdfDocument === pdf,
     async waitForIdle(pdf) {
       while (!stopped && viewer?.pdfDocument === pdf
@@ -79,16 +79,18 @@
     highlight: text => select(Array.isArray(text) ? text : [text]),
     clear: () => select([]),
     showReviewPointer(editor, items, key) {
+      if (key && defaultPointer?.key === key && currentPointer(defaultPointer)) return;
       review.clearHighlights(true);
       if (!key) reviewPointer = null;
       const model = editor?.getModel();
       if (!model || !viewer?.pdfDocument || key && !diffHighlight || !items?.length && !key) return;
-      const index = locator.editorSourceIndex(model), entries = items.map(({ sourceStart, sourceEnd }) => sourceEntry(index, sourceStart, sourceEnd, true));
+      const index = locator.editorSourceIndex(model), data = locator.reviewLists.get(items);
+      const entries = data?.index === index ? data.entries : items.map(item => locator.sourceEntry(index, item.sourceStart, item.sourceEnd, true));
       const pointer = { editor, model, version: model.getVersionId?.(), pdf: viewer?.pdfDocument, entries, key };
       if (key) defaultPointer = pointer;
       else if (!selectionHighlight) reviewPointer = pointer;
       else if (!entries.every(entry => contexts.some(context => context.index === index && context.start <= entry.start && context.end >= entry.end)))
-        return select(entries.map(entry => entry.text), entries, true);
+        return select(entries, true);
       schedule();
     },
     clearReviewPointer(editor) {
@@ -165,10 +167,6 @@
     return pointer.pdf === viewer?.pdfDocument && pointer.editor === currentEditor() && pointer.model === pointer.editor.getModel()
       && pointer.version === pointer.model.getVersionId?.();
   }
-  function sourceEntry(index, start, end, marked, text = index.raw.slice(start, end)) {
-    return { index, start, end, marked, text,
-      before: index.raw.slice(Math.max(0, start - 160), start), after: index.raw.slice(end, end + 160) };
-  }
   function resetPdf() {
     defaultPointer = null;
     api.clearReviewPointer();
@@ -178,13 +176,13 @@
     clearLayers();
     window.dispatchEvent(new CustomEvent('pdf-selection-reset'));
   }
-  function select(texts, surroundings = [], plain = false) {
-    if (!selectionHighlight && texts.length) return;
+  function select(entries, plain = false) {
+    if (!selectionHighlight && entries.length) return;
     ++selectionRevision;
-    if (texts.length) lastInteraction = performance.now();
+    if (entries.length) lastInteraction = performance.now();
     const decode = text => (plain ? String(text || "") : locator.sourceIndex(String(text || "")).raw).trim();
-    contexts = texts.map((text, i) => {
-      const entry = surroundings[i] || {}, value = entry.marked ? text : decode(text);
+    contexts = entries.map(input => {
+      const entry = input && typeof input === 'object' ? input : { text: input }, text = entry.text, value = entry.marked ? text : decode(text);
       const start = entry.start + (plain && !entry.marked ? text.length - text.trimStart().length : 0);
       return { text: value, before: decode(entry.before || "").slice(-160),
         after: decode(entry.after || "").slice(0, 160), index: entry.index, start, end: start + value.length, marked: entry.marked };
@@ -252,9 +250,9 @@
       const entries = ranges.map(range => {
         const start = model.getOffsetAt(range.getStartPosition()), end = model.getOffsetAt(range.getEndPosition());
         const a = lowerBound(index.ends, start + 1), b = lowerBound(index.starts, end);
-        return sourceEntry(index, a, b, marked, end > start ? undefined : "");
+        return locator.sourceEntry(index, a, b, marked, end > start ? undefined : "");
       });
-      select(entries.map(entry => entry.text), entries, true);
+      select(entries, true);
 
     };
     for (const name of ["onDidChangeCursorSelection", "onDidChangeModel", "onDidChangeModelContent"]) {
@@ -283,7 +281,7 @@
         const selected = range.getRangeAt(0), before = doc.createRange(), after = doc.createRange();
         before.selectNodeContents(doc.body); before.setEnd(selected.startContainer, selected.startOffset);
         after.selectNodeContents(doc.body); after.setStart(selected.endContainer, selected.endOffset);
-        select([range.toString()], [{ before: before.toString(), after: after.toString() }], true);
+        select([{ text: range.toString(), before: before.toString(), after: after.toString() }], true);
       }
     };
     doc.addEventListener("selectionchange", read);
@@ -358,17 +356,9 @@
     const index = editor?.getModel() && locator.editorSourceIndex(editor.getModel());
     const targets = locator.environment.getTargets();
     window.dispatchEvent(new CustomEvent('pdf-selection-sources', { detail: {
-      editor: editor || activeEditor, pdf, targets, enabled: sourceDiffHighlight,
+      editor: editor || activeEditor, pdf, targets, enabled: sourceDiffHighlight, diffEnabled: diffHighlight,
       index
     } }));
-    if (diffHighlight && index) {
-      const { connections, items } = index.differences;
-      const key = [index, review.textEnabled, review.fontEnabled, ...(review.fontStyles || []), ...targets, ...connections.flatMap(([item, target]) => [item, target, target.fontVersion])];
-      if (!defaultPointer || !currentPointer(defaultPointer) || defaultPointer.key.length !== key.length || key.some((value, i) => value !== defaultPointer.key[i]))
-        api.showReviewPointer(editor, review.fontEnabled && review.fontStyles?.length === 1
-          ? index.formatDifferences(connections, true, review.fontStyles, items.filter(item => !item.font && review.textEnabled !== false))
-          : items.filter(item => item.font ? review.fontEnabled : review.textEnabled !== false), key);
-    }
   }
   async function discoverPdf() {
     if (hooking || stopped || !window.pdfjsLib) return;
@@ -427,9 +417,16 @@
   function trackSelection(doc) {
     if (selectionDocuments.has(doc)) return;
     selectionDocuments.add(doc);
-    listen(doc, 'pointerdown', event => { if (event.button === 0) selecting = true; }, true);
+    let preserving = false;
+    listen(doc, 'pointerdown', event => {
+      preserving = event.button === 0 && event.returningToWindow
+        && (viewer?.container.contains(event.target) || event.target.closest?.('.monaco-editor'));
+      if (preserving) { event.preventDefault(); event.stopPropagation(); return; }
+      if (event.button === 0) selecting = true;
+    }, true);
     const release = event => {
       selecting = false;
+      if (preserving) { preserving = false; return; }
       const publish = pendingDifference;
       pendingDifference = null;
       if (event.type === 'pointerup' && event.button === 0) {
@@ -455,6 +452,10 @@
         .sort(({ box: a, missing: am }, { box: b, missing: bm }) => Math.max(a.x - x, x - a.x - a.w, 0) - Math.max(b.x - x, x - b.x - b.w, 0)
           || Math.abs(x - a.x - a.w / 2) - Math.abs(x - b.x - b.w / 2) || Number(!!bm) - Number(!!am))[0];
       if (notice) { notifiedSelection = null; publishDifferences(div, painted, [notice], true); }
+      else if (event?.type === 'pointerup' && viewer.container.contains(event.target)) {
+        api.clearReviewPointer();
+        select([]);
+      }
       return;
     }
     if (!selectionHighlight || event?.type === 'pointerup') return;
@@ -467,14 +468,12 @@
       if (!layer || !range.intersectsNode(layer)) continue;
       if (sourcePages() && !sourcePages().includes(Number(div.dataset.pageNumber))) return;
       const index = layerIndex(div);
-      let start = null, end = null;
+      let start = 0, end = index.raw.length;
       for (const part of index.parts) {
-        if (!range.intersectsNode(part.node)) continue;
-        const a = range.startContainer === part.node ? range.startOffset : 0, b = range.endContainer === part.node ? range.endOffset : part.node.length;
-        if (a >= b) continue;
-        start ??= part.start + a; end = part.start + b;
+        if (range.startContainer === part.node) start = part.start + range.startOffset;
+        if (range.endContainer === part.node) end = part.start + range.endOffset;
       }
-      if (start !== null) chunks.push({ div, index, start, end });
+      if (start !== end) chunks.push({ div, index, start: Math.min(start, end), end: Math.max(start, end) });
     }
     if (!chunks.length) return;
     let editor = currentEditor();
@@ -577,8 +576,11 @@
       if (!visibleOnly && !entry.marked) return [entry];
       const connections = entry.index?.connectionPairs([...pageIndexes, documentIndex]);
       if (!connections?.length || connections.some(([range]) => range.start <= entry.start && range.end >= entry.end)) return [entry];
-      const ranges = connections.map(([range]) => [Math.max(entry.start, range.start), Math.min(entry.end, range.end)]).filter(([start, end]) => end > start);
-      return ranges.length ? ranges.map(([start, end]) => sourceEntry(entry.index, start, end, entry.marked)) : [entry];
+      const ranges = [...connections.map(([range]) => range),
+        ...entry.index.differences.items
+          .filter(item => item.missing).map(item => ({ start: item.sourceStart, end: item.sourceEnd }))]
+        .map(range => [Math.max(entry.start, range.start), Math.min(entry.end, range.end)]).filter(([start, end]) => end > start);
+      return ranges.length ? ranges.map(([start, end]) => locator.sourceEntry(entry.index, start, end, entry.marked)) : [entry];
     });
     const locations = entries.map(entry => {
       let index = documentIndex, hit = null, number;
@@ -590,17 +592,15 @@
       }
       if (!hit && index) hit = (entry.index && entry.index.connectedRange(index, entry.start, entry.end, false, undefined, true))
         || (!visibleOnly && index.locate(entry, entry.index && index.pageScopes.get(entry.index)?.scope));
-      const missingTargets = [...pageIndexes, documentIndex, ...(locator.environment.getTargets?.() || [])];
-      const missing = (!hit || entry.marked && entry.start === entry.end) && window.PdfReviewProvider?.textEnabled !== false && entry.index?.reviewCandidates(missingTargets, null, undefined, false)
+      const missing = (!hit || entry.marked && entry.start === entry.end) && window.PdfReviewProvider?.textEnabled !== false && entry.index?.differences.items
         .find(item => item.missing && (entry.start === entry.end ? entry.marked && entry.start >= item.sourceStart && entry.start <= item.sourceEnd
           : entry.start < item.sourceEnd && entry.end > item.sourceStart));
       if (missing) {
-        const source = { index: entry.index, start: entry.start < entry.end ? entry.start : missing.sourceStart,
-          end: entry.start < entry.end ? entry.end : missing.sourceEnd };
+        const source = { index: entry.index, start: entry.start < entry.end ? Math.max(entry.start, missing.sourceStart) : missing.sourceStart,
+          end: entry.start < entry.end ? Math.min(entry.end, missing.sourceEnd) : missing.sourceEnd };
         const difference = { html: entry.index.raw.slice(source.start, source.end), pdf: '', missing: true };
         const targets = visible.flatMap(({ number, index }) => {
-          const range = index?.raw.trim() && (entry.index.missingRange(index, missing.sourceStart, missing.sourceEnd, entry.start, entry.end)
-            || documentIndex?.sourcePages?.includes(number) && { start: 0, end: index.raw.length });
+          const range = index?.raw.trim() && entry.index.missingRange(index, missing.sourceStart, missing.sourceEnd, entry.start, entry.end);
           return range && range.end > range.start ? [{ pageNumber: number, range,
             start: source.start, end: source.end, marked: true, text: '', source, difference }] : [];
         });
@@ -774,10 +774,9 @@
     }
     const locations = locationSearch.locations;
     publishSources();
-    if (locations?.some(location => location.notice && !location.targets.length))
-      publishDifferences(null, null, locations.flatMap(location => location.notice && !location.targets.length ? [location.notice] : []), true);
+    publishDifferences(null, null, locations?.flatMap(location => location.notice && !location.targets.length ? [location.notice] : []) || [], true);
     const exact = locations?.flatMap(location => location.targets) || [];
-    const queries = locations?.filter(location => !location.targets.length).flatMap(location => location.queries || [location.entry.text]) || [];
+    const queries = locations?.flatMap(location => location.targets.length ? [] : location.queries || [location.entry.text]) || [];
     if (!positioned && exact.length) {
       await Promise.resolve();
       if (!current()) return;
