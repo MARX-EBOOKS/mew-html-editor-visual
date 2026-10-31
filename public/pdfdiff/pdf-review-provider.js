@@ -525,10 +525,11 @@ class PdfLocator {
   async indexFonts(pdf, source, signal, numbers) {
     const index = await this.indexDocument(pdf, numbers);
     if (!index || signal?.aborted) return null;
-    const ranges = source?.differences.connections.flatMap(([connection, target]) => target === index ? [connection] : []);
+    source?.diff();
+    const ranges = source?.preparation.pairs.flatMap(([connection, target]) => target === index ? [connection] : []);
     for (const entry of index.pages) {
-      if (source && !ranges?.some(hit => hit.targetStart < entry.end && hit.targetEnd > entry.start)
-        || entry.parts.every(part => part.font)) continue;
+      if (entry.parts.every(part => part.font)
+        || source && !ranges.some(hit => hit.targetStart < entry.end && hit.targetEnd > entry.start)) continue;
       if (signal?.aborted || !this.environment.isCurrent(pdf)) return null;
       // Share in-flight work too; separate reviews can request the same page.
       await (entry.fontTask ||= (async () => {
