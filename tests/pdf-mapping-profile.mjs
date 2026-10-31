@@ -13,8 +13,8 @@ assert.ok(fixture.pages?.length, 'The profile needs recorded PDF pages');
 const api = engine(), methods = {}, samples = [];
 let measuring = false;
 for (const [proto, names] of [
-  [api.PdfSourceIndex.prototype, ['sourcePageScope', 'rememberConnection', 'connectionDiff', 'sourceDecorations', 'formatDifferences', 'matches', 'reviewCandidates']],
-  [api.PdfLocator.prototype, ['sourceIndex', 'prepareSource']]
+  [api.PdfSourceIndex.prototype, ['diff', 'sourcePageScope', 'rememberConnection', 'connectionDiff', 'sourceDecorations', 'formatDifferences', 'matches', 'reviewCandidates']],
+  [api.PdfLocator.prototype, ['sourceIndex']]
 ]) for (const name of names) {
   const original = proto[name];
   assert.equal(typeof original, 'function', `Profile method moved: ${name}`);
@@ -44,10 +44,10 @@ for (let iteration = -3; iteration < iterations; iteration++) {
   }));
   measuring = iteration >= 0;
   const start = performance.now(), index = locator.sourceIndex(fixture.html);
-  locator.prepareSource(index, targets, {});
+  index?.diff(targets, {});
   const pairs = index.connectionPairs(targets);
-  const marks = index.sourceDecorations(pairs, { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) });
-  const candidates = index.reviewCandidates(targets);
+  const marks = index.sourceDecorations(index.reviewCandidates(null, true, false, true, [], pairs), true, true, undefined, { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) });
+  const candidates = index.reviewCandidates(null, false, true, true, targets);
   const elapsed = performance.now() - start;
   measuring = false;
   assert.ok(pairs.length && marks.length && candidates.length, 'Profile must exercise mapped differences');

@@ -17,7 +17,10 @@ export async function launchBrowser() {
 export async function stopServer(child) {
   if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
   const exited = once(child, 'exit');
-  child.kill();
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    await once(killer, 'close');
+  } else child.kill('SIGKILL');
   await exited;
 }
 

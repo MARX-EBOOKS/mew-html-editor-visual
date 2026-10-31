@@ -449,7 +449,7 @@ try {
       }
     });
   });
-  await pureReader.goto(`http://127.0.0.1:41872/?view=reader&sync=${session}&volume=1&page=1`);
+  await pureReader.goto(`http://127.0.0.1:41872/?view=reader&sync=${session}&volume=1&page=1&mode=visual`);
   await pureReader.waitForFunction(() => document.body.classList.contains('reader-only') && new URL(location.href).searchParams.get('page') === '1');
   assert.equal(await pureReader.evaluate(() => Boolean(window.readerMonaco)), false, 'pure reader does not initialize its internal Monaco editor');
   assert.equal(await pureReader.locator('.text-pane').isHidden(), true);
@@ -478,7 +478,8 @@ try {
   await pureReader.waitForFunction(() => new URL(location.href).searchParams.get('page') === '1');
   await click(pairedEditor, 'saveBtn');
   await diskEquals(readerFile, pairedDirty);
-  await pairedEditor.evaluate(() => mewWorkbench.openFile('1/ME01-002.html'));
+  await pureReader.evaluate(() => __readerHandlers.pdfPageChange({ pageNumber: 2, pageLabel: '2' }));
+  await pairedEditor.waitForFunction(() => mewWorkbench.editor.getModel()?.uri.path === '/1/ME01-002.html');
   await pureReader.waitForFunction(() => new URL(location.href).searchParams.get('page') === '2');
   await pairedEditor.close(); await pureReader.close();
   console.log('reader: split PDF / index.html page sync and save ownership passed');

@@ -105,8 +105,8 @@ try {
   await reader.waitForTimeout(400);
   await reader.evaluate(() => {
     window.previewPreparations = 0;
-    const prepare = PdfSelection.locator.prepareSource;
-    PdfSelection.locator.prepareSource = function (...args) { ++window.previewPreparations; return prepare.apply(this, args); };
+    const proto = PdfSelectionDiff.PdfSourceIndex.prototype, prepare = proto.diff;
+    proto.diff = function (...args) { ++window.previewPreparations; return prepare.apply(this, args); };
   });
   assert.notEqual(await editor.locator('.mew-review-proposed').first().evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)');
   assert.notEqual(await editor.locator('.mew-review-current').first().evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)');

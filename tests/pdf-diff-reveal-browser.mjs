@@ -63,10 +63,12 @@ try {
     const pdfClick = await page.evaluate(() => {
       const editor = readerMonaco.editor, viewer = ReaderUI.getPdfViewer();
       const index = PdfSelection.locator.editorSourceIndex(editor.getModel());
-      const range = index.rawRange(editor.getModel().getOffsetAt({lineNumber:testRange.startLineNumber,column:testRange.startColumn}),
-        editor.getModel().getOffsetAt({lineNumber:testRange.endLineNumber,column:testRange.endColumn}));
+      const range = {
+        start: PdfSelectionDiff.lowerBound(index.ends, editor.getModel().getOffsetAt({lineNumber:testRange.startLineNumber,column:testRange.startColumn}) + 1),
+        end: PdfSelectionDiff.lowerBound(index.starts, editor.getModel().getOffsetAt({lineNumber:testRange.endLineNumber,column:testRange.endColumn}))
+      };
       const div = viewer.getPageView(viewer.currentPageNumber-1).div, page = div.getBoundingClientRect();
-      const notice = PdfReviewProvider.getHighlight(div,true).notices.find(n=>n.source && n.source.start<range.end && n.source.end>range.start);
+      const notice = PdfReviewProvider.highlights.getHighlight(div,true).notices.find(n=>n.source && n.source.start<range.end && n.source.end>range.start);
       if (!notice) throw new Error('No PDF pointer for selected source difference');
       const box = notice.box;
       return {x:page.left+(box.x+box.w/2)*page.width,y:page.top+(box.y+box.h/2)*page.height};

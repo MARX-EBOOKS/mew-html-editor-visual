@@ -31,7 +31,7 @@ for (const name of (await readdir(new URL('./fixtures/', import.meta.url))).sort
         } });
       source.sourcePageScope(target, true);
       const pairs = (source.connections.get(target) || []).map(connection => [connection, target]);
-      const marks = source.sourceDecorations(pairs, { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) });
+      const marks = source.sourceDecorations(source.reviewCandidates(null, true, false, true, [], pairs), true, true, undefined, { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) });
       const elapsed = performance.now() - start;
       assert.ok(pairs.length, `${name}: no source/PDF mappings`);
       for (const [connection] of pairs) {

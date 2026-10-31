@@ -16,27 +16,31 @@ async function start(script, port, args) {
 function installFixtureReview() {
   window.fixtureReview = {
     content(state, item) {
+      assertContext(state);
       const edits = item?.options.flatMap(value => value.edits) || [];
       return { message: item?.label || '没有可审阅的差异。', options: item?.options || [],
-        range: edits.length ? PdfSelectionDiff.rangeAt(state.model, Math.min(...edits.map(edit => edit.start)), Math.max(...edits.map(edit => edit.end))) : null };
-    },
-    preview(state, wholeFile) {
-      const edits = (wholeFile ? state.items : [state.items[state.position]])
-        .flatMap(item => item.options.find(value => value.id === state.choices.get(item.id)).edits);
-      return { before: state.source, after: PdfSelectionDiff.previewEdits(state.source, edits), language: state.model.getLanguageId() };
+        range: edits.length ? PdfSelectionDiff.rangeAt(state.context.model, Math.min(...edits.map(edit => edit.start)), Math.max(...edits.map(edit => edit.end))) : null };
     },
     apply(state, all) {
+      assertContext(state);
       const edits = (all ? state.items : [state.items[state.position]])
         .flatMap(item => item.options.find(value => value.id === state.choices.get(item.id)).edits);
-      const checked = PdfSelectionDiff.validateEdits(state.source, edits);
+      const checked = PdfSelectionDiff.validateEdits(state.context.source, edits);
       const shift = offset => offset + checked.reduce((sum, edit) => sum + (edit.end <= offset ? edit.text.length - edit.end + edit.start : 0), 0);
       const before = state.items.slice(0, state.position).length;
       const items = all ? [] : state.items.filter((item, at) => at !== state.position).map(item => ({ ...item,
         options: item.options.map(value => ({ ...value, edits: value.edits.map(edit => ({ ...edit, start: shift(edit.start), end: shift(edit.end) })) })) }));
-      PdfSelectionDiff.applyEdits(state.editor, state.model, state.version, state.source, edits);
-      return { items, source: state.model.getValue(), version: state.model.getVersionId(), position: Math.min(before, Math.max(0, items.length - 1)) };
+      PdfSelectionDiff.applyEdits(state.context.editor, state.context.model, state.context.version, state.context.source, edits);
+      return { items, position: Math.min(before, Math.max(0, items.length - 1)) };
     }
   };
+  function assertContext(state) {
+    for (const key of ['editor', 'model', 'source', 'version']) {
+      if (Object.hasOwn(state, key)) throw new Error(`Duplicate review state: ${key}`);
+    }
+    if (state.context.source !== state.context.model.getValue() || state.context.version !== state.context.model.getVersionId())
+      throw new Error('Review context is stale');
+  }
 }
 try {
   await mkdir(path.join(fixture, '1'));
@@ -98,6 +102,23 @@ try {
     });
     assert.equal(bounds.above, true, 'popup sits above the source highlight when space permits');
     assert.equal(bounds.visible, true);
+    assert.equal(await popup.getAttribute('widgetid'), 'mew.replacement-review');
+    assert.equal(await popup.evaluate(node => !!node.closest('.contentWidgets')), true, 'Monaco owns popup placement');
+    await page.evaluate(async () => {
+      ReplacementReview.close();
+      const add = testEditor.addContentWidget;
+      // An editor without the content-widget API keeps the existing popup path.
+      testEditor.addContentWidget = undefined;
+      try { await ReplacementReview.open('fixture'); }
+      finally { testEditor.addContentWidget = add; }
+    });
+    assert.equal(await popup.evaluate(node => node.parentElement === document.body && getComputedStyle(node).position === 'fixed'), true);
+    assert.equal(await popup.getAttribute('widgetid'), null, 'fallback has no stale Monaco identity');
+    assert.equal(await popup.isVisible(), true);
+    await popup.locator('[data-next]').click();
+    assert.equal(await popup.locator('[data-position]').textContent(), '2 / 2', 'fallback retains navigation');
+    await page.evaluate(async () => { ReplacementReview.close(); fixtureCalls = 0; await ReplacementReview.open('fixture'); });
+    assert.equal(await popup.getAttribute('widgetid'), 'mew.replacement-review', 'reopening restores native placement');
     await popup.getByRole('button', { name: '下一条', exact: true }).click();
     assert.equal(await popup.locator('[data-position]').textContent(), '2 / 2');
     assert.equal(await page.evaluate(() => testEditor.getModel().getValueInRange(testEditor.getSelection())), 'WRONG', 'navigation selects the exact source field');
@@ -107,6 +128,9 @@ try {
     await page.waitForFunction(() => document.querySelector('[data-preview] .monaco-diff-editor'));
     await popup.locator('[data-file]').check();
     await page.waitForFunction(() => monaco.editor.getModels().some(model => model.getValue().includes('&lt;正确&gt; &amp; 𠀀')));
+    assert.equal(await page.evaluate(expected => monaco.editor.getModels().some(model => model !== testEditor.getModel() && model.getValue() === expected),
+      original.replace('<b>WR</b>ONG', '<b>&lt;正确&gt; &amp; 𠀀</b>')), true, 'expanded preview respects the selected edits and keep-original choice');
+    assert.equal(await page.evaluate(() => testEditor.getValue()), original, 'expanded preview leaves the source model unchanged');
     await popup.locator('[data-all]').click();
     await page.waitForFunction(() => testEditor.getValue().includes('&lt;正确&gt;'));
     assert.equal(await page.evaluate(() => testEditor.getValue()), original.replace('<b>WR</b>ONG', '<b>&lt;正确&gt; &amp; 𠀀</b>'), 'batch preserves tags/entities and respects per-item choices');
@@ -218,7 +242,7 @@ try {
       await page.waitForFunction(() => window.PdfSelection);
       await page.evaluate(() => { PdfSelection.attachViewer(mockViewer); PdfSelection.attachEditor(testEditor); });
       try { await page.waitForSelector('.mew-ocr-diff-text', { timeout: 7000 }); }
-      catch (error) { console.log(JSON.stringify(await page.evaluate(() => ({ status: PdfSelection.status, available: PdfSelectionDiff.monacoAvailable, value: testEditor.getValue(), marks: testEditor.getModel().getAllDecorations().map(item => ({ range: item.range, options: item.options })), editors: monaco.editor.getEditors().map(editor => ({ value: editor.getValue(), preview: !!editor.getOption(monaco.editor.EditorOption.inDiffEditor) })), scroll: testEditor.getScrollTop(), visible: testEditor.getVisibleRanges() })))); throw error; }
+      catch (error) { console.log(JSON.stringify(await page.evaluate(() => ({ status: PdfSelection.status, value: testEditor.getValue(), marks: testEditor.getModel().getAllDecorations().map(item => ({ range: item.range, options: item.options })), editors: monaco.editor.getEditors().map(editor => ({ value: editor.getValue(), preview: !!editor.getOption(monaco.editor.EditorOption.inDiffEditor) })), scroll: testEditor.getScrollTop(), visible: testEditor.getVisibleRanges() })))); throw error; }
       // ME04-117: selecting or clicking h/H must reach the shared review popup.
       const beforeCase = await page.evaluate(() => {
         const source = testEditor.getValue(), layer = document.querySelector('#testStage .textLayer span');

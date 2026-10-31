@@ -28,7 +28,7 @@ try {
       const textCount = await page.evaluate(() => {
         const locator = PdfSelection.locator, model = readerMonaco.editor.getModel();
         const target = locator.getDocumentIndex(ReaderUI.getPdfViewer().pdfDocument, ReaderUI.getPdfSourcePages());
-        return locator.editorSourceIndex(model).reviewCandidates([target]).length;
+        return locator.editorSourceIndex(model).reviewCandidates(null, false, true, true, [target]).length;
       });
       assert.ok(total >= textCount, `${entry} must include the prepared page's text candidates`);
       for (let position = 2; position <= total; position++) {

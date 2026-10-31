@@ -18,12 +18,12 @@ test('displaced OCR spaces do not paint wide bands while missing-text carets sta
         parts.push({ node: span.firstChild, start: raw.length, end: raw.length + span.textContent.length });
         raw += span.textContent;
       }
-      const index = { raw, partsInRange: () => parts };
+      const index = { raw, fontRuns: () => parts };
       const space = document.createRange(); space.selectNodeContents(parts[1].node);
       const tool = ReviewHighlights.create({ document });
       const hit = { start: 0, end: raw.length };
       const text = tool.measureHighlights(div, index, [hit], hit);
-      const caret = tool.measureHighlights(div, { raw, partsInRange: () => [parts[1]] },
+      const caret = tool.measureHighlights(div, { raw, fontRuns: () => [parts[1]] },
         [{ start: 5, end: 6, difference: { html: 'missing', pdf: ' ' } }]);
       return { boxes: text.boxes, caret: caret.boxes, raw: div.textContent, spaceWidth: space.getBoundingClientRect().width };
     });
@@ -46,7 +46,7 @@ test('highlight tool works without PDF modules and keeps consumers and decoratio
       const div = document.getElementById('text'), node = div.firstElementChild.firstChild;
       const first = ReviewHighlights.create({ document });
       const second = ReviewHighlights.create({ document, classes: { selection: 'other-highlight' } });
-      const index = { raw: node.data, parts: [{ node, start: 0, end: node.length }], partsInRange() { return this.parts; } };
+      const index = { raw: node.data, parts: [{ node, start: 0, end: node.length }], fontRuns() { return this.parts; } };
       const hit = { start: 6, end: 10 }, measured = first.measureHighlights(div, index, [hit], hit);
       const caret = first.measureHighlights(div, index, [{ start: 5, end: 5 }]);
       const painted = first.paintHighlight(div, measured.boxes, 'orange');
@@ -60,11 +60,11 @@ test('highlight tool works without PDF modules and keeps consumers and decoratio
         onDidChangeModel(callback) { modelChanged = callback; return { dispose() { subscriptions++; } }; }
       };
       const key = [index], decorations = () => { builds++; return []; };
-      first.updateSource(editor, key, decorations, '.marker{color:red}');
-      first.updateSource(editor, key, decorations, '.marker{color:red}');
+      first.updateSource(editor, key, decorations);
+      first.updateSource(editor, key, decorations);
       const cacheReused = updates === 1 && builds === 1;
       modelChanged();
-      first.updateSource(editor, key, decorations, '.marker{color:red}');
+      first.updateSource(editor, key, decorations);
       const range = { isEmpty: () => true, getStartPosition: () => ({ lineNumber: 1, column: 2 }) };
       const selectsMark = first.selectionRange(editor, {}, range) === mark;
       const dragKept = first.selectionRange(editor, {}, { isEmpty: () => false }) === null;

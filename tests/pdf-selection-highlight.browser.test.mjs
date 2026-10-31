@@ -189,6 +189,45 @@ test('review highlights all supplied occurrences across PDF pages and clears the
   } finally { await browser.close(); }
 });
 
+test('clicking PDF whitespace clears linked review highlights without repainting them', async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.setContent('<div id="stage"><div class="pdfViewer"><div class="page" data-page-number="1" style="position:relative;width:700px;height:300px"><div class="textLayer"><span>A distinct passage contains Word followed by enough unique context to identify its location.</span></div></div></div></div>');
+    await page.addScriptTag({ content: engineSource });
+    await page.addScriptTag({ content: `(() => { ${source} })();` });
+    await page.waitForFunction(() => window.PdfSelection, null, { timeout: 5000 });
+    await page.evaluate(() => {
+      const div = document.querySelector('.page'), text = div.textContent, markup = `<p>${text}</p>`;
+      PdfSelection.attachViewer({ container: document.getElementById('stage'), viewer: div.parentElement,
+        _getVisiblePages: () => ({ views: [{ id: 1 }] }), getPageView: () => ({ div }),
+        eventBus: { on() {}, off() {} }, pdfDocument: { numPages: 1, async getPage() { return {
+          async getTextContent() { return { items: [{ str: text, transform: [1, 0, 0, 1, 0, 100], width: 600, height: 20 }] }; }
+        }; } } });
+      const model = { getValue: () => markup, getVersionId: () => 1, getOffsetAt: position => position };
+      const at = markup.indexOf('Word');
+      window.reviewEditor = { getModel: () => model, getDomNode: () => null,
+        onDidChangeCursorSelection: () => ({ dispose() {} }),
+        getSelections: () => [{ getStartPosition: () => at, getEndPosition: () => at + 4 }], hasTextFocus: () => true };
+      PdfSelection.attachEditor(reviewEditor);
+      const index = PdfSelection.locator.editorSourceIndex(model), start = index.raw.indexOf('Word');
+      PdfSelection.showReviewPointer(reviewEditor, [{ sourceStart: start, sourceEnd: start + 4 }]);
+    });
+    await page.waitForFunction(() => PdfSelection.status.matches === 1);
+    assert.ok(await page.locator('.mew-pdf-selection-highlight').count());
+    await page.locator('.page').click({ position: { x: 500, y: 150 } });
+    await page.waitForTimeout(150);
+    assert.equal(await page.locator('.mew-pdf-selection-highlight').count(), 0);
+    await page.locator('.page').click({ position: { x: 550, y: 180 } });
+    await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+    await page.waitForTimeout(150);
+    assert.equal(await page.locator('.mew-pdf-selection-highlight').count(), 0, 'later clicks and refreshes keep the highlight cleared');
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test('browser draws HTML-only text as a visible PDF caret between text spans', async () => {
   const browser = await launchBrowser();
   try {
@@ -564,6 +603,56 @@ test('browser selects one contextual occurrence, scrolls offscreen, and retains 
     await page.waitForFunction(() => PdfSelection.status.state === 'idle' && PdfSelection.status.mode === 'fallback');
     assert.equal(await page.locator('.mew-pdf-selection-highlight > div').count(), 2);
     await page.evaluate(() => PdfSelection.stop());
+  } finally { await browser.close(); }
+});
+
+test('PDF selection uses the same visual endpoints in either direction despite interleaved footnotes', async () => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.route('http://selection.test/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === '/') return route.fulfill({ contentType: 'text/html', body: '<body></body>' });
+      if (path === '/api/reader/settings') return route.fulfill({ json: { diffHighlight: false, sourceDiffHighlight: false } });
+      const file = path.startsWith('/monaco/') ? 'node_modules/monaco-editor/' + path.slice(8) : 'public' + path;
+      return route.fulfill({ contentType: 'text/javascript', body: await readFile(new URL('../' + file, import.meta.url)) });
+    });
+    await page.goto('http://selection.test/');
+    await page.setContent(`<div id="stage"><div class="pdfViewer"><div class="page" data-page-number="1" style="position:relative;height:500px">
+      <div class="textLayer" style="font:20px serif">
+        <span id="profit" style="position:absolute;top:20px">profit, rent as the component parts of natural price.</span>
+        <span id="footnote" style="position:absolute;top:400px">A separate footnote belongs below the complete main passage.</span>
+        <span id="when" style="position:absolute;top:60px">When the price of any commodity is neither more nor less.</span>
+      </div></div></div></div>`);
+    await page.addScriptTag({ url: '/pdfdiff/pdf-selection.js' });
+    await page.waitForFunction(() => window.PdfSelection);
+    await page.evaluate(() => {
+      const div = document.querySelector('.page');
+      window.html = ['profit', 'when', 'footnote'].map(id => `<p>${document.getElementById(id).textContent}</p>`).join('');
+      window.targets = [];
+      const model = { getValue: () => html, getVersionId: () => 1, getPositionAt: at => ({ lineNumber: 1, column: at + 1 }) };
+      PdfSelection.attachEditor({ getDomNode: () => div, getModel: () => model, hasTextFocus: () => false, getSelections: () => [],
+        onDidChangeCursorSelection: () => ({ dispose() {} }), setSelection: range => targets.push(range) });
+      PdfSelection.attachViewer({ container: document.getElementById('stage'), viewer: document.querySelector('.pdfViewer'),
+        currentPageNumber: 1, getPageView: () => ({ div }), eventBus: { on() {}, off() {} }, pdfDocument: { numPages: 0 } });
+    });
+    for (const endpoints of [['profit', 0, 'when', 4], ['when', 4, 'footnote', 20]]) {
+      const results = [];
+      for (const backward of [false, true]) {
+        const expected = await page.evaluate(({ endpoints: [from, start, to, end], backward }) => {
+          targets.length = 0;
+          const a = document.getElementById(from).firstChild, b = document.getElementById(to).firstChild;
+          getSelection().setBaseAndExtent(backward ? b : a, backward ? end : start, backward ? a : b, backward ? start : end);
+          document.dispatchEvent(new Event('selectionchange'));
+          return html.slice(html.indexOf(a.textContent) + start, html.indexOf(b.textContent) + end);
+        }, { endpoints, backward });
+        await page.waitForFunction(() => targets.length);
+        const selected = await page.evaluate(() => html.slice(targets.at(-1).startColumn - 1, targets.at(-1).endColumn - 1));
+        assert.equal(selected, expected);
+        results.push(selected);
+      }
+      assert.equal(results[0], results[1]);
+    }
   } finally { await browser.close(); }
 });
 
@@ -1066,13 +1155,13 @@ test('ME08-366 normal OCR fonts remove HTML styles before whole-document indexin
       const results = [['<b>', '</b>'], ['<i>', '</i>'], ['<b><i>', '</i></b>']].map(([opening, closing]) => {
         const html = `<p>${body}</p><p style="text-indent: 0;">${opening}${footer}${closing}</p>`;
         const index = locator.sourceIndex(html);
-        locator.prepareSource(index, [target]);
-        const connections = index.connectionPairs([target]), items = index.formatDifferences(connections);
+        index?.diff([target]);
+        const connections = index.connectionPairs([target]), items = index.formatDifferences([], ['italic', 'bold'], true, connections);
         const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
-        return { html, raw: target.raw, texts: index.reviewCandidates([target]).length,
+        return { html, raw: target.raw, texts: index.reviewCandidates(null, false, true, true, [target]).length,
           items: items.map(item => item.text),
-          patched: PdfSelectionDiff.previewEdits(html, items.flatMap(item => item.options[0].edits)),
-          marks: index.sourceDecorations(connections, model).filter(mark => mark.options.inlineClassName.includes('mew-font-diff-text'))
+          patched: PdfSelectionDiff.applyTextEdits(html, items.flatMap(item => item.options[0].edits)),
+          marks: index.sourceDecorations(index.reviewCandidates(null, true, false, true, [], connections), true, true, undefined, model).filter(mark => mark.options.inlineClassName.includes('mew-font-diff-text'))
             .map(mark => html.slice(mark.range.startColumn - 1, mark.range.endColumn - 1)) };
       });
       PdfSelection.stop();

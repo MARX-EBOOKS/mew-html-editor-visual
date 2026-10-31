@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import test from 'node:test';
 import { launchBrowser } from './support/browser.mjs';
-import { reviewFile, popupSource, diffSource, engineSource, highlightSource, providerSource, fullReviewSource, fullProviderSource, source, readerMenu, engine } from './support/pdf-harness.mjs';
+import { reviewFile, popupSource, diffSource, engineSource, highlightSource, providerSource, providerSource as runtimeProviderSource, fullReviewSource, fullProviderSource, source, readerMenu, engine } from './support/pdf-harness.mjs';
 const PdfReviewProvider = engine();
 
 test('ME08-350 ready page highlights survive a raw diff dominated by OCR whitespace', async () => {
@@ -25,17 +25,17 @@ test('ME08-350 ready page highlights survive a raw diff dominated by OCR whitesp
     }));
     await page.addScriptTag({ content: engineSource });
     const result = await page.evaluate(async fixture => {
-      if (!await PdfSelectionDiff.loadMonaco()) throw new Error('Monaco diff must load');
+      if (!await PdfSelectionDiff.ready) throw new Error('Monaco diff must load');
       const locator = new PdfReviewProvider.PdfLocator({}, { document });
       locator.indexDocument = () => { throw new Error('ready-page highlighting must not index the volume'); };
       const index = locator.sourceIndex(fixture.source), target = new PdfSelectionDiff.PdfSourceIndex(locator, { raw: fixture.pdf });
-      locator.prepareSource(index, [target]);
+      index?.diff([target]);
       const connection = index.connections.get(target)[0], diff = index.connectionDiff(target, connection);
       if (!diff) throw new Error('OCR whitespace discarded the confirmed page diff');
       const editor = monaco.editor.create(document.getElementById('editor'), { value: fixture.source });
-      const items = index.reviewCandidates([target]), marks = index.sourceDecorations(index.connectionPairs([target]), editor.getModel());
+      const items = index.reviewCandidates(null, false, true, true, [target]), marks = index.sourceDecorations(index.reviewCandidates(null, true, false, true, [], index.connectionPairs([target])), true, true, undefined, editor.getModel());
       const collection = editor.createDecorationsCollection(marks); editor.render(true);
-      const corrected = PdfSelectionDiff.previewEdits(fixture.source, items.flatMap(item => item.options[0].edits));
+      const corrected = PdfSelectionDiff.applyTextEdits(fixture.source, items.flatMap(item => item.options[0].edits));
       // An unresolved whole-passage fallback must still be rejected.
       const broad = { ...connection, editorDiff: { distance: 129,
         parts: [{ html: index.raw, pdf: fixture.pdf, changed: true }] } };
@@ -98,11 +98,12 @@ test('Monaco selection matches share PDF review pointers, popup navigation and o
           offset = start + query.length;
         }
         raw += index.raw.slice(offset);
-        const target = new PdfReviewProvider.PdfSourceIndex(locator, { raw });
+        const target = new PdfSelectionDiff.PdfSourceIndex(locator, { raw });
         index.rememberConnection(0, index.raw.length, target, { start: 0, end: raw.length });
         const start = starts[1], end = start + query.length;
         const notice = { html: query, pdf: replacement, source: { index, start, end }, target: { index: target } };
-        editor.setSelection(index.sourceRange(model, start, end));
+        editor.setSelection(window.PdfSelectionDiff.rangeAt(model, index.starts[start] ?? index.source.length,
+          (end > start ? index.ends[(end) - 1] : index.starts[start]) ?? index.source.length));
         window.dispatchEvent(new CustomEvent('pdf-selection-difference', { detail: {
           editor, model, pdf, notices: [notice], targets: [target], interactionId: start
         } }));
@@ -141,10 +142,11 @@ test('Monaco selection matches share PDF review pointers, popup navigation and o
         const source = `<p>${letter}elcher ${letter}eit ${letter}aren ${letter}ollte ${letter}eit</p>`;
         const model = editor.getModel(); model.setValue(source);
         const index = locator.editorSourceIndex(model);
-        const target = new PdfReviewProvider.PdfSourceIndex(locator, { raw: index.raw.replaceAll(letter, 'W') });
+        const target = new PdfSelectionDiff.PdfSourceIndex(locator, { raw: index.raw.replaceAll(letter, 'W') });
         index.rememberConnection(0, index.raw.length, target, { start: 0, end: target.raw.length });
         const start = index.raw.indexOf(letter, letter.length), end = start + letter.length;
-        editor.setSelection(index.sourceRange(model, start, end));
+        editor.setSelection(window.PdfSelectionDiff.rangeAt(model, index.starts[start] ?? index.source.length,
+          (end > start ? index.ends[(end) - 1] : index.starts[start]) ?? index.source.length));
         let searches = 0;
         const findMatches = model.findMatches;
         model.findMatches = function (...args) { searches++; return findMatches.apply(this, args); };
@@ -214,8 +216,8 @@ test('Monaco selection matches share PDF review pointers, popup navigation and o
     assert.equal(patternColors[0], 'rgba(255, 196, 0, 0.42)', 'active matches use the deep selection color');
     await page.evaluate(async () => {
       const review = await PdfReviewReady, div = document.querySelector('#patternPdf .page');
-      const pointer = review.getHighlight(div, true);
-      review.paintHighlight(div, [pointer.boxes[0]], 'rgba(255, 196, 0, 0.42)');
+      const pointer = review.highlights.getHighlight(div, true);
+      review.highlights.paintHighlight(div, [pointer.boxes[0]], 'rgba(255, 196, 0, 0.42)');
     });
     assert.equal(await page.locator('#patternPdf .mew-pdf-selection-highlight:not(.mew-pdf-review-pointer)')
       .evaluate(node => getComputedStyle(node).visibility), 'hidden',
@@ -374,8 +376,7 @@ test('PDF.js detects four actual PDF faces in file review and native selections'
     });
     await page.goto('http://fonts.test/');
     await page.addScriptTag({ content: engineSource });
-    const providerSource = '(() => {\n' + fullReviewSource.split('// PDF comparison is one review provider. Selection synchronization remains independent.')[1]
-  .replace(/\r?\n  return window\.PdfReviewProvider;\r?\n\}\)\(\);\s*$/, '') + '\n})();';
+    const providerSource = runtimeProviderSource;
     const result = await page.evaluate(async ({ providerSource, highlightSource }) => {
       const lib = await import('/pdf.mjs');
       lib.GlobalWorkerOptions.workerSrc = '/pdf.worker.mjs';
@@ -409,12 +410,12 @@ test('PDF.js detects four actual PDF faces in file review and native selections'
       let liveHtml = html, version = 1;
       const model = { getValue: () => liveHtml, getVersionId: () => version, getPositionAt: at => ({ lineNumber: 1, column: at + 1 }) };
       const context = { model, source: html, signal: new AbortController().signal };
-      const items = await providers.get('pdf-font').provide(context);
+      const items = (await providers.get('pdf-font').locator.reviewItems(context)).items;
       const content = providers.get('pdf-font').content({ context, model: context.model, items, choices: new Map(items.map(item => [item.id, item.options[0].id])) }, items[0]);
       liveHtml = '<p>Regular\n<i>Italic</i>\n<b>Bold</b>\n<b><i>Both</i></b></p>'; version++;
-      const correct = await providers.get('pdf-font').provide({ ...context, source: liveHtml });
+      const correct = (await providers.get('pdf-font').locator.reviewItems({ ...context, source: liveHtml })).items;
       liveHtml = '<p>Regular\n<i>Italic</i>\n<b>Bold</b>\n<b>Both</b></p>'; version++;
-      const partial = await providers.get('pdf-font').provide({ ...context, source: liveHtml });
+      const partial = (await providers.get('pdf-font').locator.reviewItems({ ...context, source: liveHtml })).items;
       liveHtml = html; version++;
       new Function(highlightSource)();
       for (let i = 0; i < 100 && !window.PdfSelection; i++) await new Promise(resolve => setTimeout(resolve, 10));
@@ -502,7 +503,7 @@ test('format notices suppress matching and unknown styles and stay compact over 
         }
         visibleTarget = target;
       };
-      const target = new PdfReviewProvider.PdfSourceIndex(new PdfReviewProvider.PdfLocator(), { raw: index.raw, parts: [{ start: 0, end: index.raw.length, font: { bold: false, italic: false } }] });
+      const target = new PdfSelectionDiff.PdfSourceIndex(new PdfReviewProvider.PdfLocator(), { raw: index.raw, parts: [{ start: 0, end: index.raw.length, font: { bold: false, italic: false } }] });
       index.rememberConnection(0, index.raw.length, target, { start: 0, end: index.raw.length });
       window.addEventListener('pdf-selection-difference', event => { window.lastReviewNotice = event.detail; });
       window.sendNotice = (bold, italic, unmapped = false, textMismatch = false) => {
@@ -519,7 +520,7 @@ test('format notices suppress matching and unknown styles and stay compact over 
       window.selectFormatPassage = (normal = false, mismatch = false) => {
         sourceValue = normal ? '<p><i>Vorträge <a href="/keep">über</a> die Grundlagen</i></p>' : '<p>„Nur die Arbeit</p>'; sourceVersion++;
         const index = locator.editorSourceIndex(model);
-        const target = new PdfReviewProvider.PdfSourceIndex(new PdfReviewProvider.PdfLocator(), { raw: mismatch ? index.raw.replace('Vorträge', 'Vortrage') : index.raw, parts: normal
+        const target = new PdfSelectionDiff.PdfSourceIndex(new PdfReviewProvider.PdfLocator(), { raw: mismatch ? index.raw.replace('Vorträge', 'Vortrage') : index.raw, parts: normal
           ? [{ start: 0, end: index.raw.length, font: { bold: false, italic: false } }] : [
           { start: 0, end: 4, font: { bold: false, italic: true } },
           { start: 4, end: index.raw.length, font: { bold: false, italic: false } }
@@ -607,7 +608,7 @@ test('format notices suppress matching and unknown styles and stay compact over 
   } finally { await browser.close(); }
 });
 
-test('Monaco standalone renders native source-line and exact character decorations', async () => {
+test('Monaco standalone renders native character and insertion decorations', async () => {
   const browser = await launchBrowser();
   try {
     const page = await browser.newPage();
@@ -618,7 +619,7 @@ test('Monaco standalone renders native source-line and exact character decoratio
         if (route.request().method() === 'PUT') savedSettings = { ...savedSettings, ...route.request().postDataJSON() };
         return route.fulfill({ json: savedSettings });
       }
-      if (pathname === '/') return route.fulfill({ contentType: 'text/html', body: '<!doctype html><div id="editor" style="width:700px;height:400px"></div><style>.mew-ocr-diff-line{border-left:3px solid orange}.mew-ocr-diff-text{background:orange}</style>' });
+      if (pathname === '/') return route.fulfill({ contentType: 'text/html', body: '<!doctype html><div id="editor" style="width:700px;height:400px"></div><style>.mew-ocr-diff-text{background:orange}</style>' });
       if (!pathname.startsWith('/monaco/') || pathname.includes('..')) return route.abort();
       await route.fulfill({ contentType: pathname.endsWith('.css') ? 'text/css' : 'text/javascript',
         body: await readFile(new URL('../node_modules/monaco-editor/' + pathname.slice('/monaco/'.length), import.meta.url)) });
@@ -635,16 +636,17 @@ test('Monaco standalone renders native source-line and exact character decoratio
       await PdfReviewReady;
       window.editor = monaco.editor.create(document.getElementById('editor'), { value: 'first\naX&𠀀Z', wordWrap: 'on' });
       const model = editor.getModel(), raw = model.getValue();
-      window.marks = editor.createDecorationsCollection(new PdfReviewProvider.PdfSourceIndex(new PdfReviewProvider.PdfLocator(),
-        { raw, starts: [...Array(raw.length).keys()], ends: Array.from({ length: raw.length }, (_, i) => i + 1) }).sourceDecorations(
-        [[{ start: 0, end: raw.length, targetStart: 0, targetEnd: raw.length + 1 }, { raw: 'first\naY!𠀀Z+' }]], model));
+      const index = new PdfSelectionDiff.PdfSourceIndex(new PdfReviewProvider.PdfLocator(),
+        { raw, model, starts: [...Array(raw.length).keys()], ends: Array.from({ length: raw.length }, (_, i) => i + 1) });
+      window.marks = editor.createDecorationsCollection(index.sourceDecorations(index.reviewCandidates(null, true, false, true, [],
+        [[{ start: 0, end: raw.length, targetStart: 0, targetEnd: raw.length + 1 }, { raw: 'first\naY!𠀀Z+' }]])));
     });
-    await page.waitForSelector('.mew-ocr-diff-line');
+    assert.equal(await page.locator('.mew-ocr-diff-line').count(), 0, 'native decorations omit unused gutter marks');
     await page.waitForSelector('.mew-ocr-diff-text');
     assert.equal(await page.locator('.mew-ocr-diff-text').innerText(), 'X&');
     assert.equal(await page.evaluate(() => marks.getRange(0).startLineNumber), 2);
     await page.evaluate(() => marks.clear());
-    await page.waitForFunction(() => !document.querySelector('.mew-ocr-diff-line'));
+    await page.waitForFunction(() => !document.querySelector('.mew-ocr-diff-text,.mew-ocr-diff-insert'));
     await page.evaluate(() => {
       window.passage = 'A lengthy introductory passage establishes the source location with unique words. The reading has an X character in the middle. A second lengthy passage completes the unique context for this comparison. The ending contains a Q character for another comparison.';
       editor.getModel().setValue('<p>' + passage + '</p>');
@@ -654,9 +656,7 @@ test('Monaco standalone renders native source-line and exact character decoratio
     await page.evaluate(menu => {
       document.body.insertAdjacentHTML('beforeend', menu);
     }, readerMenu);
-    await page.addScriptTag({ content: '(() => {\n' + fullReviewSource
-      .split('// PDF comparison is one review provider. Selection synchronization remains independent.')[1]
-      .replace(/\r?\n  return window\.PdfReviewProvider;\r?\n\}\)\(\);\s*$/, '') + '\n})();' });
+    await page.addScriptTag({ content: runtimeProviderSource });
     await page.addScriptTag({ content: source });
     await page.waitForFunction(() => !!window.PdfSelection);
     await page.evaluate(() => {
@@ -766,7 +766,7 @@ test('Monaco standalone renders native source-line and exact character decoratio
       return { offset: model.getOffsetAt(mark.range.getStartPosition()), hover: mark.options.hoverMessage.value };
     });
     assert.equal(missing.offset, 3 + (await page.evaluate(() => passage.indexOf('reading'))) + 2);
-    assert.match(missing.hover, /OCR: "a"/);
+    assert.match(missing.hover, /\[PDF:\]\(command:[^)]+\) "a"/);
     await insertion.click();
     await page.waitForFunction(() => window.lastNotice?.notices[0]?.html === '' && lastNotice.notices[0].pdf === 'a');
     assert.equal(await page.evaluate(() => lastNotice.notices[0].html || lastNotice.notices[0].pdf), 'a');
@@ -786,8 +786,6 @@ test('Monaco standalone renders native source-line and exact character decoratio
     await page.waitForFunction(() => window.lastNotice);
     await page.evaluate(() => PdfSelection.clear());
     await page.waitForFunction(() => !window.lastNotice);
-    await page.locator('.mew-ocr-diff-line').click();
-    await page.waitForFunction(() => window.lastNotice?.notices[0]?.html === '' && lastNotice.notices[0].pdf === 'a');
     await page.evaluate(() => editor.getModel().setValue('<p>' + passage + '</p>'));
     await page.waitForFunction(() => !document.querySelector('.mew-ocr-diff-insert'));
     assert.equal(await page.locator('.mew-ocr-diff-line').count(), 0, 'restoring the missing character clears its marker');

@@ -19,8 +19,8 @@ try {
     const result = await page.evaluate(() => {
       const editor = readerMonaco.editor, locator = PdfSelection.locator, index = locator.editorSourceIndex(editor.getModel());
       const targets = locator.environment.getTargets();
-      locator.prepareSource(index, targets);
-      const target = targets.find(t => t.layer), candidates = index.reviewCandidates(targets);
+      index?.diff(targets);
+      const target = targets.find(t => t.layer), candidates = index.reviewCandidates(null, false, true, true, targets);
       const sentence = 'Beweise der Wahrheit und Beweise der Zuverlässigkeit!', at = index.raw.indexOf(sentence);
       const hit = index.connectedRange(target, at, at + sentence.length, false, undefined, true);
       const item = candidates.find(c => c.sourceStart >= at && c.comparison.pdf === 'aftigk');
@@ -48,7 +48,8 @@ try {
         const notice = event.detail.notices?.find(n => n.html === openingText);
         if (notice) window.openingNotice = notice;
       });
-      const range = index.sourceRange(editor.getModel(), start, start + text.length);
+      const range = window.PdfSelectionDiff.rangeAt(editor.getModel(), index.starts[start] ?? index.source.length,
+        (start + text.length > start ? index.ends[(start + text.length) - 1] : index.starts[start]) ?? index.source.length);
       editor.revealRangeInCenter(range);
       editor.setSelection(range);
     });
@@ -72,13 +73,14 @@ try {
   const before = await page.evaluate(() => {
     const editor = readerMonaco.editor, model = editor.getModel(), locator = PdfSelection.locator;
     const index = locator.editorSourceIndex(model), targets = locator.environment.getTargets();
-    const candidates = index.reviewCandidates(targets), at = index.raw.indexOf('597–601') + 3;
+    const candidates = index.reviewCandidates(null, false, true, true, targets), at = index.raw.indexOf('597–601') + 3;
     const item = candidates.find(c => c.sourceStart === at && c.sourceEnd === at + 1);
-    const range = index.sourceRange(model, at, at + 1);
+    const range = window.PdfSelectionDiff.rangeAt(model, index.starts[at] ?? index.source.length,
+      (at + 1 > at ? index.ends[(at + 1) - 1] : index.starts[at]) ?? index.source.length);
     const marks = model.getAllDecorations().filter(d => d.options.inlineClassName?.includes('mew-ocr-diff'));
     const des = index.raw.indexOf('des deutschen');
     const div = ReaderUI.getPdfViewer().getPageView(433).div;
-    const pointer = PdfReviewProvider.getHighlight(div, true)?.notices.find(n => n.source?.start === at && n.source.end === at + 1);
+    const pointer = PdfReviewProvider.highlights.getHighlight(div, true)?.notices.find(n => n.source?.start === at && n.source.end === at + 1);
     window.me08DashRange = range;
     editor.revealRangeInCenter(range); editor.render(true);
     return { comparison: item?.comparison, collapsed: editor.getSelection().isEmpty(), source: editor.getValue(),

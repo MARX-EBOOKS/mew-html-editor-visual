@@ -43,7 +43,7 @@ try {
       require.config({ paths: { vs: '/monaco/min/vs' } }); require(['vs/editor/editor.main'], resolve);
     }));
     await page.addScriptTag({ content: source + '\n' + highlightSource });
-    await page.evaluate(() => PdfSelectionDiff.loadMonaco());
+    await page.evaluate(() => PdfSelectionDiff.ready);
     const rows = await page.evaluate(async ({ fixtures, cold }) => {
       const opened = performance.now();
       const rows = [], editor = monaco.editor.create(document.getElementById('editor'), {
@@ -67,18 +67,21 @@ try {
         let marks, candidates;
         for (let round = 0; round < 31; round++) {
           const start = cold && !round ? opened : performance.now(), index = locator.sourceIndex(f.html);
-          locator.prepareSource(index, targets, {});
+          index?.diff(targets, {});
           const prepared = performance.now();
-          highlights.updateSource(editor, [index], () => marks = index.sourceDecorations(index.connectionPairs(targets), editor.getModel()),
+          highlights.updateSource(editor, [index], () => marks = index.sourceDecorations(index.reviewCandidates(null, true, false, true, [], index.connectionPairs(targets)), true, true, undefined, editor.getModel()),
             '.mew-ocr-diff-text{background:rgba(255,166,40,.3);border-bottom:1px solid #d58b24}.mew-ocr-diff-line{border-left:3px solid #d58b24}.mew-ocr-diff-insert{border-left:2px solid #d58b24}');
           editor.render(true);
           const end = performance.now();
           times.push(end-start); renderTimes.push(end-prepared);
           if (collection.length !== marks.length) throw new Error('Not all decorations were applied');
-          candidates = index.reviewCandidates(targets);
+          candidates = index.reviewCandidates(null, false, true, true, targets);
           for (const candidate of candidates) {
             const segments = index.sourceSegments(candidate.sourceStart, candidate.sourceEnd);
-            if (!segments.length) segments.push(index.insertionSegment(candidate.sourceStart));
+            if (!segments.length) {
+              const at = index.starts[candidate.sourceStart] ?? index.ends[candidate.sourceStart - 1] ?? 0;
+              segments.push({ start: at, end: at });
+            }
             for (const segment of segments) {
               const a = editor.getModel().getPositionAt(segment.start), b = editor.getModel().getPositionAt(segment.end);
               if (!marks.some(({range:r}) =>

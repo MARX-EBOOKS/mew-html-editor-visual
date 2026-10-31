@@ -50,17 +50,17 @@ try {
     // Neither document comparison nor format indexing may reopen/extract PDF pages.
     pdf.getPage = () => { throw new Error('Unexpected PDF extraction'); };
     const source = locator.sourceIndex('<p>Normal surrounding text for stable alignment.</p><p>Italic passage with enough letters.</p><p>Bold passage with enough letters.</p><p>Another WRONG reading here.</p>');
-    locator.prepareSource(source, [index], pdf);
+    source?.diff([index], pdf);
     await locator.indexFonts(pdf, source);
     const connections = (source.connections.get(index) || []).map(connection => [connection, index]);
     const canonical = locator.sourceIndex('<p>Normal surrounding text for stable alignment.</p><p><em>Italic passage with enough letters.</em></p><p><strong>Bold passage with enough letters.</strong></p><p>Another correct reading here.</p>');
-    locator.prepareSource(canonical, [index], pdf);
-    const canonicalFormats = canonical.formatDifferences((canonical.connections.get(index) || []).map(connection => [connection, index]));
+    canonical?.diff([index], pdf);
+    const canonicalFormats = canonical.formatDifferences([], ['italic', 'bold'], true, (canonical.connections.get(index) || []).map(connection => [connection, index]));
     return { url: pdf.ocrTextUrl, raw: index.raw,
       canonicalFormats: canonicalFormats.length,
       runs: index.fontRuns(),
-      formats: source.formatDifferences(connections).map(item => ({ text: item.text, font: item.font })),
-      texts: source.reviewCandidates([index]).map(item => item.comparison),
+      formats: source.formatDifferences([], ['italic', 'bold'], true, connections).map(item => ({ text: item.text, font: item.font })),
+      texts: source.reviewCandidates(null, false, true, true, [index]).map(item => item.comparison),
       same: index === await locator.indexDocument(pdf), cached: !index.textLayer,
       geometryFree: index.pages.every(page => page.parts.every(part => !part.item && !part.bbox)),
       blocks: index.pages[0].blocks.length };
@@ -157,21 +157,21 @@ try {
     observer.observe(layer, { childList: true, subtree: true });
     const index = { layer, highlighter, observer, raw: strings.join('') };
     const start = index.raw.lastIndexOf('repeat'), hit = { start, end: start + 6 };
-    const result = PdfReviewProvider.measureHighlights(div, index, [hit], hit);
-    PdfReviewProvider.paintHighlight(div, result.boxes, 'gold');
+    const result = PdfReviewProvider.highlights.measureHighlights(div, index, [hit], hit);
+    PdfReviewProvider.highlights.paintHighlight(div, result.boxes, 'gold');
     const marked = () => [...layer.querySelectorAll('.highlight')].map(span => span.textContent);
     const combined = marked();
-    const pointer = PdfReviewProvider.measureHighlights(div, index, [{ start: 7, end: 9 }]);
-    PdfReviewProvider.paintHighlight(div, pointer.boxes, 'gold', true);
+    const pointer = PdfReviewProvider.highlights.measureHighlights(div, index, [{ start: 7, end: 9 }]);
+    PdfReviewProvider.highlights.paintHighlight(div, pointer.boxes, 'gold', true);
     const unicodeMarked = marked().includes('😀');
-    PdfReviewProvider.clearHighlights(false);
+    PdfReviewProvider.highlights.clearHighlights(false);
     const pointerSurvives = marked().includes('😀') && !spans[3].querySelector('.highlight');
-    PdfReviewProvider.clearHighlights(true);
+    PdfReviewProvider.highlights.clearHighlights(true);
     const restored = marked();
-    const insertion = PdfReviewProvider.measureHighlights(div, index, [{ start: 10, end: 10 }]);
-    PdfReviewProvider.paintHighlight(div, insertion.boxes, 'gold');
+    const insertion = PdfReviewProvider.highlights.measureHighlights(div, index, [{ start: 10, end: 10 }]);
+    PdfReviewProvider.highlights.paintHighlight(div, insertion.boxes, 'gold');
     const caret = !!layer.querySelector('.highlight.appended:empty');
-    PdfReviewProvider.clearHighlights(); highlighter.disable(); observer.disconnect(); div.remove();
+    PdfReviewProvider.highlights.clearHighlights(); highlighter.disable(); observer.disconnect(); div.remove();
     return { combined, unicodeMarked, pointerSurvives, restored, caret,
       unchanged: strings.join('') === index.raw, noOverlay: !div.querySelector('.mew-pdf-selection-highlight') };
   });

@@ -24,14 +24,14 @@ test('ME08-432 paints both missing word endings on first preparation without sel
     await page.addScriptTag({ content: engineSource });
     await page.addStyleTag({ content: reviewFile.match(/'(\.mew-ocr-diff-line\{[^']+)'/)[1] });
     const result = await page.evaluate(async fixture => {
-      await PdfSelectionDiff.loadMonaco();
+      await PdfSelectionDiff.ready;
       const locator = new PdfReviewProvider.PdfLocator({}, { document });
       const index = locator.sourceIndex(fixture.source), target = new PdfSelectionDiff.PdfSourceIndex(locator, { raw: fixture.pdf });
-      locator.prepareSource(index, [target]);
+      index?.diff([target]);
       const editor = monaco.editor.create(document.getElementById('editor'), { value: fixture.source, wordWrap: 'on' });
-      const marks = index.sourceDecorations(index.connectionPairs([target]), editor.getModel());
+      const marks = index.sourceDecorations(index.reviewCandidates(null, true, false, true, [], index.connectionPairs([target])), true, true, undefined, editor.getModel());
       editor.createDecorationsCollection(marks); editor.render(true);
-      const candidates = index.reviewCandidates([target]), endings = [];
+      const candidates = index.reviewCandidates(null, false, true, true, [target]), endings = [];
       for (const [word, letter] of [['sag', 't'], ['Stiebe', 'r']]) {
         const at = index.raw.indexOf('sag Stiebe') + (word === 'sag' ? 3 : 10);
         const candidate = candidates.find(c => c.sourceStart === at && c.sourceEnd === at && c.comparison.pdf === letter);
@@ -41,7 +41,7 @@ test('ME08-432 paints both missing word endings on first preparation without sel
         endings.push({ word, letter, candidate: !!candidate, marked: !!mark,
           collapsed: mark && mark.range.startColumn === mark.range.endColumn,
           mapped: hit && target.raw.slice(hit.start, hit.end),
-          corrected: candidate && PdfSelectionDiff.previewEdits(fixture.source, candidate.options[0].edits).includes(word + letter) });
+          corrected: candidate && PdfSelectionDiff.applyTextEdits(fixture.source, candidate.options[0].edits).includes(word + letter) });
       }
       return { endings, selection: editor.getSelection().isEmpty() };
     }, fixture);

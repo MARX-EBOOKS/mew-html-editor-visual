@@ -27,12 +27,13 @@ try {
     const index = PdfSelection.locator.editorSourceIndex(editor.getModel());
     const target = window.coldIndex;
     if (!target) return false;
-    const candidate = index.reviewCandidates([target]).find(item => {
+    const candidate = index.reviewCandidates(null, false, true, true, [target]).find(item => {
       const hit = index.connectedRange(target, item.sourceStart, item.sourceEnd, false, undefined, true);
       return hit && target.pages.some(p => p.number === 452 && hit.start >= p.start && hit.start < p.end);
     });
     if (!candidate) return false;
-    window.coldRange = index.sourceRange(editor.getModel(), candidate.sourceStart, candidate.sourceEnd);
+    window.coldRange = window.PdfSelectionDiff.rangeAt(editor.getModel(), index.starts[candidate.sourceStart] ?? index.source.length,
+      (candidate.sourceEnd > candidate.sourceStart ? index.ends[(candidate.sourceEnd) - 1] : index.starts[candidate.sourceStart]) ?? index.source.length);
     return true;
   }, null, { timeout: 15000 });
   const before = await page.evaluate(() => {

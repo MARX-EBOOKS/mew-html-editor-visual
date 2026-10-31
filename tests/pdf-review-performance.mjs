@@ -36,7 +36,7 @@ for (const size of sizes) {
   ]).flat();
   source.connections.set(target, [{ start: 0, end: source.raw.length,
     targetStart: 0, targetEnd: target.raw.length, editorDiff: { parts } }]);
-  measure('review candidates', size, () => source.reviewCandidates([target]), items => {
+  measure('review candidates', size, () => source.reviewCandidates(null, false, true, true, [target]), items => {
     assert.equal(items.length, size);
     items.forEach((item, i) => {
       assert.equal(item.sourceStart, i * 2);
@@ -51,7 +51,7 @@ for (const size of sizes) {
   const connection = { start: 0, end: size, targetStart: 0, targetEnd: size,
     editorDiff: { parts: [{ html: fragmented.raw, pdf: pdf.raw, changed: true }] } };
   const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
-  measure('fragmented decorations', size, () => fragmented.sourceDecorations([[connection, pdf]], model), marks => {
+  measure('fragmented decorations', size, () => fragmented.sourceDecorations(fragmented.reviewCandidates(null, true, false, true, [], [[connection, pdf]]), true, true, undefined, model), marks => {
     assert.equal(marks.length, size);
     marks.forEach((mark, i) => {
       assert.equal(mark.range.startColumn, fragmented.starts[i] + 1);
@@ -65,11 +65,11 @@ for (const size of [1, 12, 48]) {
   const source = owner.sourceIndex(raw), pdf = {};
   const pages = Array.from({ length: size }, () => new api.PdfSourceIndex(owner, { raw }));
   for (const page of pages) source.rememberConnection(0, raw.length, page, { start: 0, end: raw.length });
-  owner.prepareSource(source, pages, pdf);
+  source?.diff(pages, pdf);
   const expected = source.connectionPairs(pages);
   assert.ok(expected.length, 'cached preparation needs real retained connections');
   measure('cached preparation x100', size, () => {
-    for (let i = 0; i < 100; i++) owner.prepareSource(source, pages, pdf);
+    for (let i = 0; i < 100; i++) source?.diff(pages, pdf);
     return source.connectionPairs(pages);
   }, pairs => assert.deepEqual(pairs, expected));
 }

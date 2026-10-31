@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import test from 'node:test';
-import { locator } from './support/pdf-harness.mjs';
+import { engine, locator } from './support/pdf-harness.mjs';
 
 const source = await readFile(new URL('../public/pdfdiff/pdf-selection.js', import.meta.url), 'utf8');
 const start = source.indexOf('  function queueWarm('), end = source.indexOf('  function warm(', start);
@@ -77,6 +77,21 @@ function section(from, to) {
   assert.ok(start >= 0 && end > start);
   return source.slice(start, end);
 }
+test('PDF selection chrome keeps the OCR index while content and font changes invalidate it', () => {
+  const layer = { textContent: 'OCR' }, sentinel = { textContent: '' }, span = { textContent: 'word' }, div = {};
+  const state = { layers: new Map() };
+  vm.runInNewContext(section('  function clearLayer(div,', '  function currentPointer('), state);
+  const invalidate = records => {
+    state.layers.set(div, { layer, observer: { disconnect() {} } });
+    return state.clearLayer(div, records);
+  };
+  const change = (target, addedNodes = [], removedNodes = []) => ({ type: 'childList', target, addedNodes, removedNodes });
+  assert.equal(invalidate([change(layer, [sentinel], [sentinel]),
+    { type: 'attributes', target: layer }, { type: 'attributes', target: sentinel }]), false);
+  for (const record of [change(layer, [span]), change(layer, [], [span]),
+    { type: 'characterData', target: { textContent: '' } }, { type: 'attributes', target: span }])
+    assert.equal(invalidate([record]), true);
+});
 function pointers(items = [{ sourceStart: 0, sourceEnd: 1 }]) {
   const model = { getVersionId: () => 1 }, editor = { getModel: () => model }, pdf = {};
   const index = { raw: 'abcdef', connectionPairs: () => [], reviewCandidates: () => items, formatDifferences: () => [] };
@@ -183,10 +198,12 @@ test('empty source ranges remain collapsed across tags and at document boundarie
   const index = locator().sourceIndex('<p>one</p><p>two</p>');
   const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
   for (let at = 0; at <= index.raw.length; at++) {
-    const range = index.sourceRange(model, at, at);
+    const range = engine().rangeAt(model, index.starts[at] ?? index.source.length,
+      index.starts[at] ?? index.source.length);
     assert.equal(range.startColumn, range.endColumn);
   }
-  const range = index.sourceRange(model, 4, 7);
+  const range = engine().rangeAt(model, index.starts[4] ?? index.source.length,
+    (7 > 4 ? index.ends[(7) - 1] : index.starts[4]) ?? index.source.length);
   assert.equal(range.startColumn, 14);
   assert.equal(range.endColumn, 17);
 });

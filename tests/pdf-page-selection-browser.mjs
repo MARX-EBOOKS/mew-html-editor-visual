@@ -35,7 +35,7 @@ try {
       const index = locator.editorSourceIndex(model), visible = locator.environment.getVisiblePages().find(p => p.index?.layer);
       if (!visible) throw new Error('No rendered page');
       const target = visible.index, div = ReaderUI.getPdfViewer().getPageView(visible.number - 1).div;
-      locator.prepareSource(index, [target], ReaderUI.getPdfViewer().pdfDocument);
+      index?.diff([target], ReaderUI.getPdfViewer().pdfDocument);
       const start = index.raw.indexOf(fixture.selection.from), end = index.raw.indexOf(fixture.selection.to, start) + fixture.selection.to.length;
       const hit = index.connectedRange(target, start, end, false, undefined, true);
       if (!hit) throw new Error('No forward selection alignment');
@@ -43,7 +43,8 @@ try {
       const reading = PdfSelectionDiff.significantText(measured), reference = PdfSelectionDiff.significantText(expected);
       if (reading !== reference)
         throw new Error('Wrong PDF selection: ' + JSON.stringify(measured));
-      const range = index.sourceRange(model, start, end);
+      const range = window.PdfSelectionDiff.rangeAt(model, index.starts[start] ?? index.source.length,
+        (end > start ? index.ends[(end) - 1] : index.starts[start]) ?? index.source.length);
       window.pageSelection = { index, target, div, hit, range, source: model.getValue() };
       return { start: model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn }),
         end: model.getOffsetAt({ lineNumber: range.endLineNumber, column: range.endColumn }) };
@@ -67,10 +68,10 @@ try {
       readerMonaco.editor.setPosition({ lineNumber: 1, column: 1 });
       readerMonaco.editor.setSelection(pageSelection.range);
     });
-    await page.waitForFunction(() => PdfSelection.status.state === 'idle' && PdfSelection.status.matches === 1 && PdfReviewProvider.getHighlight(pageSelection.div));
+    await page.waitForFunction(() => PdfSelection.status.state === 'idle' && PdfSelection.status.matches === 1 && PdfReviewProvider.highlights.getHighlight(pageSelection.div));
     const painted = await page.evaluate(() => {
-      const { div, target, hit } = pageSelection, actual = PdfReviewProvider.getHighlight(div);
-      const expected = PdfReviewProvider.measureHighlights(div, target, [hit]).boxes;
+      const { div, target, hit } = pageSelection, actual = PdfReviewProvider.highlights.getHighlight(div);
+      const expected = PdfReviewProvider.highlights.measureHighlights(div, target, [hit]).boxes;
       return { actual: actual.boxes, expected };
     });
     assert.deepEqual(painted.actual, painted.expected, `ME08-${fixture.number}: highlights cover the exact mapped range`);

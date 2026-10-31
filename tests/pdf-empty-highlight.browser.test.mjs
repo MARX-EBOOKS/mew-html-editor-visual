@@ -49,7 +49,7 @@ test('single-character highlights and ME08-427 insertions open review from both 
         } }; } };
         PdfSelection.attachViewer(mockViewer); PdfSelection.attachEditor(testEditor);
       }, { source, raw });
-      const mark = pdf === 'SoX wenig' ? page.locator('.mew-ocr-diff-insert').first()
+      const mark = pdf === 'SoX wenig' || pdf === 'So Xwenig' ? page.locator('.mew-ocr-diff-insert').first()
         : page.locator('.mew-ocr-diff-text').filter({ hasText: html === 'So awenig' ? /^a$/u : /^[ \u00a0]+$/u }).first();
       await page.evaluate(() => {
         const model = testEditor.getModel(), at = model.getValue().indexOf('So ') + 2;

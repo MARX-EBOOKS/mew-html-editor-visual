@@ -15,10 +15,10 @@ test('unknown PDF styles do not scan HTML formats while text differences remain 
     return Reflect.get(values, key);
   } });
   const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
-  const marks = source.sourceDecorations([[connection, target]], model);
+  const marks = source.sourceDecorations(source.reviewCandidates(null, true, false, true, [], [[connection, target]]), true, true, undefined, model);
   assert.ok(marks.some(mark => mark.options.description === 'PDF OCR text difference'));
   assert.equal(reads, 0, 'unknown PDF styles cannot establish a format mismatch');
   target.parts[0].font.bold = false;
-  assert.ok(source.formatDifferences([[connection, target]]).length);
+  assert.ok(source.formatDifferences([], ['italic', 'bold'], true, [[connection, target]]).length);
   assert.ok(reads > 0, 'known styles still compare against HTML formatting');
 });

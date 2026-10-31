@@ -98,7 +98,7 @@ class ReaderBackendTests(unittest.TestCase):
                     self.fail('Node reader did not start')
                 time.sleep(0.02)
 
-        for path in ('/api/reader/config', '/api/reader/page/1/1', '/api/reader/link/1/1',
+        for path in ('/api/reader/config', '/api/reader/settings', '/api/reader/page/1/1', '/api/reader/link/1/1',
                      '/api/reader/locate?path=pages%2FME01-001.html', '/api/tree',
                      '/api/file?path=pages%2FME01-001.html',
                      '/api/reader/resource/1/ME01-001.html', '/raw/pages/ME01-001.html',
@@ -252,6 +252,17 @@ class ReaderBackendTests(unittest.TestCase):
         with self.request('/api/reader/config') as response:
             self.assertEqual(json.load(response)['volumes'][0]['pages'], [1])
 
+    def test_reader_page_starts_in_saved_workspace_mode(self):
+        self.start()
+        settings_file = self.root / 'settings.json'
+        with patch.object(backend, 'SETTINGS_FILE', settings_file):
+            for split in (True, False):
+                settings_file.write_text(json.dumps(dict(splitView=split)), 'utf-8')
+                for path, expected in (('/', split), ('/reader.html', split),
+                                       ('/reader.html?view=combined', False), ('/reader.html?view=reader', True)):
+                    with self.request(path) as response:
+                        self.assertEqual('<body class="reader-only">' in response.read().decode(), expected, path)
+
     def test_browser_offsets_are_utf16_and_canonical_runs_keep_font_indexes(self):
         generate_pdf_text(self.pdf, self.root)
         index = PdfTextIndex(self.pdf, cache_dir=self.root)
@@ -343,6 +354,20 @@ class ReaderBackendTests(unittest.TestCase):
         self.assertEqual(PdfTextIndex(self.pdf, cache_dir=self.root).browser(), index.browser())
         self.assertEqual([target.parent.name], [p.name for p in target.parent.parent.iterdir()])
 
+    def test_locate_only_resolves_the_matching_file(self):
+        volume = self.library.volumes[0]
+        volume['pageFiles'].update({n: f'ME01-{n:03}.html' for n in range(2, 2001)})
+        volume['pages'] = sorted(volume['pageFiles'])
+        self.start()
+        with patch.object(self.library, 'editor_path', wraps=self.library.editor_path) as editor_path:
+            with self.request('/api/reader/locate?path=pages%2FME01-2000.html') as response:
+                self.assertEqual(json.load(response), dict(volume='1', page=2000, path='pages/ME01-2000.html'))
+            editor_path.assert_called_once_with(volume, 2000)
+            with self.assertRaises(HTTPError) as missing:
+                self.request('/api/reader/locate?path=elsewhere%2FME01-2000.html')
+            self.assertEqual(missing.exception.code, 404)
+            self.assertEqual(editor_path.call_count, 1)
+
     def test_page_links_settings_and_exact_newlines(self):
         self.start()
         source = self.root / 'pages/ME01-001.html'
@@ -358,10 +383,37 @@ class ReaderBackendTests(unittest.TestCase):
         with self.request('/api/reader/locate?path=pages%2FME01-001.html') as response:
             self.assertEqual(json.load(response)['page'], 1)
         with patch.object(backend, 'SETTINGS_FILE', self.root / 'settings.json'):
-            with self.request('/api/reader/settings', dict(brightness=120, paper='#123456'), 'PUT') as response:
-                self.assertEqual(json.load(response)['brightness'], 120)
             with self.request('/api/reader/settings') as response:
-                self.assertEqual(json.load(response)['paper'], '#123456')
+                defaults = json.load(response)
+                self.assertEqual(defaults['editorScale'], 1)
+                self.assertEqual(defaults['tagScale'], 1)
+                self.assertFalse(defaults['splitView'])
+            with self.request('/api/reader/settings', dict(brightness=120, paper='#123456', editorScale=1.3, tagScale=1.1, splitView=True), 'PUT') as response:
+                self.assertEqual(json.load(response)['brightness'], 120)
+            for patch_value in [dict(italicDetection=False), dict(boldDetection=False),
+                                dict(italicDetection=True), dict(brightness=110)]:
+                with self.request('/api/reader/settings', patch_value, 'PUT') as response:
+                    saved = json.load(response)
+            self.assertTrue(saved['italicDetection'])
+            self.assertFalse(saved['boldDetection'])
+            with self.request('/api/reader/settings') as response:
+                loaded = json.load(response)
+                self.assertEqual(loaded['paper'], '#123456')
+                self.assertEqual(loaded['editorScale'], 1.3)
+                self.assertEqual(loaded['tagScale'], 1.1)
+                self.assertTrue(loaded['italicDetection'])
+                self.assertFalse(loaded['boldDetection'])
+                self.assertTrue(loaded['splitView'])
+            self.assertEqual(json.loads((self.root / 'settings.json').read_text('utf-8')), loaded)
+            with self.request('/api/reader/settings', dict(splitView=False), 'PUT') as response:
+                saved = json.load(response)
+                self.assertFalse(saved['splitView'])
+                self.assertEqual(saved['editorScale'], 1.3)
+            for value in (None, '', 'invalid', True):
+                with self.request('/api/reader/settings', dict(editorScale=value, tagScale=value), 'PUT') as response:
+                    defaults = json.load(response)
+                    self.assertEqual(defaults['editorScale'], 1)
+                    self.assertEqual(defaults['tagScale'], 1)
 
     def test_external_changes_publish_existing_event_contract(self):
         self.start()
