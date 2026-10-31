@@ -104,11 +104,7 @@
         marks.set(editor, state);
       }
       if (state.key?.length === key.length && key.every((value, i) => value === state.key[i])) return;
-      const values = decorations();
-      for (const { options } of values) if (options.linesDecorationsClassName === 'mew-ocr-diff-line') {
-        delete options.linesDecorationsClassName; delete options.linesDecorationsTooltip;
-      }
-      state.collection.set(values);
+      state.collection.set(decorations());
       editor.render?.(true);
       state.key = key;
     }
@@ -140,8 +136,8 @@
   const providers = new Map();
   const previewKey = 'mew-review-preview';
   const editorSuggestions = new Map();
-  let session = null, generation = 0, pending = null, view = null, previewModels = [], disposals = [], lastRequest = null;
-  let widget = null, widgetEditor = null, noticeAnchor = null, noticeLayout = null, manualTimer = null, composing = false;
+  let session = null, generation = 0, view = null, previewModels = [], disposals = [], lastRequest = null;
+  let widget = null, noticeLayout = null, manualTimer = null, composing = false;
   let placementFrame = null, returningToWindow = !document.hasFocus();
   let panelMoved = false;
   const revisionMarks = window.ReviewHighlights.create({ document });
@@ -158,7 +154,7 @@
   const fields = Object.create(null);
   const get = name => fields[name] ||= panel.querySelector(`[data-${name}]`);
   function workspace() {
-    const owner = session?.editor.getDomNode()?.ownerDocument.defaultView;
+    const owner = session?.context.editor.getDomNode()?.ownerDocument.defaultView;
     return owner?.mewWorkbench || owner?.readerMonaco;
   }
   function message(text) { get('status').textContent = text; get('status').hidden = !text; }
@@ -181,15 +177,15 @@
     editor.getDomNode()?.classList.add('mew-review-suggestions');
     const state = { provide }, listeners = [];
     editorSuggestions.set(editor, state);
-    const plans = (model, range) => {
+    const plans = (model, range, source = model.getValue()) => {
       if (editor.getModel() !== model || editor.getOption(api.editor.EditorOption.readOnly)) return [];
-      const active = session?.editor === editor && valid();
+      const active = session?.context.editor === editor && valid();
       const values = state.provide?.(model) || (active ? session.items.flatMap(item => item.options) : []);
       const start = model.getOffsetAt(range.getStartPosition()), end = model.getOffsetAt(range.getEndPosition());
       return values.flatMap(value => {
         if (!value.edits?.length || !(value.range ? value.range.start <= end && value.range.end >= start
           : value.edits.some(edit => edit.start <= end && edit.end >= start))) return [];
-        try { return [{ ...value, edits: window.PdfSelectionDiff.validateEdits(model.getValue(), value.edits) }]; }
+        try { return [{ ...value, edits: window.PdfSelectionDiff.validateEdits(source, value.edits) }]; }
         catch { return []; }
       });
     };
@@ -200,7 +196,7 @@
     const clearHover = () => {
       if (!hovering) return;
       hovering = false;
-      const active = session?.editor === editor && valid() && get('apply').getAttribute('aria-pressed') === 'true';
+      const active = session?.context.editor === editor && valid() && get('apply').getAttribute('aria-pressed') === 'true';
       paintRevision(editor, editor.getModel(), [session, active], active ? selectedEdits() : [], active ? session.content.previewDecorations : []);
     };
     controller._actionWidgetService = {
@@ -249,20 +245,20 @@
     // Match built-in language providers' priority so HTML completions cannot hide review suggestions.
     listeners.push(api.languages.registerCompletionItemProvider(api.languages.getLanguages().map(language => language.id), {
       provideCompletionItems(model, position) {
-        const range = new api.Range(position.lineNumber, position.column, position.lineNumber, position.column);
-        return { suggestions: plans(model, range).flatMap(value => {
+        const source = model.getValue();
+        return { suggestions: plans(model, new api.Range(position.lineNumber, position.column, position.lineNumber, position.column), source).flatMap(value => {
           const start = Math.min(value.range?.start ?? Infinity, ...value.edits.map(edit => edit.start)),
             end = Math.max(value.range?.end ?? 0, ...value.edits.map(edit => edit.end));
           const replacementRange = window.PdfSelectionDiff.rangeAt(model, start, end);
-          const text = window.PdfSelectionDiff.previewEdits(model.getValue().slice(start, end),
-            value.edits.map(edit => ({ ...edit, start: edit.start - start, end: edit.end - start })));
+          const text = value.edits.reduceRight((text, edit) => source.slice(start, edit.start) + edit.text
+            + text.slice(edit.end - start), source.slice(start, end));
           if (replacementRange.startLineNumber !== replacementRange.endLineNumber || /[\r\n]/.test(text)) return [];
           return [{
           label: { label: text || '删除此处文字', description: '对照替换' },
           kind: api.languages.CompletionItemKind.Text,
           detail: value.label,
-          documentation: value.edits.map(edit => `${JSON.stringify(model.getValue().slice(edit.start, edit.end))} → ${JSON.stringify(edit.text)}`).join('\n'),
-          filterText: model.getValue().slice(start, model.getOffsetAt(position)),
+          documentation: value.edits.map(edit => `${JSON.stringify(source.slice(edit.start, edit.end))} → ${JSON.stringify(edit.text)}`).join('\n'),
+          filterText: source.slice(start, model.getOffsetAt(position)),
           sortText: '0000', insertText: text, range: replacementRange
         }]; }), incomplete: true };
       }
@@ -287,11 +283,11 @@
       editor.getDomNode()?.classList.remove('mew-review-suggestions'); };
   }
   function paintRevision(editor, model, key, edits, decorations = []) {
-    const source = model.getValue(), toolbox = window.PdfSelectionDiff;
+    const toolbox = window.PdfSelectionDiff;
     revisionMarks.updateSource(editor, key, () => [...edits.flatMap(edit => {
       if (edit.options) return [edit];
       let offset = edit.start;
-      return toolbox.textDiff(source.slice(edit.start, edit.end), edit.text, true).parts.flatMap(part => {
+      return toolbox.textDiff(model.getValueInRange(toolbox.rangeAt(model, edit.start, edit.end)), edit.text, true).parts.flatMap(part => {
         const start = offset;
         offset += part.html.length;
         return part.changed ? [{ start, end: offset, text: part.pdf }] : [];
@@ -303,7 +299,6 @@
         after: edit.text ? { content: edit.text, inlineClassName: 'mew-review-proposed', cursorStops: 0 } : undefined }
     })), ...decorations]);
   }
-  function presentation() { return session?.provider.presentation?.(session.context, current()) || noticeLayout; }
   function opposite(state) {
     const layout = state.provider.presentation?.(state.context, state.items[state.position]);
     if (!layout?.switchable) return null;
@@ -312,8 +307,8 @@
     return peer?.host && peer.host !== window.ReplacementReview ? { ...peer, request } : null;
   }
   function valid() {
-    return session && !session.stale && session.editor.getModel() === session.model
-      && (session.version !== undefined ? session.model.getVersionId?.() === session.version : session.model.getValue() === session.source)
+    return session && !session.stale && session.context.editor.getModel() === session.context.model
+      && (session.context.version !== undefined ? session.context.model.getVersionId?.() === session.context.version : session.context.model.getValue() === session.context.source)
       && (!session.provider.isCurrent || session.provider.isCurrent(session.context));
   }
   function validateCandidates(result, previous) {
@@ -364,15 +359,15 @@
   function mount(target) {
     const api = target?.getDomNode()?.ownerDocument.defaultView.monaco;
     if (!api || !['addContentWidget', 'layoutContentWidget', 'removeContentWidget'].every(name => typeof target?.[name] === 'function')) return;
-    widgetEditor = target;
     widget = {
+      editor: target,
       getId: () => 'mew.replacement-review', getDomNode: () => panel,
       allowEditorOverflow: false, suppressMouseDown: false,
       getPosition() {
         if (panel.hidden) return null;
         const range = session?.anchor;
-        const position = range ? { lineNumber: range.startLineNumber, column: range.startColumn } : target.getPosition();
-        return { position, preference: [api.editor.ContentWidgetPositionPreference.ABOVE, api.editor.ContentWidgetPositionPreference.BELOW] };
+        return { position: range ? { lineNumber: range.startLineNumber, column: range.startColumn } : target.getPosition(),
+          preference: [api.editor.ContentWidgetPositionPreference.ABOVE, api.editor.ContentWidgetPositionPreference.BELOW] };
       }
     };
     panel.dataset.contentWidget = '';
@@ -383,24 +378,24 @@
     panelMoved = false;
     cancelAnimationFrame(placementFrame); placementFrame = null;
     clearTimeout(manualTimer); manualTimer = null; composing = false;
-    ++generation; pending?.abort(); pending = null;
+    ++generation; lastRequest?.controller?.abort();
     disposals.splice(0).forEach(dispose => dispose());
     revisionMarks.clearMarks();
-    clearPreview(); panel.hidden = true; lastRequest = null; noticeAnchor = noticeLayout = null;
-    if (widget) { widgetEditor.removeContentWidget(widget); widget = widgetEditor = null; document.body.append(panel); delete panel.dataset.contentWidget; panel.removeAttribute('widgetid'); panel.style.cssText = ''; }
-    const previous = session; session = null;
-    editorSuggestions.get(previous?.editor)?.refreshActions();
-    previous?.provider.onClose?.(previous.context);
-    if (dismiss && previous && previous.editor.getModel() === previous.model) {
-      const selected = previous.editor.getSelection();
-      if (selected && (position || restoreFocus && !selected.isEmpty())) previous.editor.setPosition(position || selected.getPosition(), 'replacement-review-close');
+    clearPreview(); panel.hidden = true; lastRequest = null; noticeLayout = null;
+    if (widget) { widget.editor.removeContentWidget(widget); widget = null; document.body.append(panel); delete panel.dataset.contentWidget; panel.removeAttribute('widgetid'); panel.style.cssText = ''; }
+    const previous = session, context = previous?.context; session = null;
+    editorSuggestions.get(context?.editor)?.refreshActions();
+    previous?.provider.onClose?.(context);
+    if (dismiss && previous && context.editor.getModel() === context.model) {
+      const selected = context.editor.getSelection();
+      if (selected && (position || restoreFocus && !selected.isEmpty())) context.editor.setPosition(position || selected.getPosition(), 'replacement-review-close');
     }
     if (dismiss && previous) opposite(previous)?.host.close(false, false);
-    const detail = dismiss && previous && { id: previous.provider.id, editor: previous.editor, model: previous.model };
+    const detail = dismiss && previous && { id: previous.provider.id, editor: context.editor, model: context.model };
     if (detail) window.dispatchEvent(new CustomEvent('replacement-review-closed', { detail }));
-    const owner = previous?.editor.getDomNode()?.ownerDocument.defaultView;
+    const owner = context?.editor.getDomNode()?.ownerDocument.defaultView;
     if (detail && owner && owner !== window) owner.dispatchEvent(new owner.CustomEvent('replacement-review-closed', { detail }));
-    if (dismiss && restoreFocus && panel.dataset.side !== 'pdf') previous?.editor.focus();
+    if (dismiss && restoreFocus && panel.dataset.side !== 'pdf') context?.editor.focus();
   }
   function stale(event) {
     if (!session) return;
@@ -420,22 +415,22 @@
   }
   function refreshAfterEdit(saved) {
     if (saved.refreshTask) return saved.refreshTask;
-    if (session !== saved || !saved.manualPending || composing || saved.editor.getModel() !== saved.model || saved.provider.available?.(saved.editor) === false) return Promise.resolve();
-    const request = ++generation, source = saved.model.getValue(), version = saved.model.getVersionId?.();
+    if (session !== saved || !saved.manualPending || composing || saved.context.editor.getModel() !== saved.context.model || saved.provider.available?.(saved.context.editor) === false) return Promise.resolve();
+    const request = ++generation, source = saved.context.model.getValue(), version = saved.context.model.getVersionId?.();
     const context = { ...saved.context, source, version, request: { side: saved.context.request?.side } };
     return saved.refreshTask = (async () => {
     try {
       const result = saved.provider.locator ? await saved.provider.locator.reviewItems(context) : await saved.provider.provide(context);
-      if (session !== saved || request !== generation || saved.model.getValue() !== source
-        || saved.model.getVersionId?.() !== version || (saved.provider.isCurrent && !saved.provider.isCurrent(context))) return;
+      if (session !== saved || request !== generation || saved.context.model.getValue() !== source
+        || saved.context.model.getVersionId?.() !== version || (saved.provider.isCurrent && !saved.provider.isCurrent(context))) return;
       const { items, choices } = validateCandidates(result, saved.choices);
       const found = items.findIndex(item => {
-        const range = item.range || saved.provider.content({ ...saved, context, source, version, items, choices }, item).range;
-        return range && (saved.model.getOffsetAt({ lineNumber: range.endLineNumber, column: range.endColumn }) > saved.resumeOffset
-          || saved.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn }) >= saved.resumeOffset);
+        const range = item.range || saved.provider.content({ ...saved, context, items, choices }, item).range;
+        return range && (saved.context.model.getOffsetAt({ lineNumber: range.endLineNumber, column: range.endColumn }) > saved.resumeOffset
+          || saved.context.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn }) >= saved.resumeOffset);
       });
       Object.assign(saved, { items, choices, position: found < 0 ? items.length : found,
-        context, source, version, stale: false, manualPending: false });
+        context, stale: false, manualPending: false });
       if (!saved.saving) render(true);
     } catch (error) { if (session === saved && request === generation) message(error.message); }
     })().finally(() => {
@@ -464,17 +459,14 @@
     const provider = providers.get(id), target = suppliedEditor || window.mewWorkbench?.editor || window.readerMonaco?.editor;
     const placement = provider?.presentation?.({ editor: target, request: requestData });
     if (placement?.host && placement.host !== window.ReplacementReview) return placement.host.open(id, target, focusId, fallbackPosition, requestData);
-    close(false);
+    close(false); noticeLayout = placement;
     lastRequest = { id, editor: target, focusId };
     panel.hidden = false;
     panel.classList.toggle('compact', !!provider?.compact);
-    panel.dataset.side = placement?.side || 'html';
     get('expanded').hidden = !!provider?.compact;
     if (provider?.compact) get('expanded').open = false;
     get('prev').parentElement.hidden = false;
     get('advance').hidden = false;
-    get('switch').hidden = !placement?.switchable;
-    get('switch').textContent = placement?.switchLabel || '';
     get('title').textContent = provider?.label || '审阅'; get('options').replaceChildren(); get('comparison').replaceChildren(); controls();
     if (!provider || !target?.getModel() || provider.available?.(target) === false) { message('编辑器或审阅文档尚未就绪。'); place(); return; }
     bindSuggestions(target);
@@ -483,14 +475,13 @@
       target.getDomNode()?.ownerDocument.defaultView.readerMonaco?.showSource?.();
       mount(target);
     }
-    const request = ++generation, controller = pending = new AbortController();
+    const request = ++generation, controller = lastRequest.controller = new AbortController();
     const model = target.getModel(), source = model.getValue(), version = model.getVersionId?.();
     const context = { ...requestData?.snapshot?.context, editor: target, model, source, version, signal: controller.signal, toolbox: window.PdfSelectionDiff, request: requestData };
     subscribe(target, 'onDidChangeModel', () => close());
     subscribe(target, 'onDidDispose', () => close(false, false));
     subscribe(target, 'onDidChangeModelContent', event => {
-      if (!session) close();
-      else if (!session.applying) stale(event);
+      if (!session?.applying) stale(event);
     });
     subscribe(target, 'onDidCompositionStart', () => { composing = true; clearTimeout(manualTimer); });
     subscribe(target, 'onDidCompositionEnd', () => {
@@ -498,7 +489,7 @@
       if (session?.manualPending) { const saved = session; manualTimer = setTimeout(() => void refreshAfterEdit(saved), 0); }
     });
     // Keep an opening session so typing while extraction runs schedules a fresh calculation.
-    session = { provider, editor: target, model, source, version, context, items: [], position: 0,
+    session = { provider, context, items: [], position: 0,
       choices: new Map() };
     // Monaco tracks content widgets while scrolling; only fallback positioning needs this.
     if (!widget) subscribe(target, 'onDidScrollChange', queuePlace);
@@ -512,7 +503,7 @@
     message('正在计算候选…'); place(target);
     try {
       const snapshot = requestData?.snapshot;
-      const result = snapshot?.model === model && snapshot.source === source && snapshot.version === version
+      const result = snapshot?.context.model === model && snapshot.context.source === source && snapshot.context.version === version
         ? snapshot.items : provider.locator ? await provider.locator.reviewItems(context) : await provider.provide(context);
       if (request !== generation || providers.get(id) !== provider) return;
       if (target.getModel() !== model || model.getValue() !== source || model.getVersionId?.() !== version
@@ -528,17 +519,17 @@
       if (provider.isCurrent && !provider.isCurrent(context)) stale();
       else { message(error.message); controls(); }
     } }
-    finally { if (pending === controller) pending = null; }
+    finally { if (lastRequest?.controller === controller) delete lastRequest.controller; }
   }
   function render(preserveSelection = false, mirrored = false) {
     if (!session) return;
-    const item = current();
+    const item = current(), { editor, model, source, version } = session.context;
     session.content = session.provider.content?.(session, item) || {};
     const content = session.content;
     let previewEnabled = false;
     try { previewEnabled = localStorage.getItem(previewKey) === 'true'; } catch {}
     get('apply').setAttribute('aria-pressed', String(previewEnabled));
-    editorSuggestions.get(session.editor)?.refreshActions();
+    editorSuggestions.get(editor)?.refreshActions();
     get('options').replaceChildren(); controls();
     message(content.message || ''); comparison(content.comparison);
     get('title').textContent = content.title || session.provider.label;
@@ -550,20 +541,20 @@
         input.onchange = () => { session.choices.set(item.id, value.id); render(); };
         label.append(input, document.createTextNode(value.label)); get('options').append(label);
       }
-      const range = preserveSelection && session.editor.getSelection() || session.content?.range;
-      session.anchor = session.content?.range ? session.model.validateRange(session.content.range) : range;
+      const range = preserveSelection && editor.getSelection() || content.range;
+      session.anchor = content.range ? model.validateRange(content.range) : range;
       if (range) {
-        session.anchorOffset = session.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
-        if (!preserveSelection) session.editor.setSelection(session.model.validateRange(range));
-        session.editor.revealRangeInCenterIfOutsideViewport(session.anchor);
+        session.anchorOffset = model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
+        if (!preserveSelection) editor.setSelection(session.anchor);
+        editor.revealRangeInCenterIfOutsideViewport(session.anchor);
       }
       session.provider.onSelect?.(item, session.context, session.items, previewEnabled);
     } else session.provider.onClose?.(session.context);
-    if (session.editor.getDomNode()?.ownerDocument === document) {
-      paintRevision(session.editor, session.model, [session.model, session.version ?? session.source, item, session.choices.get(item?.id), previewEnabled],
+    if (editor.getDomNode()?.ownerDocument === document) {
+      paintRevision(editor, model, [model, version ?? source, item, session.choices.get(item?.id), previewEnabled],
         previewEnabled ? selectedEdits() : [], previewEnabled ? content.previewDecorations : []);
     }
-    void preview(); place(session.editor);
+    void preview(); place(editor);
     const peer = !mirrored && opposite(session);
     if (peer) peer.host.mirror(session, { ...peer.request, mirror: true, snapshot: { ...session } });
   }
@@ -583,16 +574,16 @@
   }
   function showNotice({ title = '', message: text, comparison: rows, anchor, layout }) {
     if (layout?.host && layout.host !== window.ReplacementReview) return layout.host.showNotice({ title, message: text, comparison: rows, anchor, layout });
-    close(); panel.hidden = false; noticeAnchor = anchor; noticeLayout = layout;
-    panel.classList.add('compact'); panel.dataset.side = layout?.side || 'html';
+    close(); panel.hidden = false; noticeLayout = { ...layout, anchor: layout?.anchor || anchor };
+    panel.classList.add('compact');
     get('title').textContent = title; get('options').replaceChildren();
     for (const name of ['switch', 'advance', 'expanded']) get(name).hidden = true;
     comparison(rows); message(text || ''); controls(); get('prev').parentElement.hidden = true; place();
   }
   function openForSelection(id, target, focusId, request) {
     if (session?.applying || session?.saving) return;
-    if (session?.manualPending && session.provider.id === id && session.editor === target) return;
-    if (session?.provider.id === id && session.editor === target && valid()) {
+    if (session?.manualPending && session.provider.id === id && session.context.editor === target) return;
+    if (session?.provider.id === id && session.context.editor === target && valid()) {
       const sameInteraction = request?.interactionId !== undefined && request.interactionId === session.context.request?.interactionId;
       // Selection synchronization after our own navigation is not a new review request.
       if (sameInteraction && target.getSelection()?.equalsRange(session.anchor)) { place(target); return; }
@@ -606,28 +597,30 @@
       // A broader selected passage can contain the current character candidate.
       if (session.provider.containsSelection?.(current(), request)) { place(target); return; }
     }
-    if (pending && lastRequest?.id === id && lastRequest.editor === target && lastRequest.focusId === focusId) return;
+    if (lastRequest?.controller && lastRequest.id === id && lastRequest.editor === target && lastRequest.focusId === focusId) return;
     return open(id, target, focusId, 0, request);
   }
   async function preview() {
     if (get('expanded').hidden || !get('expanded').open || !valid() || !current()) return;
-    const saved = session, request = ++generation;
+    const saved = session, { model, source } = saved.context, request = ++generation;
     try {
       const api = await window.MewEditorCore.loadMonaco();
       if (session !== saved || request !== generation || !valid() || !get('expanded').open) return;
       const data = session.provider.preview ? await session.provider.preview(session, get('file').checked)
-        : { before: session.source, after: window.PdfSelectionDiff.previewEdits(session.source, selectedEdits(get('file').checked)), language: session.model.getLanguageId() };
+        : { before: source, after: source, language: model.getLanguageId() };
       if (!data || session !== saved || request !== generation || !valid()) return;
       const { before, after, language = 'plaintext' } = data;
       if (!view) view = api.editor.createDiffEditor(get('preview'), { automaticLayout: true, readOnly: true, originalEditable: false,
         renderSideBySide: false, minimap: { enabled: false }, scrollBeyondLastLine: false, diffAlgorithm: 'advanced' });
       clearPreview();
       previewModels = [api.editor.createModel(before, language), api.editor.createModel(after, language)];
+      if (!session.provider.preview) previewModels[1].applyEdits(window.PdfSelectionDiff.validateEdits(source, selectedEdits(get('file').checked))
+        .map(edit => ({ range: window.PdfSelectionDiff.rangeAt(model, edit.start, edit.end), text: edit.text })));
       view.setModel({ original: previewModels[0], modified: previewModels[1] });
     } catch (error) { if (session === saved && request === generation) { clearPreview(); message(error.message); } }
   }
   async function apply(all) {
-    const saved = session;
+    const saved = session, model = saved?.context.model;
     if (saved?.waitingApply) return;
     if (saved?.refreshTask || saved?.manualPending && !composing)
       await (saved.waitingApply = saved.refreshTask || refreshAfterEdit(saved)).finally(() => { saved.waitingApply = null; });
@@ -643,18 +636,16 @@
         await refreshAfterEdit(saved);
         return true;
       }
-      const source = saved.model.getValue();
       Object.assign(saved, { items: result.items, choices: result.choices || saved.choices,
-        position: result.position, context: result.context || saved.context,
-        source, version: saved.model.getVersionId?.() });
-      Object.assign(saved.context, { source: saved.source, version: saved.version });
+        position: result.position, context: { ...saved.context, ...result.context,
+          source: model.getValue(), version: model.getVersionId?.() } });
       if (saved.context.request) saved.context.request = { ...saved.context.request, snapshot: null };
       if (!valid()) { stale(); return; }
       if (!saved.saving) render();
       return true;
     } catch (error) {
       if (session !== saved) return;
-      if (saved.model.getValue() !== saved.source) stale();
+      if (model.getValue() !== saved.context.source) stale();
       message(error.message);
     } finally { saved.applying = false; controls(); }
   }
@@ -668,24 +659,22 @@
       placementFrame = null; place();
     });
   }
-  function place(target = session?.editor) {
+  function place(target = session?.context.editor) {
     if (panel.hidden || panelMoved) return;
-    const layout = presentation(), pdfSide = layout?.side === 'pdf', compact = panel.classList.contains('compact');
+    const layout = session?.provider.presentation?.(session.context, current()) || noticeLayout, pdfSide = layout?.side === 'pdf', compact = panel.classList.contains('compact');
     const node = pdfSide ? layout.container : target?.getDomNode(), rect = node?.getBoundingClientRect();
-    if (layout) {
-      panel.dataset.side = layout.side;
-      get('switch').hidden = !layout.switchable;
-      get('switch').textContent = layout.switchLabel || '';
-    }
+    panel.dataset.side = layout?.side || 'html';
+    get('switch').hidden = !layout?.switchable;
+    get('switch').textContent = layout?.switchLabel || '';
     const left = Math.max(8, rect?.left || 8), right = Math.min(innerWidth - 8, rect?.right || innerWidth - 8);
     panel.style.width = compact ? 'max-content' : `${Math.max(0, Math.min(640, right - left))}px`;
     panel.style.maxWidth = `${Math.max(0, Math.min(compact ? 560 : 640, right - left))}px`;
     panel.style.maxHeight = `${Math.max(100, Math.min(innerHeight - 16, (rect?.height || innerHeight) * .75))}px`;
-    if (widget) { widgetEditor.layoutContentWidget(widget); return; }
+    if (widget) { widget.editor.layoutContentWidget(widget); return; }
     const range = session?.anchor;
     const position = !pdfSide && range ? target.getScrolledVisiblePosition({ lineNumber: range.startLineNumber, column: range.startColumn }) : null;
     const top = Math.max(8, rect?.top || 8), bottom = Math.min(innerHeight - 8, rect?.bottom || innerHeight - 8);
-    const fragment = layout?.anchor || noticeAnchor;
+    const fragment = layout?.anchor;
     const anchor = Math.max(top, Math.min(bottom, fragment?.top ?? (rect?.top || 0) + (position?.top ?? 40)));
     const height = panel.getBoundingClientRect().height;
     const end = fragment?.bottom ?? anchor + (position?.height || 20);
@@ -720,7 +709,7 @@
     handle.onpointermove = move => {
       if (!handle.hasPointerCapture(move.pointerId)) return;
       panelMoved = true;
-      const bounds = presentation().container.getBoundingClientRect();
+      const bounds = (session?.provider.presentation?.(session.context, current()) || noticeLayout).container.getBoundingClientRect();
       panel.style.left = `${Math.max(bounds.left, Math.min(bounds.right - panel.offsetWidth, move.clientX - dx))}px`;
       panel.style.top = `${Math.max(bounds.top, Math.min(bounds.bottom - panel.offsetHeight, move.clientY - dy))}px`;
     };
@@ -742,22 +731,20 @@
     if (!valid() || get('apply').disabled) return;
     try { localStorage.setItem(previewKey, String(get('apply').getAttribute('aria-pressed') !== 'true')); } catch { return; }
     render(true);
-    if (get('apply').getAttribute('aria-pressed') === 'true' && session.content.range) session.editor.revealRangeInCenterIfOutsideViewport(session.content.range);
   };
   get('advance').onclick = () => void apply(false);
   get('all').onclick = () => apply(true);
   get('save').onclick = async () => {
-    const saved = session, owner = workspace();
+    const saved = session, owner = workspace(), model = saved?.context.model;
     if (!saved || !owner?.save || get('save').disabled) return;
     saved.saving = true; controls();
     try {
       if (!await apply(false)) return;
       // A popup refresh must not cancel saving an already applied replacement.
-      if (!owner.documents && saved.editor.getModel() !== saved.model) throw new Error('文件已切换，未保存替换。');
-      const source = saved.model.getValue();
-      const result = await owner.save({ followPdf: false, model: saved.model });
-      if (result === false) throw new Error('保存失败，修改仍未保存，请重试。');
-      if (session === saved && saved.model.getValue() === source) {
+      if (!owner.documents && saved.context.editor.getModel() !== model) throw new Error('文件已切换，未保存替换。');
+      const source = model.getValue();
+      if (await owner.save({ followPdf: false, model: model }) === false) throw new Error('保存失败，修改仍未保存，请重试。');
+      if (session === saved && model.getValue() === source) {
         if (valid()) render();
         else message('已保存。差异更新中…');
       }
@@ -785,10 +772,10 @@
     returningToWindow = false;
     if (panel.hidden || returning || event.composedPath().includes(panel)) return;
     if (event.target.closest?.('.lightBulbWidget, [class*="codicon-gutter-lightbulb"], .action-widget')) return;
-    const position = session?.editor.getTargetAtClientPoint(event.clientX, event.clientY)?.position;
-    const api = session?.editor.getDomNode()?.ownerDocument.defaultView.monaco;
+    const position = session?.context.editor.getTargetAtClientPoint(event.clientX, event.clientY)?.position;
+    const api = session?.context.editor.getDomNode()?.ownerDocument.defaultView.monaco;
     if (position && session.anchor && api?.Range.containsPosition(session.anchor, position)) return;
-    close(true, false, event.button === 0 && event.composedPath().includes(session?.editor.getDomNode()) ? position : null);
+    close(true, false, event.button === 0 && event.composedPath().includes(session?.context.editor.getDomNode()) ? position : null);
   }, true);
   new ResizeObserver(queuePlace).observe(panel);
   window.addEventListener('resize', queuePlace);
@@ -799,15 +786,15 @@
   window.ReplacementReview = {
     open, openForSelection, showNotice, close, bindSuggestions, refreshMenu: updateMenu,
     mirror(saved, request) {
-      if (session?.provider.id === saved.provider.id && session.editor === saved.editor && session.model === saved.model) {
+      if (session?.provider.id === saved.provider.id && session.context.editor === saved.context.editor && session.context.model === saved.context.model) {
         ++generation; clearTimeout(manualTimer);
-        Object.assign(session, { source: saved.source, version: saved.version, items: saved.items, position: saved.position,
+        Object.assign(session, { items: saved.items, position: saved.position,
           choices: new Map(saved.choices),
           context: { ...saved.context, request }, stale: false, manualPending: false });
         render(true, true);
-      } else void open(saved.provider.id, saved.editor, saved.items[saved.position]?.id, saved.position, request);
+      } else void open(saved.provider.id, saved.context.editor, saved.items[saved.position]?.id, saved.position, request);
     },
-    isOpenFor(id, target) { return !panel.hidden && (session?.provider.id === id && session.editor === target || lastRequest?.id === id && lastRequest.editor === target); },
+    isOpenFor(id, target) { return !panel.hidden && (session?.provider.id === id && session.context.editor === target || lastRequest?.id === id && lastRequest.editor === target); },
     invalidate(id, changed = () => true) { if (session?.provider.id === id && changed(session.context)) stale(); },
     register(provider) {
       if (!provider?.id || (!provider.locator && typeof provider.provide !== 'function' && typeof provider.setEnabled !== 'function')) throw new Error('功能需要 id 和 locator、provide(context) 或 setEnabled(enabled)');

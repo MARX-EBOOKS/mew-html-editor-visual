@@ -9,7 +9,6 @@ body.dark{--mew-review-accent:#3994bc;--mew-review-highlight:#3994bc26;--mew-rev
 .monaco-editor .mew-review-format{text-decoration:underline dotted;text-decoration-color:var(--vscode-editorInfo-foreground,#6b8caf);text-decoration-thickness:1px;text-underline-offset:3px}
 .monaco-editor .mew-review-proposed{background:var(--mew-review-added-bg);border-radius:2px;text-decoration:none}
 .monaco-editor .mew-review-current{background:var(--mew-review-removed-bg);border-radius:2px;text-decoration:line-through;text-decoration-thickness:1px;text-decoration-color:var(--mew-review-removed)}
-.monaco-editor .mew-ocr-diff-line{border-left:3px solid var(--mew-review-accent);margin-left:3px;cursor:pointer}
 .monaco-editor .mew-ocr-diff-text{background:var(--mew-review-highlight);border-bottom:1px solid var(--mew-review-accent);cursor:pointer}
 .monaco-editor .mew-font-diff-text{text-decoration:underline wavy var(--vscode-editorWarning-foreground,#b87516);text-underline-offset:3px;cursor:pointer}
 .monaco-editor .mew-ocr-diff-insert{display:inline-block;width:2px;border-left:2px solid var(--mew-review-accent);box-sizing:border-box;position:relative;z-index:1;cursor:pointer}
