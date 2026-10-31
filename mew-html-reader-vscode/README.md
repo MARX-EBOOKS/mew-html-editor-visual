@@ -23,6 +23,12 @@
 - 本地 PDF（≤128 MiB）由扩展直接读取，通过二进制消息交给 PDF.js Worker；避免 Webview 文件服务中转和 Base64 编码。更大的文件和非本地 URI 使用显式 Range 读取；不支持 Range 的文件提供方只读取一次完整响应。翻页和重复同步同一卷复用已打开文档，页面按需渲染。
 - Worker 源码在 Webview 中读取，再从 Blob 启动真实后台线程；字体、图片解码 WASM 由所属 Webview 代理读取，ICC 色彩配置预先准备为本地 Blob。这样避开 VS Code 对 Worker 资源请求的约 30 秒超时，并保留 PDF.js 的图像解码和色彩管理。
 
+## PDF 差异审阅
+
+PDF 文本映射、差异计算和字体检测复用当前 `pdf-selection-diff.js` 与 `pdf-review-provider.js`。扩展内的 `replacement-review.js`、`pdf-selection.js` 是 VS Code 专用实现，分别负责审阅操作与选区、高亮同步；两者同时提供扩展宿主入口和 PDF Webview 入口，复用同一份探测候选。
+
+`editor-core.js` 的 `VSCodeController` 负责在 Webview 中接收源码快照、发送原生操作请求。`replacement-review.js` 直接注册 VS Code 悬浮提示、代码操作、补全和原生 diff 预览，执行带文件、版本校验的编辑和保存；`pdf-selection.js` 直接订阅文档及选区变化并设置原生高亮。`extension.cjs` 只加载模块，不保留 `PdfReview` 类。设置保存在扩展 `globalState`。`prepare-assets.mjs` 只同步通用探测文件和样式，不覆盖这两个专用模块。
+
 ## 性能验证
 
 `node test/pdf-vscode.mjs <PDF绝对路径>` 启动独立 VS Code 开发实例，测试从 PDF Webview 启动到第 300 页完成渲染的时间，并检查真实 Worker、翻页、同卷复用、100% 缩放、翻页方向与显示设置。通过标准为目标页小于 5 秒；不包括 VS Code 应用本身的冷启动。结果和截图写入 `test/artifacts/`。

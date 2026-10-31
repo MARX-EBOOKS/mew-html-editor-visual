@@ -8,6 +8,8 @@ const start = source.indexOf('class ReaderController {');
 // The controller is the last declaration in the extension.
 const Controller = vm.runInNewContext(source.slice(start, source.indexOf('module.exports', start)) + '\nReaderController;', {
   ...core, console, setTimeout, clearTimeout,
+  require: require("node:module").createRequire(require.resolve("../extension.cjs")),
+  sameUri: (a, b) => a?.toString() === b?.toString(),
   vscode: { FileType: { Directory: 2 }, Uri: { joinPath: (base, name) => name },
     workspace: { fs: { readDirectory: async () => entries } } }
 });
@@ -46,6 +48,8 @@ test('background navigation keeps focus and drops superseded file opens', async 
   const current = { page: 1, volume: { files: new Map([[2, '2.html'], [3, '3.html']]) } };
   const Reader = vm.runInNewContext(source.slice(start, source.indexOf('module.exports', start)) + '\nReaderController;', {
     ...core, console, setTimeout, clearTimeout,
+    require: require("node:module").createRequire(require.resolve("../extension.cjs")),
+    sameUri: (a, b) => a?.toString() === b?.toString(),
     targetEditor: () => ({ viewColumn: 1 }),
     vscode: {
       ViewColumn: { Active: -1 },

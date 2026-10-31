@@ -11,7 +11,7 @@ const vscode = {
   Range: class { constructor(start, end) { this.start = start; this.end = end; } },
   Selection: class { constructor(start, end) { this.start = start; this.end = end; } }
 };
-const sandbox = { require: () => vscode, module: { exports: {} } };
+const sandbox = { require: name => name === "./reader-core.cjs" ? require("../reader-core.cjs") : vscode, module: { exports: {} } };
 vm.runInNewContext(source + '\nmodule.exports.test = { TagEditor, tags, attrs, insertTag, TagBarViewProvider, findPdfTab };', sandbox);
 const api = sandbox.module.exports.test;
 const plain = value => JSON.parse(JSON.stringify(value));

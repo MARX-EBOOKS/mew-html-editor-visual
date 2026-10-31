@@ -1,6 +1,48 @@
 const path = require("node:path");
 
+function sameUri(one, other) {
+  return Boolean(one && other && one.toString(true) === other.toString(true));
+}
+
 const CONFIG_NAMES = [".mew-reader.json", "mew-reader.json"];
+
+function reviewSourceSnapshot(document, current, selections) {
+    const next = adjacentPage(current.volume.pages, current.page, 1);
+    return { uri: document.uri.toString(true), text: document.getText(), version: document.version, dirty: document.isDirty,
+      pageStart: current.page, pageEnd: next ?? Number.MAX_SAFE_INTEGER,
+      selections: selections?.map(selection => ({
+        startLineNumber: selection.start.line + 1, startColumn: selection.start.character + 1,
+        endLineNumber: selection.end.line + 1, endColumn: selection.end.character + 1,
+        selectionStartLineNumber: selection.anchor.line + 1, selectionStartColumn: selection.anchor.character + 1,
+        positionLineNumber: selection.active.line + 1, positionColumn: selection.active.character + 1
+      })) };
+}
+
+// Keep transport normalization independent of native editor objects.
+function reviewDecorationGroups(decorations) {
+  const groups = new Map();
+  for (const mark of decorations || []) {
+    if (typeof mark.className !== 'string') continue;
+    if (!groups.has(mark.className)) groups.set(mark.className, []);
+    const hover = mark.hoverMessage;
+    groups.get(mark.className).push({ range: mark.range, after: mark.after,
+      hover: (Array.isArray(hover) ? hover : hover ? [hover] : []).map(value => typeof value === 'string' ? value : value.value) });
+  }
+  return groups;
+}
+
+function validateReviewEdits(source, values) {
+  const edits = [...values].sort((a, b) => a.start - b.start || a.end - b.end);
+  for (let i = 0; i < edits.length; i++) {
+    const edit = edits[i], previous = edits[i - 1];
+    if (!Number.isInteger(edit.start) || !Number.isInteger(edit.end) || edit.start < 0 || edit.end < edit.start || edit.end > source.length || typeof edit.text !== 'string'
+      || previous && (edit.start < previous.end || edit.start === previous.start)
+      || edit.expected !== undefined && source.slice(edit.start, edit.end) !== edit.expected) throw new Error('无效或重叠的替换范围。');
+  }
+  return edits;
+}
+
+
 
 function formatPattern(pattern, page, volume) {
   return String(pattern)
@@ -33,16 +75,16 @@ function pageAtOrBefore(pages, requested) {
 
 function normalizedVolumes(config) {
   const volumes = Array.isArray(config.volumes) && config.volumes.length ? config.volumes : [config];
-  return volumes.map((volume, index) => {
+  return volumes.flatMap((volume, index) => {
     const pages = volume.pages && !Array.isArray(volume.pages) ? volume.pages : {};
     const id = String(volume.id ?? config.id ?? index + 1);
     const directory = pages.directory ?? volume.htmlRoot ?? config.htmlRoot ?? ".";
     const pattern = pages.pattern ?? volume.pagePattern ?? config.pagePattern;
     const explicitPages = Array.isArray(pages.list) ? pages.list : Array.isArray(volume.pages) ? volume.pages : [];
     const pdf = volume.pdf?.file ?? volume.pdf ?? config.pdf?.file ?? config.pdf;
+    if (!pdf) return [];
     if (!pattern) throw new Error(`卷册 ${id} 缺少 pages.pattern/pagePattern`);
-    if (!pdf) throw new Error(`卷册 ${id} 缺少 pdf`);
-    return {
+    return [{
       id,
       title: String(volume.title ?? config.title ?? `PDF ${id}`),
       shortTitle: String(volume.shortTitle ?? volume.title ?? config.shortTitle ?? config.title ?? id),
@@ -50,7 +92,7 @@ function normalizedVolumes(config) {
       pageLabel: String(volume.pageLabel ?? config.pageLabel ?? "{page}"),
       toc: Array.isArray(volume.toc) ? volume.toc : [],
       explicitPages: [...new Set(explicitPages.map(Number).filter(Number.isFinite))].sort((a, b) => a - b)
-    };
+    }];
   });
 }
 
@@ -116,4 +158,4 @@ async function findConfig(vscode, uri) {
   }
   return null;
 }
-module.exports = { findConfig, resolveUri, sortExplorerFiles, CONFIG_NAMES, formatPattern, pageFromName, pageFromPdfLabel, adjacentPage, pageAtOrBefore, normalizedVolumes, isInside };
+module.exports = { sameUri, reviewSourceSnapshot, reviewDecorationGroups, validateReviewEdits, findConfig, resolveUri, sortExplorerFiles, CONFIG_NAMES, formatPattern, pageFromName, pageFromPdfLabel, adjacentPage, pageAtOrBefore, normalizedVolumes, isInside };

@@ -37,7 +37,7 @@ test("PDF header exposes compact navigation and display controls", () => {
   assert.doesNotMatch(script, /PDF_TO_CSS_UNITS|96\s*\/\s*72|72\s*\/\s*96/);
   assert.match(script, /openPdfSource\(config\.pdfjs, message\.url/);
   assert.match(script, /docBaseUrl: message\.url/);
-  assert.match(extension, /registerCustomEditorProvider\(PDF_PANEL_VIEW_TYPE, reader/);
+  assert.match(extension, /registerCustomEditorProvider\(PDF_PANEL_VIEW_TYPE, this/);
   assert.match(extension, /openCustomDocument\(uri\)/);
   assert.match(extension, /resolveCustomEditor\(document, panel\)/);
   assert.match(extension, /executeCommand\("vscode\.openWith", current\.volume\.pdfUri, PDF_PANEL_VIEW_TYPE/);
@@ -54,8 +54,10 @@ test("PDF header exposes compact navigation and display controls", () => {
 
 test("configured page navigation leaves dirty state to VS Code", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "extension.cjs"), "utf8");
-  assert.doesNotMatch(source, /document\.save\(\)/);
-  assert.doesNotMatch(source, /pendingPdfPage|onDidSaveTextDocument/);
+  const navigation = source.slice(source.indexOf("  async onPdfPage(message)"), source.indexOf("  async createPanel(current)"));
+  assert.doesNotMatch(navigation, /\.save\(|isDirty|onDidSaveTextDocument/);
+  const review = fs.readFileSync(path.join(__dirname, '..', 'pdfdiff', 'replacement-review.js'), 'utf8');
+  assert.match(review, /else if \(!await document\.save\(\)\)/);
 });
 
 test("returning to a PDF in another window preserves later progress for the same HTML", () => {

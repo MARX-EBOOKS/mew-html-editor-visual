@@ -12,7 +12,7 @@ test('PDF handshake retries a lost ready and answers a restarted host without re
   const document = { pdfUri: 'file:///book.pdf', pageLabel: '317' };
   vm.runInNewContext(source.slice(start, end), {
     vscode: { postMessage: message => posted.push(message) },
-    pending: undefined, stored: { document },
+    receiveReviewMessage() {}, pending: undefined, stored: { document },
     setInterval(callback) { retry = callback; return 1; },
     clearInterval(id) { assert.equal(id, 1); cleared++; },
     window: { addEventListener(type, callback) { listeners.set(type, callback); } },

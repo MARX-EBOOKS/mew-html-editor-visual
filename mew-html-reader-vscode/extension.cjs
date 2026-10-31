@@ -100,10 +100,11 @@ function pdfHtml(webview, context, pdfUri) {
     fonts: slash(at("vendor", "pdfjs", "standard_fonts")),
     wasm: slash(at("vendor", "pdfjs", "wasm")),
     images: slash(at("vendor", "pdfjs", "web", "images")),
+    reviewSettings: context.globalState.get("mewReader.pdfReviewSettings", {}),
     displaySettings: context.globalState.get("mewReader.pdfDisplaySettings.v1", {})
   };
   const encoded = escapeHtml(JSON.stringify(config));
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src ${webview.cspSource} blob: data:; img-src ${webview.cspSource} blob: data:; font-src ${webview.cspSource} data:; style-src ${webview.cspSource}; script-src ${webview.cspSource} 'nonce-${nonce}' 'wasm-unsafe-eval'; worker-src ${webview.cspSource} blob:"><meta id="reader-config" data-config="${encoded}"><link rel="stylesheet" href="${at("vendor", "pdfjs", "web", "pdf_viewer.css")}"><link rel="stylesheet" href="${at("reader-pdf.css")}"><title>MEW PDF</title></head><body><svg aria-hidden="true" width="0" height="0"><filter id="scanColorFilter" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR id="filterR" type="table" tableValues="0 1"/><feFuncG id="filterG" type="table" tableValues="0 1"/><feFuncB id="filterB" type="table" tableValues="0 1"/></feComponentTransfer></filter></svg><header id="tools"><strong id="title">MEW PDF</strong><div class="tool-group"><button id="tocButton" hidden aria-controls="tocPanel" aria-expanded="false">目录</button><button id="direction" title="切换左右/上下翻页">左右翻页</button><button id="settings" title="调整扫描件颜色">显示设置</button></div><div class="tool-group page-tools"><button id="previous" title="上一页" aria-label="上一页">‹</button><input id="pageNumber" type="text" value="1" aria-label="PDF 页码或页码标签"><span>/</span><output id="pageCount">0</output><button id="next" title="下一页" aria-label="下一页">›</button></div><div class="tool-group zoom-tools"><button id="minus" title="缩小">−</button><input id="zoom" value="页宽" aria-label="PDF 缩放"><button id="plus" title="放大">＋</button></div><button id="copyImage" title="复制本页像素尺寸最大的内嵌原图">复制本页图片</button></header><aside id="tocPanel" hidden aria-label="PDF 目录"><header><strong>目录</strong><button id="tocClose" aria-label="关闭目录">×</button></header><ol id="tocList"></ol></aside><div id="stage"><div id="viewer" class="pdfViewer"></div></div><p id="status">等待 HTML 页面…</p><dialog id="settingsDialog"><form method="dialog"><header><strong>扫描件显示设置</strong><button value="close" aria-label="关闭">×</button></header><label>亮度 <output id="brightnessValue">100%</output><input id="brightness" type="range" min="50" max="160" value="100"></label><label>背景色 <input id="paper" type="color" value="#ffffff"></label><label>文字色 <input id="ink" type="color" value="#000000"></label><label class="toggle"><input id="invert" type="checkbox">反色</label><footer><button id="reset" type="button">恢复默认</button><button value="close">完成</button></footer></form></dialog><script type="module" nonce="${nonce}" src="${at("reader-pdf.js")}"></script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src ${webview.cspSource} blob: data:; img-src ${webview.cspSource} blob: data:; font-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}' 'wasm-unsafe-eval'; worker-src ${webview.cspSource} blob:"><meta id="reader-config" data-config="${encoded}"><link rel="stylesheet" href="${at("vendor", "pdfjs", "web", "pdf_viewer.css")}"><link rel="stylesheet" href="${at("reader-pdf.css")}"><link rel="stylesheet" href="${at("pdfdiff", "replacement-review.css")}"><title>MEW PDF</title></head><body><svg aria-hidden="true" width="0" height="0"><filter id="scanColorFilter" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR id="filterR" type="table" tableValues="0 1"/><feFuncG id="filterG" type="table" tableValues="0 1"/><feFuncB id="filterB" type="table" tableValues="0 1"/></feComponentTransfer></filter></svg><header id="tools"><strong id="title">MEW PDF</strong><div class="tool-group"><button id="tocButton" hidden aria-controls="tocPanel" aria-expanded="false">目录</button><button id="direction" title="切换左右/上下翻页">左右翻页</button><button id="settings" title="调整扫描件颜色">显示设置</button></div><div class="tool-group page-tools"><button id="previous" title="上一页" aria-label="上一页">‹</button><input id="pageNumber" type="text" value="1" aria-label="PDF 页码或页码标签"><span>/</span><output id="pageCount">0</output><button id="next" title="下一页" aria-label="下一页">›</button></div><div class="tool-group zoom-tools"><button id="minus" title="缩小">−</button><input id="zoom" value="页宽" aria-label="PDF 缩放"><button id="plus" title="放大">＋</button></div><details><summary>差异审阅</summary><div id="replacementFeatures"></div></details><button id="copyImage" title="复制本页像素尺寸最大的内嵌原图">复制本页图片</button></header><aside id="tocPanel" hidden aria-label="PDF 目录"><header><strong>目录</strong><button id="tocClose" aria-label="关闭目录">×</button></header><ol id="tocList"></ol></aside><div id="stage"><div id="viewer" class="pdfViewer"></div></div><p id="status">等待 HTML 页面…</p><dialog id="settingsDialog"><form method="dialog"><header><strong>扫描件显示设置</strong><button value="close" aria-label="关闭">×</button></header><label>亮度 <output id="brightnessValue">100%</output><input id="brightness" type="range" min="50" max="160" value="100"></label><label>背景色 <input id="paper" type="color" value="#ffffff"></label><label>文字色 <input id="ink" type="color" value="#000000"></label><label class="toggle"><input id="invert" type="checkbox">反色</label><footer><button id="reset" type="button">恢复默认</button><button value="close">完成</button></footer></form></dialog><script type="module" nonce="${nonce}" src="${at("reader-pdf.js")}"></script></body></html>`;
 }
 
 
@@ -139,7 +140,7 @@ function savePdfState(context, message) {
 
 
 
-const { findConfig, resolveUri, sortExplorerFiles, formatPattern, pageFromName, pageFromPdfLabel, adjacentPage, pageAtOrBefore, normalizedVolumes, isInside } = require("./reader-core.cjs");
+const { sameUri, findConfig, resolveUri, sortExplorerFiles, formatPattern, pageFromName, pageFromPdfLabel, adjacentPage, pageAtOrBefore, normalizedVolumes, isInside } = require("./reader-core.cjs");
 
 const tags = [
   { id: "b", label: "B", shortcut: "b", open: "<b>", close: "</b>", title: "Alt+B / b" },
@@ -351,43 +352,8 @@ let lastEditor;
 let reader;
 
 function activate(context) {
-  reader = new ReaderController(context);
-  lastEditor = vscode.window.activeTextEditor;
-  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => {
-    if (editor) {
-      lastEditor = editor;
-      reader.sync(editor.document.uri).catch(reader.report);
-    }
-  }));
-
-  const provider = new TagBarViewProvider(context);
-  context.subscriptions.push(vscode.window.registerWebviewPanelSerializer("mewReader.floatingBar", provider));
-  restorePdfTabs(context, reader);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider("mewReader.bar", provider, {
-      webviewOptions: { retainContextWhenHidden: true }
-    })
-  );
-  context.subscriptions.push(vscode.window.registerCustomEditorProvider(PDF_PANEL_VIEW_TYPE, reader, {
-    supportsMultipleEditorsPerDocument: false,
-    webviewOptions: { retainContextWhenHidden: true }
-  }));
-  context.subscriptions.push(
-    vscode.commands.registerCommand("mewReader.showBar", () => provider.show()),
-    vscode.commands.registerCommand("mewReader.openFloatingBar", () => provider.openFloating()),
-    vscode.commands.registerCommand("mewReader.openPdf", () => reader.open()),
-    vscode.commands.registerCommand("mewReader.openPreviousPage", () => openSiblingFile(-1)),
-    vscode.commands.registerCommand("mewReader.openNextPage", () => openSiblingFile(1))
-  );
-
-
-  for (const tag of tags) {
-    context.subscriptions.push(vscode.commands.registerCommand(`mewReader.insert.${tag.id}`, () => insertTag(tag)));
-  }
-  for (const attr of attrs) {
-    context.subscriptions.push(vscode.commands.registerCommand(`mewReader.insert.${attr.id}`, () => insertTag(attr)));
-  }
-  if (lastEditor) reader.sync(lastEditor.document.uri).catch(reader.report);
+  (reader = new ReaderController(context)).start();
+  new TagBarViewProvider(context).start();
 }
 
 async function openSiblingFile(direction) {
@@ -477,10 +443,6 @@ async function siblingFiles(currentUri, parentUri) {
   const sorted = sortExplorerFiles(files, options);
   siblingCache.set(key, { namesKey, files: sorted });
   return sorted;
-}
-
-function sameUri(one, other) {
-  return Boolean(one && other && one.toString(true) === other.toString(true));
 }
 
 async function showTagBar() {
@@ -591,6 +553,18 @@ class TagBarViewProvider {
     context.subscriptions.push({ dispose: () => { for (const panel of this.panels) panel.dispose(); } });
   }
 
+  start() {
+    const { subscriptions } = this.context;
+    subscriptions.push(
+      vscode.window.registerWebviewPanelSerializer("mewReader.floatingBar", this),
+      vscode.window.registerWebviewViewProvider("mewReader.bar", this, { webviewOptions: { retainContextWhenHidden: true } }),
+      vscode.commands.registerCommand("mewReader.showBar", () => this.show()),
+      vscode.commands.registerCommand("mewReader.openFloatingBar", () => this.openFloating()));
+    for (const tag of [...tags, ...attrs]) {
+      subscriptions.push(vscode.commands.registerCommand(`mewReader.insert.${tag.id}`, () => insertTag(tag)));
+    }
+  }
+
   findFloating() {
     for (const group of vscode.window.tabGroups?.all || []) {
       const tab = group.tabs.find(tab => ["mewReader.floatingBar", "mainThreadWebview-mewReader.floatingBar"].includes(tab.input?.viewType));
@@ -698,15 +672,36 @@ class ReaderController {
     };
   }
 
+  start() {
+    const { context } = this;
+    lastEditor = vscode.window.activeTextEditor;
+    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => {
+      if (!editor) return;
+      lastEditor = editor;
+      this.sync(editor.document.uri).catch(this.report);
+    }));
+    restorePdfTabs(context, this);
+    context.subscriptions.push(vscode.window.registerCustomEditorProvider(PDF_PANEL_VIEW_TYPE, this, {
+      supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true }
+    }),
+      vscode.commands.registerCommand("mewReader.openPdf", () => this.open()),
+      vscode.commands.registerCommand("mewReader.openPreviousPage", () => openSiblingFile(-1)),
+      vscode.commands.registerCommand("mewReader.openNextPage", () => openSiblingFile(1)));
+    if (lastEditor) this.sync(lastEditor.document.uri).catch(this.report);
+  }
+
   async sync(uri, forceOpen = false) {
-    if (!uri || !/\.html?$/i.test(uri.path)) return false;
     if (!sameUri(uri, this.pdfNavigationTarget)) ++this.navigationRevision;
     const revision = ++this.syncRevision;
-    const current = await this.resolvePage(uri);
-    if (revision !== this.syncRevision || !current) return false;
+    const current = uri && /\.html?$/i.test(uri.path) ? await this.resolvePage(uri) : null;
+    if (revision !== this.syncRevision) return false;
     this.current = current;
+    if (!current) return false;
     this.watchVolume(current.volume);
-    if (this.pdfNavigationTarget && sameUri(uri, this.pdfNavigationTarget)) return true;
+    if (this.pdfNavigationTarget && sameUri(uri, this.pdfNavigationTarget)) {
+      await this.pdfSource?.publish();
+      return true;
+    }
     this.pdfPageLabel = String(current.page);
     this.restoredDocument = null;
     const autoOpen = vscode.workspace.getConfiguration("mewReader", uri).get("autoOpenPdf", true);
@@ -756,7 +751,7 @@ class ReaderController {
 
   async open() {
     const uri = activeFile()?.uri;
-    if (!uri || !(await this.sync(uri, true))) return vscode.window.showInformationMessage("当前 HTML 不在 MEW Reader JSON 配置中。");
+    if (!uri || !(await this.sync(uri, true))) return vscode.window.showInformationMessage("当前文件没有可用的对应 PDF，可继续使用标签插入功能。");
     if (this.panel && sameUri(this.panelPdfUri, this.current.volume.pdfUri)) {
       this.panel.reveal(undefined, false);
     await focusReaderWindow();
@@ -854,6 +849,8 @@ class ReaderController {
     const pdfUri = restoredDocument?.pdfUri ? vscode.Uri.parse(restoredDocument.pdfUri) : this.current?.volume.pdfUri;
     this.panelPdfUri = pdfUri ?? null;
     this.resolvingPdf = false;
+    this.pdfSource = require("./pdfdiff/pdf-selection.js").attach(this, panel);
+    require("./pdfdiff/replacement-review.js").attach(this, panel, this.pdfSource, focusReaderWindow);
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: pdfUri ? [this.context.extensionUri, vscode.Uri.joinPath(pdfUri, "..")] : [this.context.extensionUri]
@@ -897,6 +894,7 @@ class ReaderController {
       this.ready = false;
       this.restoredDocument = null;
       this.panelPdfUri = null;
+      this.pdfSource = null;
     }, null, this.context.subscriptions);
     // Register the handshake before starting the webview, including restoration.
     panel.webview.html = pdfHtml(panel.webview, this.context, pdfUri);
@@ -938,7 +936,9 @@ class ReaderController {
       nativeData: pdfUri.scheme === "file",
       url: this.panel.webview.asWebviewUri(pdfUri).toString()
     });
+    await this.pdfSource?.publish();
   }
+
 
   async resolvePage(uri) {
     const known = this.knownPage(uri);
@@ -960,6 +960,8 @@ class ReaderController {
       this.indexVolume(spec, entries);
       spec.pdfUri = resolveUri(vscode, base, spec.pdf);
       if (!spec.files.has(page)) return null;
+      const pdf = await vscode.workspace.fs.stat(spec.pdfUri).catch(() => null);
+      if (!pdf || pdf.type & vscode.FileType.Directory) return null;
       return { uri, page, volume: spec, configUri };
     }
     return null;

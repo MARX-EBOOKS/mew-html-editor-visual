@@ -5,7 +5,7 @@ const vscode = acquireVsCodeApi();
 // A wheel can reach an inactive auxiliary window without focusing its webview.
 let pdfFocusRequested = false;
 function focusPdf(event) {
-  if (!event.isTrusted || (event.type === "wheel" && pdfFocusRequested)) return;
+  if (!event.isTrusted || pdfFocusRequested) return;
   pdfFocusRequested = true;
   vscode.postMessage({ type: "focusPdf" });
 }
@@ -24,6 +24,8 @@ const pageCount = document.querySelector("#pageCount");
 let viewer, linkService, labels, loadingTask, scrollMode, currentUrl = "", pending, syncing = false;
 let documentRevision = 0, labelsReady = Promise.resolve(), sourceController, initializing = false;
 let state = normalizeState(stored);
+
+
 
 function normalizeState(value) {
   const color = (input, fallback) => /^#[0-9a-f]{6}$/i.test(input || "") ? input : fallback;
@@ -334,6 +336,67 @@ async function loadPdf(message) {
   }
 }
 
+async function initializeReview() {
+  let sourceSnapshot, reviewRequestId = 0;
+  const reviewRequests = new Map();
+  const send = (type, data) => vscode.postMessage({ type, uri: sourceSnapshot?.uri, version: sourceSnapshot?.version, ...data });
+  function reviewRequest(type, data = {}) {
+    const id = ++reviewRequestId;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { reviewRequests.delete(id); reject(new Error("VS Code 审阅请求超时")); }, 15000);
+      reviewRequests.set(id, { resolve, reject, timer }); send(type, { id, ...data });
+    });
+  }
+  function receiveSource(snapshot) {
+    if (!snapshot) return;
+    if (sourceSnapshot?.uri !== snapshot.uri) window.ReplacementReview?.close();
+    sourceSnapshot = snapshot;
+    source.receive(snapshot);
+    window.ReplacementReview?.refreshMenu();
+    window.ReplacementReview?.refreshPresentation();
+  }
+  await import("./editor-core.js");
+  const source = new window.MewEditorCore.VSCodeController(send, reviewRequest);
+  window.readerMonaco = source;
+  const editor = source.editor;
+  window.ReaderUI = {
+    getPdfViewer: () => viewer,
+    getSourceEditor: () => sourceSnapshot?.uri ? editor : null,
+    getPdfSourcePages: () => (labels || []).flatMap((label, i) => {
+      const page = Number(String(label).match(/^(\d+)/)?.[1]);
+      return page >= sourceSnapshot?.pageStart && page < sourceSnapshot?.pageEnd ? [i + 1] : [];
+    }),
+    notify: showStatus
+  };
+  window.PdfSelectionOptions = {
+    nativeEditor: editor.nativeEditor, color: "rgba(255, 196, 0, 0.42)", settings: config.reviewSettings || {},
+    savePreference: (key, value) => vscode.postMessage({ type: "reviewPreference", key, value })
+  };
+  window.addEventListener("pagehide", () => {
+    for (const request of reviewRequests.values()) { clearTimeout(request.timer); request.reject(new Error("阅读器已关闭")); }
+    reviewRequests.clear(); editor.dispose();
+  }, { once: true });
+  await import("./pdfdiff/pdf-review-provider.js");
+  await window.PdfReviewReady;
+  window.PdfReviewProvider.locator.textEnabled = config.reviewSettings?.textDetection !== false;
+  await import("./pdfdiff/pdf-selection.js");
+  return message => {
+    if (message?.type === "reviewClose") window.ReplacementReview?.close(true, false);
+    if (message?.type === "reviewPopupAction" && message.uri === sourceSnapshot?.uri && message.version === sourceSnapshot?.version)
+      void source.runReviewAction(message.action).catch(error => showStatus(error.message));
+    if (message?.type === "reviewSourceAction" && message.request?.model === sourceSnapshot?.uri && message.request.version === sourceSnapshot?.version)
+      void source.getAction(message.action)?.run(source, message.request).catch(error => showStatus(error.message));
+    if (message?.type === "reviewSource") receiveSource(message.snapshot);
+    if (message?.type === "reviewResult") {
+      const request = reviewRequests.get(message.id);
+      if (!request) return;
+      reviewRequests.delete(message.id); clearTimeout(request.timer);
+      if (message.snapshot) receiveSource(message.snapshot);
+      if (message.error) request.reject(new Error(message.error)); else request.resolve(message.result);
+    }
+  };
+}
+
 async function init() {
   const pdfjs = await import(config.core);
   globalThis.pdfjsLib = pdfjs;
@@ -414,12 +477,14 @@ async function init() {
   document.querySelector("#reset").onclick = () => { saveState(DEFAULTS); applyDisplaySettings(); applyDirection(); if (viewer?.pdfDocument) viewer.currentScaleValue = DEFAULTS.scale; };
 
   applyDisplaySettings(); applyDirection(); showPage();
+  const receiveReviewMessage = await initializeReview();
   const ready = () => vscode.postMessage({ type: "ready", document: pending || stored.document });
   // Startup messages can be lost while the extension host is restarting.
   // Retry until acknowledged; a retained frame also answers the new host's probe.
   const handshake = setInterval(ready, 1000);
   window.addEventListener("pagehide", () => clearInterval(handshake), { once: true });
   window.addEventListener("message", event => {
+    receiveReviewMessage(event.data);
     if (event.data?.type === "requestReady") ready();
     if (event.data?.type === "showPdf") {
       clearInterval(handshake);

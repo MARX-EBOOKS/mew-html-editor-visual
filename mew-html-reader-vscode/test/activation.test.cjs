@@ -45,7 +45,8 @@ test("extension activates, registers commands, and resolves a restored PDF custo
       },
       showErrorMessage() {}, showInformationMessage() {}
     },
-    workspace: { onDidSaveTextDocument() { return disposable; },
+    workspace: { registerTextDocumentContentProvider() { return disposable; }, async openTextDocument(uri) { return { uri, getText: () => "", version: 1, isDirty: false }; },
+      onDidSaveTextDocument() { return disposable; },
       getConfiguration() { return { get: (_key, fallback) => fallback }; } },
     commands: {
       registerCommand(id) { registered.add(id); return disposable; },
@@ -70,7 +71,7 @@ test("extension activates, registers commands, and resolves a restored PDF custo
   assert.deepEqual(contributed.filter(id => !registered.has(id)), []);
   assert.deepEqual(manifest.contributes.keybindings.filter(binding => binding.command === "mewReader.showBar"), [{
     command: "mewReader.showBar",
-    key: "ctrl+alt+t"
+    key: "ctrl+alt+m"
   }]);
   assert.deepEqual(manifest.contributes.customEditors, [{
     viewType: "mewReader.pdf",
@@ -174,7 +175,7 @@ test("extension activates, registers commands, and resolves a restored PDF custo
   provider.panel = null;
   provider.ready = false;
   const current = { uri: uri("file:///books/317.html"), page: 317,
-    volume: { pdfUri, pageLabel: "{page}" } };
+    volume: { pdfUri, pages: [317, 318], pageLabel: "{page}" } };
   provider.resolvePage = async () => current;
   provider.watchVolume = () => {};
   const before = posted.length;

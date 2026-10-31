@@ -3,7 +3,7 @@
   "displayName": "MEW HTML / PDF Reader",
   "publisher": "lldd1226",
   "description": "MEW HTML tag editing with a synchronized PDF.js editor tab.",
-  "version": "0.1.6",
+  "version": "2.0.0",
   "private": true,
   "engines": {
     "vscode": "^1.95.0"
@@ -397,7 +397,7 @@
     }
   },
   "scripts": {
-    "check": "node --check extension.cjs && node --check reader-core.cjs && node --check reader-pdf.js && node --check pdf-source.mjs && node --check pdf-worker.mjs && node --check generate-mew-brief-config.mjs && node --test test/*.test.cjs",
+    "check": "node --check extension.cjs && node --check editor-core.js && node --check reader-core.cjs && node --check reader-pdf.js && node --check pdf-source.mjs && node --check pdf-worker.mjs && node --check generate-mew-brief-config.mjs && node --test test/*.test.cjs",
     "package": "vsce package"
   },
   "dependencies": {
