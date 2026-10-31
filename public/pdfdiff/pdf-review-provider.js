@@ -46,7 +46,8 @@ class PdfLocator {
     const pdf = command ? `[PDF:](command:${command}?${encodeURIComponent(JSON.stringify([request]))})` : 'PDF:';
     const htmlText = item.font ? this.fontSummary(item.formats, 'htmlFont') : escape(item.comparison.html);
     const pdfText = item.font ? this.fontSummary(item.formats, 'font') : escape(item.comparison.pdf);
-    return { value: item.missing ? `${pdf} PDF OCR 缺少相关文字。` : `HTML: ${htmlText}\n\n${pdf} ${pdfText}`,
+    const save = command && !item.missing ? `\n\n[替换&保存](command:${command}?${encodeURIComponent(JSON.stringify([{ ...request, save: true }]))})` : '';
+    return { value: (item.missing ? `${pdf} PDF OCR 缺少相关文字。` : `HTML: ${htmlText}\n\n${pdf} ${pdfText}`) + save,
       isTrusted: command ? { enabledCommands: [command] } : false };
   }
 
@@ -711,16 +712,19 @@ function onSources(event) {
     const action = editor.addAction({
       id: 'mew.pdf-difference', label: '查看 PDF 差异',
       run(_, request) {
-        const model = editor.getModel();
+        const model = editor.getModel(), owner = editor.getDomNode()?.ownerDocument.defaultView;
         if (!locator.prepareReview({ editor, model, version: request.version }) || model.uri.toString() !== request.model) return;
-        const item = locator.reviewItems().items.find(item => item.id === request.id);
+        const items = locator.reviewItems().items, item = items.find(item => item.id === request.id);
         if (!item) return;
+        if (request.save) { 
+          apply({ items, position: items.indexOf(item), context: { editor, model, source: model.getValue(), version: request.version } }, false); 
+          return (owner.mewWorkbench || owner.readerMonaco).save({ followPdf: false, model }); 
+        }
         const reader = readerWindow() || window, notice = { ...item.comparison, source: { index: locator.index, start: item.sourceStart, end: item.sourceEnd } };
         reader.dispatchEvent(new reader.CustomEvent('pdf-selection-difference', { detail: {
           editor, model, pdf: viewer()?.pdfDocument, notices: [notice], targets: locator.index.targets,
           candidateId: item.id, kind: item.font ? 'font' : 'text', side: 'pdf'
         } }));
-        const owner = editor.getDomNode()?.ownerDocument.defaultView;
         if (owner && owner !== reader) {
           reader.name ||= `mew-review-${crypto.randomUUID()}`;
           owner.open('', reader.name)?.focus();
