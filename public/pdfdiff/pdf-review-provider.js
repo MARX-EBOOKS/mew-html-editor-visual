@@ -723,7 +723,7 @@ function onSources(event) {
         const reader = readerWindow() || window, notice = { ...item.comparison, source: { index: locator.index, start: item.sourceStart, end: item.sourceEnd } };
         reader.dispatchEvent(new reader.CustomEvent('pdf-selection-difference', { detail: {
           editor, model, pdf: viewer()?.pdfDocument, notices: [notice], targets: locator.index.targets,
-          candidateId: item.id, kind: item.font ? 'font' : 'text', side: 'pdf'
+          candidateId: item.font ? item.id : undefined, kind: item.font ? 'font' : 'text', side: 'pdf'
         } }));
         if (owner && owner !== reader) {
           reader.name ||= `mew-review-${crypto.randomUUID()}`;
