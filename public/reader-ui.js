@@ -319,7 +319,7 @@
       if (byId(id)) byId(id).disabled = !view[enabled];
     }
     const panel = document.querySelector('.float-panel[data-panel="tagBar"]');
-    const pageTitle = view.page ? `编辑按钮 · 第 ${view.page} 页 · ${view.pageIndex} / ${view.pageTotal}` : "编辑按钮";
+    const pageTitle = view.page ? `编辑按钮 · 第 ${view.page} 页 / ${view.pageTotal}` : "编辑按钮";
     const panelTitle = panel?.querySelector(".fp-title");
     const panelHeader = panel?.querySelector(".fp-header");
     if (panelTitle) panelTitle.textContent = pageTitle;

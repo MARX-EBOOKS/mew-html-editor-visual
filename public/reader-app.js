@@ -313,7 +313,7 @@
       chapterTitle: chapter?.title || volume.title,
       chapterPage: chapter?.page,
       pageContext: `${volume.shortTitle} · 第 ${state.page} 页`,
-      pageTotal: volume.pages.length,
+      pageTotal: volume.pages.at(-1) ?? 0,
       pageIndex: index + 1,
       page: state.page,
       nextPage: volume.pages[index + 1],

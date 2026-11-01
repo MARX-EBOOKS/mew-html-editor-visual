@@ -108,6 +108,16 @@
         persist();
       });
     }
+    window.addEventListener('mew-monaco-ready', ({ detail: { editor } }) => {
+      for (const [index, name] of ['tree', 'preview'].entries()) {
+        const toggle = byId(`${name}PaneToggle`);
+        editor.addAction({
+          id: `mew.view.${name}`, label: toggle.textContent,
+          contextMenuGroupId: 'mew.view', contextMenuOrder: index + 1,
+          run: () => setPaneOpen(name, !layout[`${name}Open`])
+        });
+      }
+    });
     byId('layoutReset').addEventListener('click', () => {
       Object.assign(layout, defaults);
       render();

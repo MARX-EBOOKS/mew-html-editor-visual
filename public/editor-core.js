@@ -268,8 +268,12 @@
         for (const action of actions) {
           const getLabel = settingLabels.get(actionId(action));
           if (getLabel) action.label = getLabel();
+          if (actionId(action).startsWith('mew.view.')) {
+            action.label = document.getElementById(`${actionId(action).slice('mew.view.'.length)}PaneToggle`).textContent;
+          }
         }
         const groups = [
+          ["view", "视图", id => id.startsWith("mew.view.")],
           ["editor", "编辑器设置", id => id.startsWith("mew.editor.toggle.")],
           ["reader", "阅读器设置", id => id.startsWith("mew.reader.") && id !== "mew.reader.workspace"],
           ["tags", "标签面板设置", id => id.startsWith("mew.tag-panel.") && id !== "mew.tag-panel.visible"],

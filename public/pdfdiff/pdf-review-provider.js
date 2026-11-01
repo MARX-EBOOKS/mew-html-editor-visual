@@ -1,5 +1,6 @@
 // PDF mapping, review candidates, provider actions and highlights.
 'use strict';
+const nativeEditor = !!window.PdfSelectionOptions?.nativeEditor;
 // Source/PDF mapping and candidate generation.
 const pageTexts = new WeakMap();
 const fontPages = new WeakMap(), pageFontItems = new WeakMap();
@@ -86,6 +87,8 @@ class PdfLocator {
       if (!request || request.notice.source && model && !item) return;
       if (item) request.focusId = item.id;
       this.dismissed = null;
+      if (nativeEditor && data.side === 'html')
+        return item && host.showHover(review, { editor, model }, item, prepared.items, request.notice.source);
       if (!request.notice.source || !model) return host.showNotice({
         title: 'PDF 文字差异', message: '文字不一致', comparison: this.comparisonRows(request.notice, false), anchor: data.anchor,
         layout: presentation({ editor, request })
@@ -157,7 +160,8 @@ class PdfLocator {
       const [change] = changes;
       let cursor = 0;
       // Anchor the selected context to confirmed faults in the existing queue.
-      for (const anchor of change ? text : []) {
+      for (const anchor of change && (notice.html.length > change.html.length
+        || /^\s$/u.test(this.index.raw[source.start - 1] || '') && /^\s$/u.test(this.index.raw[source.end] || '')) ? text : []) {
         if (anchor.missing || anchor.comparison.html !== change.html || anchor.comparison.pdf !== change.pdf) continue;
         const start = anchor.sourceStart - change.start, end = start + notice.html.length;
         if (start === selection.sourceStart || start < 0 || this.index.raw.slice(start, end) !== notice.html) continue;
@@ -354,10 +358,11 @@ class PdfLocator {
         left: layer.left + cached.bounds.left * layer.width,
         top: layer.top + cached.bounds.top * layer.height, bottom: layer.top + cached.bounds.bottom * layer.height
       };
-      const end = index.raw.slice(hit.start, hit.end).trim() ? hit.end : hit.start;
+      const end = index.raw.slice(hit.start, hit.end).trim() ? hit.start + index.raw.slice(hit.start, hit.end).trimEnd().length : hit.start;
       const bounds = { left: Infinity, top: Infinity, bottom: -Infinity };
       const range = this.document.createRange();
       for (const part of index.fontRuns(hit.start, end, true)) {
+        if (end > hit.start && !index.raw.slice(Math.max(hit.start, part.start), Math.min(end, part.end)).trim()) continue;
         range.setStart(part.node, Math.max(0, Math.min(part.node.length, hit.start - part.start)));
         range.setEnd(part.node, Math.max(0, Math.min(part.node.length, end - part.start)));
         for (const box of range.getClientRects()) if (box.height && (box.width || end === hit.start)) {
@@ -616,13 +621,14 @@ function content(state, item) {
     : item ? '文字不一致' : state.items.length ? '已到末尾，可返回上一条。' : '没有可审阅的差异。';
   return {
     message, edits: data?.groups.get(item)?.edits, allEdits: data?.edits,
-    comparison: item?.font ? [] : locator.comparisonRows(item?.comparison, !item?.selection, item?.missing),
+    comparison: item?.font ? ['htmlFont', 'font'].map((field, i) => ({ label: i ? 'PDF' : 'HTML', parts: [{ text: locator.fontSummary(item.formats, field) }] }))
+      : locator.comparisonRows(item?.comparison, !item?.selection, item?.missing),
     previewDecorations: item?.font || item?.missing ? item.previewDecorations ||= (data?.index || item.pdfSource?.index || locator.index).sourceSegments(item.sourceStart, item.sourceEnd, true).map(segment => ({
       range: window.PdfSelectionDiff.rangeAt(model, segment.start, segment.end), options: { inlineClassName: item.missing ? 'mew-review-proposed' : 'mew-review-format', stickiness: 1 }
     })) : [],
     apply: !!edits.length,
     range: item?.range || (edits.length ? window.PdfSelectionDiff.rangeAt(model, Math.min(...edits.map(edit => edit.start)), Math.max(...edits.map(edit => edit.end))) : null),
-    advance: false, expanded: false
+    options: [], applyLabel: item?.font ? '替换格式' : '替换', advance: false, expanded: false
   };
 }
 function pattern(value, index) {
@@ -631,7 +637,12 @@ function pattern(value, index) {
   // Unknown or foreign source context may only match the candidate itself.
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > index.raw.length
     || value.pdfSource && value.pdfSource.index !== index) return value;
-  if (value.selection) return JSON.stringify(['selection', value.comparison.html, value.comparison.pdf]);
+  if (value.selection) {
+    const changes = locator.comparisonParts(value.comparison).filter(part => part.changed);
+    if (changes.length === 1 && value.comparison.html.length === changes[0].html.length
+      && !(/^\s$/u.test(index.raw[start - 1] || '') && /^\s$/u.test(index.raw[end] || ''))) return value;
+    return JSON.stringify(['selection', value.comparison.html, value.comparison.pdf]);
+  }
   let before = start, after = end;
   const word = /^[\p{L}\p{M}\p{N}_'’\-]+$/u;
   while (before > 0 && word.test(index.raw.slice(before - (index.raw.codePointAt(before - 2) > 0xffff ? 2 : 1), before)))
@@ -676,7 +687,7 @@ function apply(state, all) {
 const review = {
   compact: true, content, apply, presentation, matchingItems,
   isCurrent: ({ source, ...context }) => (source === undefined || source === context.model.getValue()) && !!locator.prepareReview(context),
-  available: editor => !!locator.prepareReview({ editor }),
+  available: editor => !editor || !!locator.prepareReview({ editor }),
   focusIndex(items, request) {
     const offset = request?.notice?.source?.start, text = this.id === 'pdf-ocr';
     if (offset === undefined) return -1;
@@ -712,22 +723,26 @@ function onSources(event) {
   const index = editor?.createDecorationsCollection && locator.prepareReview({ editor });
   if (!index) return;
   index.targets = targets;
-  const model = editor.getModel(), data = locator.reviewItems();
+  const model = editor.getModel(), data = locator.reviewItems(), owner = editor.getDomNode()?.ownerDocument.defaultView;
+  const controller = nativeEditor ? editor : owner.mewWorkbench || owner.readerMonaco;
   host.bindSuggestions(editor, currentModel => editor === selection()?.editor && locator.prepareReview({ editor, model: currentModel })
     ? locator.reviewItems().plans : []);
   if (editor.addAction && !editor.getAction('mew.pdf-difference')) {
     const action = editor.addAction({
       id: 'mew.pdf-difference', label: '查看 PDF 差异',
-      run(_, request) {
-        const model = editor.getModel(), owner = editor.getDomNode()?.ownerDocument.defaultView;
+      async run(_, request) {
+        const model = editor.getModel();
         if (!locator.prepareReview({ editor, model, version: request.version }) || model.uri.toString() !== request.model) return;
-        const items = locator.reviewItems().items, item = items.find(item => item.id === request.id);
+        const noticeData = request.selection;
+        const items = noticeData ? locator.reviewItems({ request: { notice: { ...noticeData,
+          source: { index: locator.index, start: noticeData.start, end: noticeData.end } } } }).items : locator.reviewItems().items;
+        const item = items.find(item => item.id === request.id);
         if (!item) return;
-        if (request.save) { 
-          apply({ items, position: items.indexOf(item), context: { editor, model, source: model.getValue(), version: request.version } }, false).apply?.();
-          return (owner.mewWorkbench || owner.readerMonaco).save({ followPdf: false, model }); 
-        }
         const reader = readerWindow() || window, notice = { ...item.comparison, source: { index: locator.index, start: item.sourceStart, end: item.sourceEnd } };
+        if (request.save) {
+          await apply({ items, position: items.indexOf(item), context: { editor, model, source: model.getValue(), version: request.version } }, false).apply?.();
+          return controller.save({ followPdf: false, model });
+        }
         reader.dispatchEvent(new reader.CustomEvent('pdf-selection-difference', { detail: {
           editor, model, pdf: viewer()?.pdfDocument, notices: [notice], targets: locator.index.targets,
           candidateId: item.font ? item.id : undefined, kind: item.font ? 'font' : 'text', side: 'pdf'
@@ -741,9 +756,10 @@ function onSources(event) {
     editor.onDidDispose(() => action.dispose());
   }
   const command = editor.getId?.() && `${editor.getId()}:mew.pdf-difference`;
+  const hover = nativeEditor ? item => host.hoverContent(review, { editor, model }, item, data.items) : item => locator.sourceHover(item, model, command);
   highlights.updateSource(editor, [index, highlighted, data, model],
-    () => highlighted && index ? index.sourceDecorations(data.items, fontStyles, locator.textEnabled,
-      item => locator.sourceHover(item, model, command)) : []);
+    () => highlighted || nativeEditor ? index.sourceDecorations(data.items, fontStyles, locator.textEnabled, hover)
+      .map(mark => highlighted ? mark : { ...mark, options: { ...mark.options, inlineClassName: '', before: undefined } }) : []);
   if (event.detail.diffEnabled && data) selection()?.showReviewPointer(editor, data.items, data);
 }
 window.PdfReviewReady = (async () => {
@@ -772,6 +788,7 @@ window.PdfReviewReady = (async () => {
     id: 'pdf-ocr', label: 'PDF 文字差异审阅', isEnabled: () => locator.textEnabled,
     setEnabled(value) {
       locator.textEnabled = value;
+      selection()?.savePreference('textDetection', value, '无法保存文字差异设置');
       try { localStorage.setItem('mew.pdf-review.enabled', String(value)); } catch { }
       for (const id of ['pdf-font', 'pdf-bold']) host.invalidate(id);
       selection()?.refresh();
@@ -791,7 +808,7 @@ window.PdfReviewReady = (async () => {
     id, label, toggleOnly, setEnabled, available: () => !!selection() && (setting === 'selectionEnabled' || selection().selectionEnabled), isEnabled: () => selection()?.[setting] === true
   }))];
   let previousPdf = viewer()?.pdfDocument, previousApi = selection(), previousEnabled, previousFonts = activeFontStyles();
-  const poll = setInterval(() => {
+  const poll = nativeEditor ? null : setInterval(() => {
     bind();
     const pdf = viewer()?.pdfDocument, api = selection(), fonts = activeFontStyles(), state = `${api?.enabled}:${api?.sourceEnabled}:${api?.selectionEnabled}:${fonts}`;
     if (previousPdf !== pdf || previousFonts !== fonts) {

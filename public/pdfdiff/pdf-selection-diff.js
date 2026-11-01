@@ -35,6 +35,7 @@ function applyEdits(editor, model, version, source, edits, origin = 'review-repl
   const applied = editor.executeEdits(origin, checked.map(edit => ({ range: rangeAt(model, edit.start, edit.end), text: edit.text, forceMoveMarkers: true })));
   editor.pushUndoStop?.();
   if (applied === false) throw new Error('编辑器未能应用替换');
+  return applied;
 }
 function textDiff(left, right, details = false, limit = Infinity, condense = false) {
   if (left === right) return { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
@@ -560,7 +561,7 @@ class PdfSourceIndex {
     });
     const connection = reverse?.length ? { start: Math.min(...reverse.map(item => item.targetStart)), end: Math.max(...reverse.map(item => item.targetEnd)) }
       : (this.connections.get(page) || []).find(item => item.targetStart === 0 && item.targetEnd === page.raw.length)
-        || connect && (page.sourcePages?.length || page.layer) && this.rememberConnection(0, this.raw.length, page, { start: 0, end: page.raw.length }, { recover: true });
+        || connect && !this.connections.get(page)?.length && (page.sourcePages?.length || page.layer) && this.rememberConnection(0, this.raw.length, page, { start: 0, end: page.raw.length }, { recover: true });
     const matches = cached?.matches || { 0: connection ? [] : this.matches([page.raw]) };
     let scope = connection || (matches[0].length === 1 ? matches[0][0] : null);
     if (scope && connect && !connection) scope = this.rememberConnection(scope.start, scope.end, page, { start: 0, end: page.raw.length }) || scope;
@@ -615,6 +616,8 @@ class PdfSourceIndex {
       const lastPage = this.pages?.find(page => this.normalized.starts[last.end - 1] >= page.start && this.normalized.starts[last.end - 1] <= page.end);
       scope = { start: Math.max(this.normalized.starts[start], firstPage?.start ?? 0), end: Math.min(this.normalized.ends[end - 1], lastPage?.end ?? this.raw.length) };
     }
+    if (!scope && connect && this.connections.get(page)?.length && (page.sourcePages?.length || page.layer))
+      scope = this.rememberConnection(0, this.raw.length, page, { start: 0, end: page.raw.length }, { recover: true });
     this.pageScopes.set(page, { scope, matches, prepared: connect, connections: connect ? this.connections.get(page) || [] : undefined });
     return scope;
   }
@@ -801,7 +804,7 @@ class PdfSourceIndex {
 window.PdfSelectionDiff = {
   PdfSourceIndex, normalized, lowerBound, htmlFontDefinition, textDiff,
   validateEdits, applyEdits, rangeAt, significantText, changedRange,
-  ready: import("/monaco/esm/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.js")
+  ready: window.PdfSelectionOptions?.nativeEditor ? Promise.resolve() : import("/monaco/esm/vs/editor/common/diff/defaultLinesDiffComputer/defaultLinesDiffComputer.js")
     .then(({ DefaultLinesDiffComputer }) => diffComputer = new DefaultLinesDiffComputer())
     .catch(() => null)
 };
