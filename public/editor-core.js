@@ -226,16 +226,77 @@
       this.editor = api.editor.create(host, {
         ...config, fontSize: this.fontSize * scale, lineHeight: Math.round(this.lineHeight * scale)
       });
+      const settingLabels = new Map();
+      for (const [index, [name, label, values, read, write]] of [
+        ["wordWrap", "自动换行", ["off", "on"]],
+        ["minimap", "缩略图", [false, true], value => value.enabled, value => ({ enabled: value })],
+        ["renderWhitespace", "显示空白字符", ["none", "all"]],
+        ["guides", "缩进参考线", [false, true], value => value.indentation, value => ({ indentation: value })],
+        ["folding", "代码折叠", [false, true]]
+      ].entries()) {
+        settingLabels.set(`mew.editor.toggle.${name}`, () => {
+          const option = this.editor.getOption(api.editor.EditorOption[name]);
+          const enabled = (read ? read(option) : option) !== values[0];
+          return `${label}：${enabled ? "开启" : "关闭"}`;
+        });
+        this.editor.addAction({
+          id: `mew.editor.toggle.${name}`, label: `切换${label}`,
+          contextMenuGroupId: "mew.editor.settings", contextMenuOrder: index + 1,
+          run: () => {
+            const option = this.editor.getOption(api.editor.EditorOption[name]);
+            const value = (read ? read(option) : option) === values[0] ? values[1] : values[0];
+            this.editor.updateOptions({ [name]: write ? write(value) : value });
+          }
+        });
+      }
+      window.dispatchEvent(new CustomEvent("mew-monaco-ready", { detail: { editor: this.editor } }));
       // 菜单执行前恢复焦点；粘贴复用已有剪贴板读取方式及 Monaco 的 paste 处理。
       const menu = this.editor.getContribution("editor.contrib.contextmenu");
       const getActions = menu._getMenuActions.bind(menu);
-      menu._getMenuActions = (...args) => getActions(...args).map(action => {
-        if (!/^editor\.action\.clipboard(Copy|Cut|Paste)Action$/.test(action.id)) return action;
-        const run = action.run.bind(action);
-        action.run = (...params) => { this.focus(); const model = this.model; return action.id.endsWith("PasteAction")
-          ? navigator.clipboard.readText().then(text => { if (text && this.model === model && !this.editor.getOption(api.editor.EditorOption.readOnly)) this.editor.trigger("mew", "paste", { text }); }) : run(...params); };
-        return action;
-      });
+      let SubmenuAction;
+      menu._getMenuActions = (...args) => {
+        const actions = getActions(...args).map(action => {
+          if (!/^editor\.action\.clipboard(Copy|Cut|Paste)Action$/.test(action.id)) return action;
+          const run = action.run.bind(action);
+          action.run = (...params) => { this.focus(); const model = this.model; return action.id.endsWith("PasteAction")
+            ? navigator.clipboard.readText().then(text => { if (text && this.model === model && !this.editor.getOption(api.editor.EditorOption.readOnly)) this.editor.trigger("mew", "paste", { text }); }) : run(...params); };
+          return action;
+        });
+        // addAction prefixes menu command IDs with the editor instance ID.
+        const actionId = action => action.id.startsWith(this.editor.getId() + ':')
+          ? action.id.slice(this.editor.getId().length + 1) : action.id;
+        for (const action of actions) {
+          const getLabel = settingLabels.get(actionId(action));
+          if (getLabel) action.label = getLabel();
+        }
+        const groups = [
+          ["editor", "编辑器设置", id => id.startsWith("mew.editor.toggle.")],
+          ["reader", "阅读器设置", id => id.startsWith("mew.reader.") && id !== "mew.reader.workspace"],
+          ["tags", "标签面板设置", id => id.startsWith("mew.tag-panel.") && id !== "mew.tag-panel.visible"],
+          ["diff", "差异设置", id => id.startsWith("replacement-review.toggle.") && id !== "replacement-review.toggle.pdf-selection-sync"]
+        ];
+        // Reuse Monaco's own SubmenuAction type so its menu renders the arrow,
+        // hover expansion and keyboard navigation. The built-in Peek item is
+        // a SubmenuItemAction, whose base class is SubmenuAction.
+        if (!SubmenuAction) {
+          // Include Peek even when this language has no navigation providers.
+          // These unfiltered actions are used only to obtain the native type.
+          const submenu = menu._menuService.getMenuActions(this.editor.contextMenuId, { contextMatchesRules: () => true })
+            .flatMap(([, items]) => items).find(action => action.item?.submenu);
+          SubmenuAction = Object.getPrototypeOf(submenu.constructor.prototype).constructor;
+        }
+        const grouped = new Set();
+        const result = actions.flatMap(action => {
+          const group = groups.find(([, , matches]) => matches(actionId(action)));
+          if (!group) return [action];
+          const [id, label, matches] = group;
+          if (grouped.has(id)) return [];
+          grouped.add(id);
+          return [new SubmenuAction(`mew.settings.${id}`, label, actions.filter(item => matches(actionId(item))))];
+        });
+        return result.filter((action, index) => action.id !== "vs.actions.separator"
+          || index > 0 && index < result.length - 1 && result[index - 1].id !== "vs.actions.separator");
+      };
     }
 
     createModel({ text = "", language = "html", uri, onChange } = {}) {

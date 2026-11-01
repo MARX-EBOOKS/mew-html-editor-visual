@@ -175,8 +175,9 @@
     if (!api) return;
     editor.updateOptions({ glyphMargin: true });
     editor.getDomNode()?.classList.add('mew-review-suggestions');
-    const state = { provide }, listeners = [];
+    const state = { provide, actions: [] }, listeners = [];
     editorSuggestions.set(editor, state);
+    updateMenu();
     const plans = (model, range, source = model.getValue()) => {
       if (editor.getModel() !== model || editor.getOption(api.editor.EditorOption.readOnly)) return [];
       const active = session?.context.editor === editor && valid();
@@ -279,7 +280,7 @@
       editor.onDidCompositionStart(() => { inComposition = true; clearTimeout(timer); }),
       editor.onDidCompositionEnd(() => { inComposition = false; suggest(); }),
       editor.onDidDispose(() => state.dispose()));
-    state.dispose = () => { clearTimeout(timer); listeners.forEach(listener => listener.dispose()); editorSuggestions.delete(editor);
+    state.dispose = () => { clearTimeout(timer); state.actions.forEach(action => action.dispose()); listeners.forEach(listener => listener.dispose()); editorSuggestions.delete(editor);
       editor.getDomNode()?.classList.remove('mew-review-suggestions'); };
   }
   function paintRevision(editor, model, key, edits, decorations = []) {
@@ -325,6 +326,26 @@
     return { items, choices };
   }
   function updateMenu() {
+    const toggle = (provider, enabled) => {
+      if (provider.available?.() === false) return;
+      provider.setEnabled(enabled);
+      if (!enabled && (session?.provider === provider || lastRequest?.id === provider.id)) close();
+      updateMenu();
+    };
+    for (const [editor, state] of editorSuggestions) {
+      state.actions.forEach(action => action.dispose());
+      state.actions = [];
+      for (const provider of providers.values()) {
+        if (!provider.setEnabled || provider.available?.() === false) continue;
+        state.actions.push(editor.addAction({
+          id: `replacement-review.toggle.${provider.id}`,
+          label: `${provider.isEnabled?.() !== false ? '关闭' : '启用'}${provider.label}`,
+          contextMenuGroupId: 'replacement-review.settings',
+          contextMenuOrder: state.actions.length + 1,
+          run: () => toggle(provider, provider.isEnabled?.() === false)
+        }));
+      }
+    }
     if (!menu) return;
     menu.replaceChildren();
     if (!providers.size) { const hint = document.createElement('span'); hint.textContent = '暂无可用的审阅功能'; menu.append(hint); }
@@ -335,11 +356,7 @@
         input.type = 'checkbox'; input.checked = provider.isEnabled?.() !== false;
         input.disabled = provider.available?.() === false;
         input.setAttribute('aria-label', `启用${provider.label}`);
-        input.onchange = () => {
-          provider.setEnabled(input.checked);
-          if (!input.checked && (session?.provider === provider || lastRequest?.id === provider.id)) close();
-          updateMenu();
-        };
+        input.onchange = () => toggle(provider, input.checked);
         label.append(input);
         if (provider.toggleOnly) label.append(document.createTextNode(provider.label));
         row.append(label);
@@ -403,7 +420,7 @@
     const saved = session;
     if (!saved.manualPending) saved.resumeOffset = saved.anchorOffset ?? 0;
     // Monaco change offsets refer to the source before this event.
-    const offset = saved.resumeOffset;
+    const offset = saved.resumeOffset ?? saved.anchorOffset ?? 0;
     saved.resumeOffset = offset + (event?.changes || []).reduce((delta, change) => delta + (
       change.rangeOffset >= offset ? 0 : change.rangeOffset + change.rangeLength <= offset
         ? change.text.length - change.rangeLength : change.rangeOffset - offset
@@ -431,7 +448,7 @@
       });
       Object.assign(saved, { items, choices, position: found < 0 ? items.length : found,
         context, stale: false, manualPending: false });
-      if (!saved.saving) render(true);
+      render(true);
     } catch (error) { if (session === saved && request === generation) message(error.message); }
     })().finally(() => {
       saved.refreshTask = null;
@@ -441,11 +458,11 @@
   }
   function controls() {
     const item = current(), currentVersion = valid(), busy = !!(session?.applying || session?.saving);
-    const ready = (currentVersion || session?.manualPending && !composing) && !!item && !busy && !session.waitingApply;
-    const canApply = ready && session.provider.apply && session.content?.apply !== false;
+    const canApply = currentVersion && !!item && !busy && !session.waitingApply && session.provider.apply && session.content?.apply !== false;
     get('apply').disabled = !currentVersion || !item || busy;
     for (const name of ['advance', 'all']) get(name).disabled = !canApply;
     get('save').disabled = !workspace()?.save || !canApply;
+    get('save').textContent = session?.manualPending ? '更新中....' : '替换&保存';
     const blocked = !currentVersion || !!session?.applying;
     get('prev').disabled = blocked || session.position <= 0;
     get('next').disabled = blocked || session.position >= session.items.length - 1;
@@ -524,12 +541,18 @@
   function render(preserveSelection = false, mirrored = false) {
     if (!session) return;
     const item = current(), { editor, model, source, version } = session.context;
+    if (session.stale) {
+      clearPreview(); revisionMarks.clearMarks();
+      session.context.highlightedItems = item ? [item] : [];
+    }
+    const peer = opposite(session);
+    panel.hidden = false;
     session.content = session.provider.content?.(session, item) || {};
     const content = session.content;
     let previewEnabled = false;
-    try { previewEnabled = localStorage.getItem(previewKey) === 'true'; } catch {}
+    try { previewEnabled = !session.stale && localStorage.getItem(previewKey) === 'true'; } catch {}
     get('apply').setAttribute('aria-pressed', String(previewEnabled));
-    editorSuggestions.get(editor)?.refreshActions();
+    if (!session.stale) editorSuggestions.get(editor)?.refreshActions();
     get('options').replaceChildren(); controls();
     message(content.message || ''); comparison(content.comparison);
     get('title').textContent = content.title || session.provider.label;
@@ -543,20 +566,19 @@
       }
       const range = preserveSelection && editor.getSelection() || content.range;
       session.anchor = content.range ? model.validateRange(content.range) : range;
-      if (range) {
+      if (range && !session.stale) {
         session.anchorOffset = model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
         if (!preserveSelection) editor.setSelection(session.anchor);
         editor.revealRangeInCenterIfOutsideViewport(session.anchor);
       }
       session.provider.onSelect?.(item, session.context, session.items, previewEnabled);
     } else session.provider.onClose?.(session.context);
-    if (editor.getDomNode()?.ownerDocument === document) {
+    if (!session.stale && editor.getDomNode()?.ownerDocument === document) {
       paintRevision(editor, model, [model, version ?? source, item, session.choices.get(item?.id), previewEnabled],
         previewEnabled ? selectedEdits() : [], previewEnabled ? content.previewDecorations : []);
     }
     void preview(); place(editor);
-    const peer = !mirrored && opposite(session);
-    if (peer) peer.host.mirror(session, { ...peer.request, mirror: true, snapshot: { ...session } });
+    if (!mirrored && peer) peer.host.mirror(session, { ...peer.request, mirror: true, snapshot: { ...session } });
   }
   function comparison(rows = []) {
     get('comparison').replaceChildren();
@@ -620,10 +642,10 @@
     } catch (error) { if (session === saved && request === generation) { clearPreview(); message(error.message); } }
   }
   async function apply(all) {
-    const saved = session, model = saved?.context.model;
+    const saved = session, model = saved?.context.model, position = saved?.position;
     if (saved?.waitingApply) return;
     if (saved?.refreshTask || saved?.manualPending && !composing)
-      await (saved.waitingApply = saved.refreshTask || refreshAfterEdit(saved)).finally(() => { saved.waitingApply = null; });
+      await (saved.waitingApply = refreshAfterEdit(saved)).finally(() => { saved.waitingApply = null; });
     if (session !== saved || !valid()) return;
     if (!current() || !saved.provider.apply || saved.applying) return;
     saved.applying = true; controls();
@@ -632,20 +654,27 @@
       const result = await saved.provider.apply({ ...saved, context: { ...saved.context } }, all);
       if (session !== saved) return true;
       if (result.offset !== undefined) {
-        saved.resumeOffset = result.offset; saved.manualPending = true;
+        saved.resumeOffset = result.offset; saved.stale = saved.manualPending = true;
+        if (result.position !== undefined) { saved.position = result.position; panelMoved = false; }
+        render(true);
+        if (panel.dataset.side === 'pdf') await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
+        if (session !== saved) return;
+        result.apply?.();
         await refreshAfterEdit(saved);
         return true;
       }
-      Object.assign(saved, { items: result.items, choices: result.choices || saved.choices,
-        position: result.position, context: { ...saved.context, ...result.context,
-          source: model.getValue(), version: model.getVersionId?.() } });
+      Object.assign(saved, { ...validateCandidates(result, saved.choices),
+        position: result.position, context: { ...saved.context,
+          source: model.getValue(), version: model.getVersionId?.(), ...result.context } });
       if (saved.context.request) saved.context.request = { ...saved.context.request, snapshot: null };
       if (!valid()) { stale(); return; }
-      if (!saved.saving) render();
+      render();
       return true;
     } catch (error) {
       if (session !== saved) return;
+      saved.position = position; saved.stale = saved.manualPending = false;
       if (model.getValue() !== saved.context.source) stale();
+      else render(true);
       message(error.message);
     } finally { saved.applying = false; controls(); }
   }
@@ -688,9 +717,10 @@
       // Each free band ends above a highlight or starts below one.
       for (const box of [...layout.highlights, { top: bottom + 8, bottom }].sort((a, b) => a.top - b.top)) {
         const end = Math.min(bottom, box.top - 8), room = Math.min(height, Math.max(0, end - edge));
-        if (room > available) {
+        const nextY = end <= anchor ? end - room : edge;
+        if (room > available || room > 0 && room === available && Math.abs(nextY + room / 2 - anchor) < Math.abs(y + available / 2 - anchor)) {
           available = room;
-          y = end <= anchor ? end - room : edge;
+          y = nextY;
         }
         edge = Math.max(edge, box.bottom + 8);
       }
@@ -790,7 +820,8 @@
         ++generation; clearTimeout(manualTimer);
         Object.assign(session, { items: saved.items, position: saved.position,
           choices: new Map(saved.choices),
-          context: { ...saved.context, request }, stale: false, manualPending: false });
+          context: { ...saved.context, request }, stale: !!saved.stale, manualPending: !!saved.manualPending });
+        if (saved.stale) panelMoved = false;
         render(true, true);
       } else void open(saved.provider.id, saved.context.editor, saved.items[saved.position]?.id, saved.position, request);
     },

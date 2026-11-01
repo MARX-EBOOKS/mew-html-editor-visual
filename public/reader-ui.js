@@ -133,6 +133,23 @@
     byId("tocBtn")?.setAttribute("aria-expanded", String(open));
   }
 
+  function bindContextMenu(editor) {
+    const actions = [
+      ["toc", "显示／隐藏阅读目录", () => setToc(!root.classList.contains("toc-open"))],
+      ["fullscreen", "进入／退出阅读全屏", () => byId("full").click()],
+      ["direction", "切换 PDF 横向／纵向翻页", () => {
+        if (pdfReady) changePdfSettings({ horizontal: !pdfSettings.horizontal });
+      }]
+    ].map(([id, label, run], index) => editor.addAction({
+      id: `mew.reader.${id}`, label, run,
+      contextMenuGroupId: "mew.reader.settings", contextMenuOrder: index + 1
+    }));
+    const subscription = editor.onDidDispose(() => {
+      actions.forEach(action => action.dispose());
+      subscription.dispose();
+    });
+  }
+
   function setTheme(dark) {
     body.classList.toggle("dark", dark);
     localStorage.setItem("readerDark", dark ? "1" : "0");
@@ -817,7 +834,7 @@
 
   window.ReaderUI = {
     init, notify, setDirty, setPosition, setHistoryButtons, renderVolumes, renderToc, renderNavigation, renderTools,
-    setMode, setWorkspaceMode, setToc, setPdf, applyVisualTheme, showVisual, setEditorScale,
+    setMode, setWorkspaceMode, setToc, setPdf, applyVisualTheme, showVisual, setEditorScale, bindContextMenu,
     byId, editorScale: () => editorScale, isDark: () => body.classList.contains("dark"),
     getVisualDocument: () => visualFrame.contentDocument,
     getPdfViewer: () => pdfViewer,

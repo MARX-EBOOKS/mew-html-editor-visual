@@ -60,9 +60,9 @@
         review.locator.getDocumentIndex(pdf, numbers) || []))];
     },
     getVisiblePages: (numbers = sourcePages()) => visiblePages().filter(number => !numbers || numbers.includes(number)).map(number => ({ number, index: layerIndex(viewer.getPageView(number - 1)?.div) })),
-    isCurrent: pdf => !stopped && viewer?.pdfDocument === pdf,
+    isCurrent: pdf => selectionHighlight && !stopped && viewer?.pdfDocument === pdf,
     async waitForIdle(pdf) {
-      while (!stopped && viewer?.pdfDocument === pdf
+      while (selectionHighlight && !stopped && viewer?.pdfDocument === pdf
         && (performance.now() - lastInteraction < 100 || performance.now() - lastEdit < editIdleDelay))
         await new Promise(resolve => setTimeout(resolve, 25));
       if (performance.now() - lastIndexYield >= 8) {
@@ -79,18 +79,18 @@
     highlight: text => select(Array.isArray(text) ? text : [text]),
     clear: () => select([]),
     showReviewPointer(editor, items, key) {
+      if (!selectionHighlight) return;
       if (key && defaultPointer?.key === key && currentPointer(defaultPointer)) return;
       review.highlights.clearHighlights(true);
       if (!key) reviewPointer = null;
       const model = editor?.getModel();
       if (!model || !viewer?.pdfDocument || key && !diffHighlight || !items?.length && !key) return;
-      review.locator.editorSourceIndex(model);
       const data = review.locator.reviewLists.get(items);
-      const entries = data?.index === review.locator.index ? data.entries : items.map(item => review.locator.sourceEntry(review.locator.index, item.sourceStart, item.sourceEnd, true));
+      const entries = data?.entries || items.map(item => item.pdfSource || review.locator.sourceEntry(review.locator.editorSourceIndex(model), item.sourceStart, item.sourceEnd, true));
       const pointer = { editor, model, version: model.getVersionId?.(), pdf: viewer?.pdfDocument, entries, key };
       if (key) defaultPointer = pointer;
-      else if (!selectionHighlight) reviewPointer = pointer;
-      else if (!entries.every(entry => contexts.some(context => context.index === review.locator.index && context.start <= entry.start && context.end >= entry.end)))
+      else reviewPointer = pointer;
+      if (!key && selectionHighlight && !entries.every(entry => contexts.some(context => context.index === entry.index && context.start <= entry.start && context.end >= entry.end)))
         return select(entries, true);
       schedule();
     },
@@ -120,7 +120,14 @@
     setSelectionHighlight(enabled) {
       selectionHighlight = !!enabled;
       savePreference('selectionHighlight', selectionHighlight, '无法保存选区联动设置');
+      clearTimeout(preparationTask);
+      preparationTask = null;
+      preparationPages.clear();
+      resetPdf();
       select([]);
+      for (const id of ['pdf-ocr', 'pdf-font', 'pdf-bold']) window.ReplacementReview.invalidate(id);
+      if (diffButton) diffButton.disabled = !selectionHighlight;
+      window.ReplacementReview.refreshMenu();
       if (selectionHighlight) queueWarm();
     },
     get selectionEnabled() { return selectionHighlight; },
@@ -152,7 +159,7 @@
   }
   const diffButton = document.getElementById('diffHighlightBtn');
   if (diffButton) {
-    diffButton.disabled = false;
+    diffButton.disabled = !selectionHighlight;
     diffButton.textContent = diffHighlight ? '关闭差异高亮' : '显示差异高亮';
     diffButton.setAttribute('aria-pressed', String(diffHighlight));
     listen(diffButton, 'click', () => api.setDiffHighlight(!diffHighlight));
@@ -166,7 +173,7 @@
   }
   function currentPointer(pointer) {
     return pointer.pdf === viewer?.pdfDocument && pointer.editor === currentEditor() && pointer.model === pointer.editor.getModel()
-      && pointer.version === pointer.model.getVersionId?.();
+      && (pointer === reviewPointer || pointer.version === pointer.model.getVersionId?.());
   }
   function resetPdf() {
     defaultPointer = null;
@@ -199,7 +206,7 @@
     return api;
   }
   function schedule(delay = 0) {
-    if (stopped) return;
+    if (stopped || !selectionHighlight) return;
     ++revision;
     clearTimeout(timer);
     const run = revision;
@@ -225,9 +232,10 @@
       const interact = () => { lastInteraction = performance.now(); };
       for (const name of ["wheel", "touchstart", "pointerdown", "keydown"]) listen(node, name, interact, { passive: true });
     }
-    let readTimer = null;
-    cleanup.push(() => clearTimeout(readTimer));
+    let readTimer = null, selectionTimer = null;
+    cleanup.push(() => { clearTimeout(readTimer); clearTimeout(selectionTimer); });
     const read = event => {
+      clearTimeout(selectionTimer);
       if (syncingPdf || window.ReaderUI?.getSourceEditor && editor !== currentEditor()) return;
       if (event?.changes || readTimer !== null) {
         if (event?.changes) lastEdit = event.isFlush ? -Infinity : performance.now();
@@ -257,7 +265,12 @@
 
     };
     for (const name of ["onDidChangeCursorSelection", "onDidChangeModel", "onDidChangeModelContent"]) {
-      const subscription = editor[name]?.(read);
+      const subscription = editor[name]?.(event => {
+        if (name !== "onDidChangeCursorSelection") { read(event); return; }
+        clearTimeout(selectionTimer);
+        lastInteraction = performance.now();
+        selectionTimer = setTimeout(() => read(event), event.source === "mouse" ? 100 : 0);
+      });
       if (subscription) cleanup.push(() => subscription.dispose());
     }
     const click = editor.onMouseUp?.(event => {
@@ -325,12 +338,12 @@
     schedule();
   }
   function queueWarm(number) {
-    if (stopped || (!diffHighlight && !sourceDiffHighlight && !selectionHighlight)) return;
+    if (stopped || !selectionHighlight) return;
     preparationPages.add(number);
     if (preparationTask !== null) return;
     preparationTask = setTimeout(() => {
       preparationTask = null;
-      if (stopped) return;
+      if (stopped || !selectionHighlight) return;
       if (performance.now() - lastInteraction < 100 || performance.now() - lastEdit < editIdleDelay) { queueWarm(number); return; }
       const numbers = [...preparationPages].filter(number => number !== undefined);
       if (preparationPages.has(undefined)) numbers.push(...visiblePages());
@@ -341,7 +354,7 @@
     }, Math.max(0, 100 - (performance.now() - lastInteraction), editIdleDelay - (performance.now() - lastEdit)));
   }
   function warm(numbers = visiblePages()) {
-    if (!viewer?.pdfDocument) return;
+    if (!selectionHighlight || !viewer?.pdfDocument) return;
     const pdf = viewer.pdfDocument, model = currentEditor()?.getModel(), scope = sourcePages();
     for (const div of layers.keys()) if (!div.isConnected) clearLayer(div);
     for (const number of numbers) layerIndex(viewer.getPageView(number - 1)?.div);
@@ -350,6 +363,7 @@
     publishSources();
   }
   function publishSources() {
+    if (!selectionHighlight) return;
     if (performance.now() - lastEdit < editIdleDelay) return;
     const editor = currentEditor();
     window.dispatchEvent(new CustomEvent('pdf-selection-sources', { detail: {
@@ -416,7 +430,7 @@
     selectionDocuments.add(doc);
     let preserving = false;
     listen(doc, 'pointerdown', event => {
-      preserving = event.button === 0 && event.returningToWindow
+      preserving = selectionHighlight && event.button === 0 && event.returningToWindow
         && (viewer?.container.contains(event.target) || event.target.closest?.('.monaco-editor'));
       if (preserving) { event.preventDefault(); event.stopPropagation(); return; }
       if (event.button === 0) selecting = true;
@@ -436,7 +450,7 @@
     listen(doc.defaultView, 'blur', release);
   }
   function selectFromPdf(event) {
-    if (stopped || syncingPdf || !viewer) return;
+    if (stopped || !selectionHighlight || syncingPdf || !viewer) return;
     const native = document.getSelection();
     if (!native?.rangeCount || native.isCollapsed) {
       if (status.mode === "pdf-selection") select([]);
@@ -520,7 +534,7 @@
     const view = viewer?.getPageView(number - 1);
     const pdf = viewer?.pdfDocument;
     const fontAt = review.locator.layerFonts(view, layer, () => {
-      if (stopped || viewer?.pdfDocument !== pdf) return;
+      if (stopped || !selectionHighlight || viewer?.pdfDocument !== pdf) return;
       clearLayer(div); queueWarm(number);
       if (!document.getSelection()?.isCollapsed) selectFromPdf();
       else if (contexts.length || reviewPointer) schedule();
@@ -572,7 +586,7 @@
       const connections = entry.index?.connectionPairs([...pageIndexes, documentIndex]);
       if (!connections?.length || connections.some(([range]) => range.start <= entry.start && range.end >= entry.end)) return [entry];
       const ranges = [...connections.map(([range]) => range),
-        ...entry.index.differences.items
+        ...(entry.index.preparation?.differences || entry.index.differences).items
           .filter(item => item.missing).map(item => ({ start: item.sourceStart, end: item.sourceEnd }))]
         .map(range => [Math.max(entry.start, range.start), Math.min(entry.end, range.end)]).filter(([start, end]) => end > start);
       return ranges.length ? ranges.map(([start, end]) => review.locator.sourceEntry(entry.index, start, end, entry.marked)) : [entry];
@@ -587,7 +601,8 @@
       }
       if (!hit && index) hit = (entry.index && entry.index.connectedRange(index, entry.start, entry.end, false, undefined, true))
         || (!visibleOnly && index.locate(entry, entry.index && index.pageScopes.get(entry.index)?.scope));
-      const missing = (!hit || entry.marked && entry.start === entry.end) && review.locator.textEnabled && entry.index?.differences.items
+      const missing = (!hit || entry.marked && entry.start === entry.end) && review.locator.textEnabled && entry.index
+        && (entry.index.preparation?.differences || entry.index.differences).items
         .find(item => item.missing && (entry.start === entry.end ? entry.marked && entry.start >= item.sourceStart && entry.start <= item.sourceEnd
           : entry.start < item.sourceEnd && entry.end > item.sourceStart));
       if (missing) {
@@ -733,7 +748,7 @@
     // Publish mapping data only. The review adapter chooses where and how to show it.
     const editor = currentEditor(), model = editor?.getModel(), selected = selectionRevision;
     if (notices.length) setTimeout(function publish() {
-      if ((!diffHighlight && !sourceDiffHighlight && !notices[0].missing) || !pointer && !selectionHighlight || stopped || selected !== selectionRevision || notifiedSelection === selected
+      if (!selectionHighlight || (!diffHighlight && !sourceDiffHighlight && !notices[0].missing) || !pointer && !selectionHighlight || stopped || selected !== selectionRevision || notifiedSelection === selected
         || div && !div.isConnected || painted && (!painted.node.isConnected || review.highlights.getHighlight(div, pointer) !== painted)) return;
       // Opening review selects its candidate; wait until the user's drag ends.
       if (selecting) { pendingDifference = publish; return; }
@@ -750,14 +765,14 @@
   async function refresh(run) {
     if (!contexts.length || !viewer?.pdfDocument || stopped) return;
     const instance = viewer, pdf = instance.pdfDocument, results = [];
-    const current = () => !stopped && run === revision && instance === viewer && pdf === viewer.pdfDocument;
+    const current = () => selectionHighlight && !stopped && run === revision && instance === viewer && pdf === viewer.pdfDocument;
     if (!locationSearch || locationSearch.pdf !== pdf) {
       report("searching", { error: null });
       const entries = contexts.slice();
       const found = findLocations(pdf, entries, entries.every(entry => entry.marked));
       const search = locationSearch = { pdf, locations: Array.isArray(found) ? found : null };
       const complete = locations => {
-        if (stopped || locationSearch !== search || viewer?.pdfDocument !== pdf) return;
+        if (stopped || !selectionHighlight || locationSearch !== search || viewer?.pdfDocument !== pdf) return;
         search.locations = locations;
         schedule(-1);
       };

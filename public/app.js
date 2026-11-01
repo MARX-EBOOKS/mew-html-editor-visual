@@ -146,8 +146,15 @@ function announceEditorPage() {
 
 function startReaderSync() {
   if (!syncSession) return;
+  const bindReaderMenu = () => {
+    try {
+      if (window.opener && !window.opener.closed) window.opener.ReaderUI?.bindReaderContextMenu?.(editor);
+    } catch { }
+  };
+  bindReaderMenu();
   syncChannel = createChannel(syncSession, message => {
     if (!message || message.source !== 'reader') return;
+    bindReaderMenu();
     if (message.type === 'reader-combine') return saveAndCloseForReader(message.requestId);
     if (combining) return;
     if (message.type === 'reader-page' && message.path) {

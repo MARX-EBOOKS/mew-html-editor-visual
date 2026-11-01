@@ -12,6 +12,26 @@
   const ui = window.ReaderUI;
   if (!ui) throw new Error("ReaderUI 未载入");
   const { byId, notify } = ui;
+  const menuEditors = new WeakSet();
+  function bindReaderContextMenu(editor) {
+    if (!editor || menuEditors.has(editor)) return;
+    menuEditors.add(editor);
+    ui.bindContextMenu(editor);
+    const actions = [
+      ["mode", "切换源码／可视化编辑", () => setMode()],
+      ["workspace", "分合窗", () => state.workspaceMode === "reader" ? restoreCombinedView() : enterSplitView()]
+    ].map(([id, label, run], index) => editor.addAction({
+      id: `mew.reader.${id}`, label,
+      contextMenuGroupId: "mew.reader.settings", contextMenuOrder: index + 4,
+      run: async () => { try { await run(); } catch (error) { notify(error.message, true); } }
+    }));
+    const subscription = editor.onDidDispose(() => {
+      actions.forEach(action => action.dispose());
+      menuEditors.delete(editor);
+      subscription.dispose();
+    });
+  }
+  ui.bindReaderContextMenu = bindReaderContextMenu;
 
   const initialParams = new URLSearchParams(location.search);
   const LAST_VOLUME_KEY = "readerLastVolume";
@@ -110,6 +130,7 @@
       page: "reader", scale: ui.editorScale(), dark: ui.isDark(), readOnly: true
     });
     tagEditor = new tagPanel.TagEditor(source);
+    bindReaderContextMenu(source.editor);
     source.editor.onDidChangeCursorSelection(({ selection }) => {
       ui.setPosition(selection.positionLineNumber, selection.positionColumn);
       updateHistoryButtons();

@@ -450,6 +450,26 @@
       updateWindowDock();
     };
     toggle?.addEventListener("click", () => setVisible(panel.hidden));
+    const boundEditors = new WeakSet();
+    const bindMenu = editor => {
+      if (boundEditors.has(editor)) return;
+      boundEditors.add(editor);
+      const actions = [editor.addAction({
+        id: "mew.tag-panel.visible", label: "显示／隐藏标签面板",
+        contextMenuGroupId: "mew.tag-panel.settings", contextMenuOrder: 1,
+        run: () => setVisible(panel.hidden)
+      }), ...DOCKS.map(([dock, , tip], index) => editor.addAction({
+        id: `mew.tag-panel.dock.${dock}`, label: `标签面板：${tip}`,
+        contextMenuGroupId: "mew.tag-panel.settings", contextMenuOrder: index + 2,
+        run: () => { setVisible(true); setDock(dock); }
+      }))];
+      const subscription = editor.onDidDispose(() => {
+        actions.forEach(action => action.dispose());
+        subscription.dispose();
+      });
+    };
+    window.addEventListener("mew-monaco-ready", event => bindMenu(event.detail.editor));
+    for (const editor of window.monaco?.editor.getEditors() || []) bindMenu(editor);
     return { panel, setDock, setScale, setVisible, state,
       restoreScales(settings) {
         for (const target of ["editor", "tag"]) {
