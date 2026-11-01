@@ -14,7 +14,7 @@
     "bench": "node tests/benchmark.mjs"
   },
   "dependencies": {
-    "monaco-editor": "0.55.1",
+    "monaco-editor": "0.57.0",
     "pdfjs-dist": "6.2.108"
   },
   "devDependencies": {

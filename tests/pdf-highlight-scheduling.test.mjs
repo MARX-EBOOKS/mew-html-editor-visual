@@ -46,11 +46,18 @@ test('stopped and fully disabled highlight preparation does not schedule work', 
   }
 });
 
-test('source-only highlighting still prepares PDF comparison data', () => {
+test('disabled selection linkage suppresses source highlighting preparation', () => {
   const state = Object.assign(scheduler(), { diffHighlight: false, selectionHighlight: false });
   state.queueWarm(2);
+  assert.equal(state.tasks.length, 0);
+});
+
+test('queued preparation stops when selection linkage is disabled', () => {
+  const state = scheduler();
+  state.queueWarm(2);
+  state.selectionHighlight = false;
   state.tasks[0].run();
-  assert.deepEqual(Array.from(state.calls[0]), [2]);
+  assert.equal(state.calls.length, 0);
 });
 
 test('PDF and source highlight switches persist independently and clear only PDF pointers', () => {

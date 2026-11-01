@@ -10,7 +10,7 @@ function section(source, start, end) {
   return source.slice(a, b);
 }
 const preparationEntry = section(reviewFile, '  prepareReview(context = {}) {', '  reviewItems(context = this.reviewRequest || {}) {').trim();
-const reviewEntry = section(reviewFile, '  reviewItems(context = this.reviewRequest || {}) {', '  comparisonParts(value, parts) {').trim();
+const reviewEntry = section(reviewFile, '  reviewItems(context = this.reviewRequest || {}) {', '  comparisonParts(value) {').trim();
 const mappingSection = section(reviewFile, '// Source/PDF mapping and candidate generation.',
   '// Shared popup and session initialization.').replace(preparationEntry, '').replace(reviewEntry, '');
 const selectionFile = await readFile(new URL('../../public/pdfdiff/pdf-selection.js', import.meta.url), 'utf8');
@@ -39,11 +39,11 @@ window.PdfSelectionDiff.applyTextEdits = function(source, edits) {
 const diffSource = await readFile(new URL('../../public/pdfdiff/pdf-selection-diff.js', import.meta.url), 'utf8') + textEditFixture;
 const engineSource = diffSource + '\n' + selectionMappingSource;
 const highlightSource = popupSource.split('// Shared review popup, session, navigation and saving.')[0];
-const providerSource = highlightSource + '\n(() => {\nconst { PdfLocator } = window.PdfReviewProvider;\n' + reviewFile
-  .split('// PDF comparison is one review provider. Selection synchronization remains independent.')[1]
-  .replace('function presentation(context, item) {', `PdfLocator.prototype.prepareReview ||= function ${preparationEntry};\nPdfLocator.prototype.reviewItems ||= function ${reviewEntry};\nfunction presentation(context, item) {`)
-  .replace("window.PdfReviewReady = (async () => {", '(() => {')
-  .replace(/  (?:if \(!window\.PdfSelectionDiff\)|await window\.PdfSelectionDiff\.ready|if \(!window\.ReplacementReview).*\r?\n/g, '') + '\n})();';
+const providerSource = highlightSource + '\n(() => {\nconst { PdfLocator } = window.PdfReviewProvider;\n'
+  + section(reviewFile, '// PDF comparison is one review provider. Selection synchronization remains independent.', 'window.PdfReviewReady = (async () => {')
+    .replace('function presentation(context, item) {', `PdfLocator.prototype.prepareReview ||= function ${preparationEntry};\nPdfLocator.prototype.reviewItems ||= function ${reviewEntry};\nfunction presentation(context, item) {`)
+  + section(reviewFile, '  host = window.ReplacementReview;', '  return window.PdfReviewProvider;')
+    .replace('start, prepare, PdfLocator', 'PdfLocator') + '\n})();';
 const selectionSource = `
 window.lastNotice = null;
 window.addEventListener('pdf-selection-difference', event => { window.lastNotice = event.detail; });

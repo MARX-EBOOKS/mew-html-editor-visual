@@ -5,6 +5,63 @@ import { engine, locator as selectionLocator } from './support/pdf-harness.mjs';
 
 const pages = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me32-noise.json', import.meta.url), 'utf8'));
 
+const reordered = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me32-496.json', import.meta.url), 'utf8'));
+test('ME32-496 reuses rejected cross-page gaps until a confirmed neighbour changes', () => {
+  const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+  const index = locator.sourceIndex(reordered.source);
+  const target = new api.PdfSourceIndex(locator, { raw: reordered.raw.slice(reordered.pages[0].start, reordered.pages[0].end),
+    layer: {}, parts: [] });
+  index.diff([target]);
+  const remember = index.rememberConnection, failures = [];
+  index.rememberConnection = function (start, end, page, hit, ...rest) {
+    const result = remember.call(this, start, end, page, hit, ...rest);
+    if (!result) failures.push([start, end, hit.start, hit.end]);
+    return result;
+  };
+  const forward = index.connectedRange(target, 0, index.raw.length);
+  const reverse = index.connectedRange(target, 0, target.raw.length, true);
+  const first = failures.length;
+  assert.ok(first > 0, 'the reordered pages contain a rejected gap');
+  for (let repeat = 0; repeat < 10; repeat++) {
+    assert.deepEqual(index.connectedRange(target, 0, index.raw.length), forward);
+    assert.deepEqual(index.connectedRange(target, 0, target.raw.length, true), reverse);
+  }
+  assert.equal(failures.length, first, 'forward and reverse lookups do not retry rejected gaps');
+  index.connections.set(target, index.connections.get(target).map(connection => ({ ...connection })));
+  assert.deepEqual(index.connectedRange(target, 0, index.raw.length), forward);
+  assert.ok(failures.length > first, 'replaced neighbours trigger fresh comparisons');
+});
+
+for (const newline of ['\r\n', '\n']) test(`ME32-496 prepares footnotes reordered across PDF pages (${JSON.stringify(newline)})`, () => {
+  for (const separator of ['-', '–', '—']) {
+    const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });
+    const index = locator.sourceIndex(reordered.source.replace(/\r?\n/g, newline));
+    const target = new api.PdfSourceIndex(locator, { raw: reordered.raw.replace(/ - /g, ` ${separator} `),
+      sourcePages: reordered.physical, pages: reordered.pages, parts: [] });
+    index.diff([target]);
+    const pairs = index.connectionPairs([target], true);
+    const items = index.reviewCandidates(null, false, true, true, [target], pairs);
+    let previous = 0;
+    for (const text of ['vorerst', 'Vereinigtem Königreich', 'englischen Gesetze über Beweisführung']) {
+      const start = index.raw.indexOf(text), end = start + text.length;
+      assert.ok(start >= 0);
+      assert.ok(!items.some(item => item.sourceStart < end && item.sourceEnd > start), `${separator}: ${text} has no false text difference`);
+      const hit = index.connectedRange(target, start, end);
+      assert.ok(hit, `${text} maps before selection`);
+      assert.equal(target.raw.slice(hit.start, hit.end), text);
+      assert.ok(hit.start >= previous && hit.end <= reordered.pages[0].end, 'footnotes retain their order on PDF page 524');
+      previous = hit.end;
+      const reverse = index.connectedRange(target, hit.start, hit.end, true);
+      assert.ok(reverse && reverse.start <= start && reverse.end >= end);
+    }
+    assert.ok(items.some(item => item.comparison.html === 'su' && item.comparison.pdf === 'ni'),
+      'the OCR error in versuchte/vernichte remains reported');
+    assert.equal(JSON.stringify(index.reviewCandidates(null, false, true, true, [target], pairs)), JSON.stringify(items),
+      'selection lookups do not change the prepared review');
+    api.validateEdits(index.source, items.flatMap(item => item.options[0].edits));
+  }
+});
+
 test('ME32-099 prepares both bounded PDF pages without reusing an incomplete reverse scope', async () => {
   const page = JSON.parse(await readFile(new URL('./fixtures/pdf-selection-me32-099.json', import.meta.url), 'utf8'));
   const api = engine(), locator = new api.PdfLocator({}, { document: { createElement: () => ({}) } });

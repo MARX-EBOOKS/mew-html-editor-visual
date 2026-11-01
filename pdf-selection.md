@@ -78,13 +78,34 @@ review candidates, provider actions, and highlights. It loads
 `pdf-selection-diff.js` for `PdfSourceIndex`, normalization, text/format comparison,
 and edit calculations over prepared data, and `replacement-review.js` for shared
 highlight/selection tools, popup sessions, navigation, and saving.
+The shared popup loads candidates directly from the registered `locator` instance.
+`PdfLocator.prepareReview(context)` validates and fills PDF/editor/model fields,
+registers or reuses the shared source index through `editorSourceIndex()`, and
+returns it for context checks (or `null` if invalid). Source-bearing
+`reviewItems(context)` requests prepare the review through `indexDocument()`
+and `indexFonts()`, reusing their existing caches when needed.
+Availability, session checks, source events, and review actions share this method.
+`PdfLocator.reviewItems(context)` returns the shared
+`items`, groups, edits, and suggestion plans. The locator owns its current
+`model`, `index`, and PDF; `editorSourceIndex()` updates the shared model/index
+on cache hits, adopted selection indexes, and rebuilds; it also updates the
+current PDF and the per-model/PDF cache through the same write path. Prepared consumers call `locator.reviewItems()`
+without preparing it again or copying it through popup context. Source events
+publish the editor and PDF targets; the provider prepares the source index.
+Popup `editor/model/source/version` live only in `state.context`.
+Repeated notices reuse the
+existing review list and candidate objects, retaining their anchor caches. Prepared indexes return synchronously,
+while the first document load returns a promise. Callers may `await` either result.
+PDF/font reads are asynchronous; candidate calculation still runs synchronously
+on the main thread. There is no PDF `provide` adapter.
 The provider reuses each connection's cached text diff.
 Text comparisons use Monaco with the local fallback inside `pdf-selection-diff.js`.
 `PdfReviewReady` resolves after review initialization;
-`pdf-selection.js` waits for it and obtains its locator through the provider.
+`PdfReviewProvider.prepare()` starts this preparation on demand; `pdf-selection.js` awaits it and obtains its locator through the provider.
+`PdfReviewProvider.start()` owns editor startup and the VS Code source-model/message bridge; `replacement-review.js` retains popup and highlight UI.
 Its `new PdfReviewProvider.PdfLocator(options, environment)` API creates a locator
 with reader-local caches. Options, environment, document, source/document caches,
-review anchors, and the no-PDF key belong to each instance; locator methods live
+review anchors, and the current PDF cache key belong to each instance; locator methods live
 on the prototype. Selection exposes this locator as `PdfSelection.locator`;
 review, including the split editor window, consumes the same locator. Each Monaco
 model/PDF pair owns one current `PdfSourceIndex` snapshot. Each snapshot exposes
@@ -92,7 +113,8 @@ model/PDF pair owns one current `PdfSourceIndex` snapshot. Each snapshot exposes
 methods operate on their owning snapshot: `index.connectedRange(target, ...)`,
 `index.rememberConnection(...)`, `index.locate(entry, scope)`, and `index.matches(queries)`.
 Scoped locations already return absolute offsets. Editor, full-PDF, and rendered-page
-indexes use the same class; `rawRange()` and `partsInRange()` own coordinate lookups.
+indexes use the same class; callers use `lowerBound()` for source-to-raw offsets
+and `fontRuns(start, end, true)` for font coordinate lookups.
 The complete class is exported as `PdfSelectionDiff.PdfSourceIndex` and re-exported
 by the provider. Stateless normalization, matching, coordinate search, and HTML
 font parsing helpers remain ordinary toolbox functions. Font runs, format differences,
@@ -338,10 +360,10 @@ Exact matches and partial-word selections keep their existing behavior.
 The separate `public/pdfdiff/pdf-selection-diff.js` script first loads the installed Monaco
 character diff computer from `/monaco/esm/`. Its character ranges supply selection
 positions. Confirmed passages also use Monaco's native decorations collection for
-source-line margin markers and exact character highlights, with HTML/OCR hover readings.
+exact character highlights and insertion markers, with HTML/OCR hover readings.
 Tags are excluded, entities keep their original source ranges, and text missing from
 HTML receives an insertion marker.
-Click a character highlight, insertion marker, or source-line margin marker to show
+Click a character highlight or insertion marker to show
 the corresponding PDF difference and its comparison popup. Whitespace-only and
 hyphen-only changes are filtered from source decorations.
 Prepared document alignment covers matching passages

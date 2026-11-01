@@ -70,8 +70,9 @@ try {
     await page.route('**/api/reader/settings', route => route.fulfill({ json: { diffHighlight: true } }));
     await page.goto(reader ? 'http://127.0.0.1:41880/?volume=1&page=1&mode=source' : 'http://127.0.0.1:41879/?file=a.html');
     await page.waitForFunction(() => (window.mewWorkbench || window.readerMonaco)?.editor.getValue().includes('WRONG'));
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
       window.testEditor = (window.mewWorkbench || window.readerMonaco).editor;
+      const model = testEditor.getModel();
       window.testOriginal = testEditor.getValue();
       window.fixtureCalls = 0;
       ReplacementReview.register({ ...fixtureReview, id: 'fixture', label: '格式修订测试', provide({ model, toolbox }) {

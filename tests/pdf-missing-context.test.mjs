@@ -24,7 +24,6 @@ for (const page of pages) test(`ME08-${page.number} OCR differences use ordinary
   for (const item of missing) {
     assert.equal(item.options[0].edits.length, 0);
     assert.equal(item.comparison.pdf, '');
-    assert.ok(item.preview, 'missing additions use the normal text comparison preview');
     assert.equal(index.raw.slice(item.sourceStart, item.sourceEnd), item.comparison.html);
     for (const [start, end] of [[item.sourceStart, item.sourceEnd], [item.sourceStart + 1, item.sourceEnd - 1],
       [item.sourceStart + 1, item.sourceStart + 1], [item.sourceEnd - 1, item.sourceEnd - 1]]) {

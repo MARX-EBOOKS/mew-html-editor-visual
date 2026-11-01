@@ -116,13 +116,13 @@ try {
   await lightbulb.click();
   await page.waitForSelector('.action-widget');
   assert.equal(await page.locator('.action-widget .group-header').first().innerText(), '替换与预览');
-  const selectedAction = page.locator('.action-widget').getByText('RIGHT', { exact: true }).first();
-  assert.equal(await page.locator('.action-widget').getByText('RIGHT', { exact: true }).count(), 1, 'one entry per replacement');
+  const selectedAction = page.locator('.action-widget:not(.action-list-submenu-panel)').getByText('RIGHT', { exact: true }).first();
+  assert.equal(await page.locator('.action-widget:not(.action-list-submenu-panel)').getByText('RIGHT', { exact: true }).count(), 1, 'one entry per replacement');
   const selectedBox = await selectedAction.boundingBox();
   await page.mouse.move(selectedBox.x + selectedBox.width / 2, selectedBox.y + selectedBox.height / 2);
   await page.waitForFunction(() => !!document.querySelector('.mew-review-proposed'));
   assert.equal(await page.evaluate(() => suggestionEditor.getValue()), '  WRONG tail', 'hover previews without applying');
-  assert.equal(await page.locator('.action-widget').isVisible(), true, 'hover keeps the menu open');
+  assert.equal(await page.locator('.action-widget:not(.action-list-submenu-panel)').isVisible(), true, 'hover keeps the menu open');
   await page.mouse.move(1390, 890);
   await page.waitForFunction(() => !document.querySelector('.mew-review-current, .mew-review-proposed'));
   await page.mouse.move(selectedBox.x + selectedBox.width / 2, selectedBox.y + selectedBox.height / 2);
@@ -134,7 +134,7 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('.mew-review-current, .mew-review-proposed'));
   await page.evaluate(() => suggestionEditor.trigger('test', 'editor.action.quickFix', {}));
-  const previewAction = page.locator('.action-widget').getByText('RIGHT', { exact: true });
+  const previewAction = page.locator('.action-widget:not(.action-list-submenu-panel)').getByText('RIGHT', { exact: true });
   await previewAction.waitFor();
   const previewBox = await previewAction.boundingBox();
   await page.mouse.move(previewBox.x + previewBox.width / 2, previewBox.y + previewBox.height / 2);
@@ -146,7 +146,7 @@ try {
     ...plans(model), { label: 'alternative', edits: [{ start: 2, end: 7, expected: 'WRONG', text: 'OTHER' }] }
   ]));
   await page.evaluate(() => suggestionEditor.trigger('test', 'editor.action.quickFix', {}));
-  const otherAction = page.locator('.action-widget').getByText('OTHER', { exact: true }).first();
+  const otherAction = page.locator('.action-widget:not(.action-list-submenu-panel)').getByText('OTHER', { exact: true }).first();
   await otherAction.waitFor();
   const otherBox = await otherAction.boundingBox();
   await page.mouse.move(otherBox.x + otherBox.width / 2, otherBox.y + otherBox.height / 2);
@@ -186,11 +186,11 @@ try {
   assert.equal(await page.evaluate(() => suggestionEditor.getValue()), '  WRONG tail', 'opening quick fixes preserves the source');
   assert.equal(await page.locator('.mew-review-current, .mew-review-proposed').count(), previewMarks, 'opening quick fixes preserves preview highlights');
   // Monaco blocks the opening click until the pointer moves into the menu.
-  const actionBox = await page.locator('.action-widget').boundingBox();
+  const actionBox = await page.locator('.action-widget:not(.action-list-submenu-panel)').boundingBox();
   await page.mouse.move(actionBox.x + actionBox.width / 2, actionBox.y + actionBox.height / 2);
   assert.ok(actionBox.width <= 326, 'quick fix menu stays compact');
   await page.screenshot({ path: 'tmp/replacement-suggestions/menu.png', clip: { x: 0, y: 95, width: 700, height: 210 } });
-  await page.locator('.action-widget').getByText('RIGHT', { exact: true }).first().click();
+  await page.locator('.action-widget:not(.action-list-submenu-panel)').getByText('RIGHT', { exact: true }).first().click();
   await page.waitForFunction(() => suggestionEditor.getValue() === '  RIGHT tail');
   assert.equal(await page.evaluate(() => completionProvider.provideCompletionItems(suggestionEditor.getModel(), { lineNumber: 1, column: 4 }).suggestions.length), 0);
   await page.evaluate(() => suggestionEditor.trigger('test', 'undo', {}));
@@ -291,6 +291,28 @@ try {
   await page.waitForFunction(height => document.querySelector('.replacement-review').getBoundingClientRect().height > height + 100, limited.height);
   const expanded = await page.locator('.replacement-review').boundingBox();
   assert.ok(expanded.y >= 0 && expanded.y + expanded.height <= 1300, 'a constrained notice grows again when space returns');
+  const pending = await page.evaluate(async () => {
+    const requests = [];
+    ReplacementReview.register({ id: 'pending-test', label: 'Pending',
+      provide({ signal }) { return new Promise(resolve => requests.push({ signal, resolve })); }, content: () => ({}) });
+    const first = ReplacementReview.openForSelection('pending-test', suggestionEditor, 'first');
+    ReplacementReview.openForSelection('pending-test', suggestionEditor, 'first');
+    const deduplicated = requests.length === 1;
+    ReplacementReview.close();
+    const cancelled = requests[0].signal.aborted;
+    requests[0].resolve([]); await first;
+    const stayedClosed = document.querySelector('.replacement-review').hidden;
+    const older = ReplacementReview.openForSelection('pending-test', suggestionEditor, 'older');
+    const newer = ReplacementReview.openForSelection('pending-test', suggestionEditor, 'newer');
+    requests[1].resolve([]); await older;
+    ReplacementReview.openForSelection('pending-test', suggestionEditor, 'newer');
+    const retainedNewer = requests.length === 3 && requests[1].signal.aborted && !requests[2].signal.aborted;
+    requests[2].resolve([]); await newer;
+    const openedNewer = !document.querySelector('.replacement-review').hidden;
+    ReplacementReview.close();
+    return { deduplicated, cancelled, stayedClosed, retainedNewer, openedNewer };
+  });
+  assert.deepEqual(pending, { deduplicated: true, cancelled: true, stayedClosed: true, retainedNewer: true, openedNewer: true });
   assert.deepEqual(errors, []);
   console.log('PASS: typing-only completion, replacement-only titles, native selected-action preview/escape, compact quick fixes, preview persistence, outside dismissal, apply/undo, stale and read-only filtering');
 } finally {

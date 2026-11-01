@@ -82,3 +82,39 @@ test('highlight tool works without PDF modules and keeps consumers and decoratio
     for (const [check, passed] of Object.entries(result)) assert.equal(passed, true, check);
   } finally { await browser.close(); }
 });
+
+
+test('VS Code PDF page keeps scan, text layer and HTML selection highlights aligned', async () => {
+  const root = new URL('../mew-html-reader-vscode/', import.meta.url);
+  const styles = await readFile(new URL('reader-pdf.css', root), 'utf8');
+  const pdfStyles = await readFile(new URL('vendor/pdfjs/web/pdf_viewer.css', root), 'utf8');
+  const highlights = await readFile(new URL('pdfdiff/replacement-review.js', root), 'utf8');
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div class="pdfViewer"><div class="page" style="width:600px;height:900px"><div class="canvasWrapper" style="width:100%;height:100%"></div><div class="textLayer" style="width:600px;height:900px"><span style="left:450px;top:750px;font-size:20px">renommistischer Ton</span></div></div></div>');
+    await page.addStyleTag({ content: pdfStyles + '\n' + styles });
+    await page.addScriptTag({ content: highlights });
+    for (const scale of [1, 1.25]) {
+      const result = await page.evaluate(scale => {
+        const div = document.querySelector('.page');
+        div.style.transform = `scale(${scale})`;
+        const node = div.querySelector('.textLayer span').firstChild;
+        const index = { raw: node.data, fontRuns: () => [{ node, start: 0, end: node.length }] };
+        const tool = ReviewHighlights.create({ document });
+        const hit = { start: 0, end: node.length };
+        const measured = tool.measureHighlights(div, index, [hit], hit);
+        const painted = tool.paintHighlight(div, measured.boxes, 'orange');
+        const rect = element => { const r = element.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
+        const range = document.createRange(); range.selectNodeContents(node);
+        const expected = rect({ getBoundingClientRect: () => range.getBoundingClientRect() });
+        const result = { scan: rect(div.querySelector('.canvasWrapper')), text: rect(div.querySelector('.textLayer')),
+          mark: rect(painted.node.firstChild), expected };
+        tool.dispose();
+        return result;
+      }, scale);
+      assert.deepEqual(result.scan, result.text, 'scan and OCR must use the same page dimensions');
+      result.mark.forEach((value, i) => assert.ok(Math.abs(value - result.expected[i]) < .1, 'highlight follows the OCR range'));
+    }
+  } finally { await browser.close(); }
+});

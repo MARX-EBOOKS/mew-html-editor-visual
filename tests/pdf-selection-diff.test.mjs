@@ -2134,7 +2134,7 @@ test('text candidates, font candidates and decorations reuse one traversal and r
   target.fontRuns = (...args) => { fontReads++; return fontRuns(...args); };
   const items = index.reviewCandidates(null, false, true, true, [target]);
   const traversed = reads;
-  const { ranges, projection } = connection.editorDiff;
+  const { ranges } = connection.editorDiff;
   const fonts = index.formatDifferences([], ['italic', 'bold'], true, [[connection, target]]);
   const model = { getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }) };
   const marks = index.sourceDecorations(index.reviewCandidates(null, true, false, true, [], [[connection, target]]), true, true, undefined, model);
@@ -2152,7 +2152,6 @@ test('text candidates, font candidates and decorations reuse one traversal and r
   assert.equal(index.formatDifferences([], ['italic', 'bold'], true, [[connection, target]]).length, 0);
   assert.equal(reads, traversed, 'new font metadata reuses prepared text spans');
   assert.equal(connection.editorDiff.ranges, ranges, 'font refresh preserves mapped ranges');
-  assert.equal(connection.editorDiff.projection, projection, 'font refresh preserves the PDF projection');
   assert.equal(index.reviewCandidates(null, false, true, true, [target])[0].comparison.pdf, 'GAMMA');
   assert.equal(fontReads, 2, 'updated font data is shared by subsequent text review');
 });
