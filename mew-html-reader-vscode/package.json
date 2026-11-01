@@ -172,6 +172,30 @@
       {
         "command": "mewReader.insert.SUPdSUB",
         "title": "MEW Reader: Insert Sup/Sub Division"
+      },
+      {
+        "command": "mewReader.toggle.pdf-selection-sync",
+        "title": "MEW Reader: 切换PDF 与源码选区联动"
+      },
+      {
+        "command": "mewReader.toggle.pdf-ocr",
+        "title": "MEW Reader: 切换PDF 文字差异审阅"
+      },
+      {
+        "command": "mewReader.toggle.pdf-font",
+        "title": "MEW Reader: 切换PDF 斜体差异审阅"
+      },
+      {
+        "command": "mewReader.toggle.pdf-bold",
+        "title": "MEW Reader: 切换PDF 粗体差异审阅"
+      },
+      {
+        "command": "mewReader.toggle.pdf-selection",
+        "title": "MEW Reader: 切换PDF 差异高亮"
+      },
+      {
+        "command": "mewReader.toggle.source-diff",
+        "title": "MEW Reader: 切换源码差异高亮"
       }
     ],
     "configuration": {
@@ -393,8 +417,48 @@
           "command": "mewReader.showBar",
           "group": "navigation@4"
         }
+      ],
+      "editor/context": [
+        {
+          "command": "mewReader.toggle.pdf-selection-sync",
+          "when": "editorLangId == html",
+          "group": "mewReview@1"
+        },
+        {
+          "submenu": "mewReader.diffSettings",
+          "when": "editorLangId == html",
+          "group": "mewReview@2"
+        }
+      ],
+      "mewReader.diffSettings": [
+        {
+          "command": "mewReader.toggle.pdf-ocr",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mewReader.toggle.pdf-font",
+          "group": "navigation@2"
+        },
+        {
+          "command": "mewReader.toggle.pdf-bold",
+          "group": "navigation@3"
+        },
+        {
+          "command": "mewReader.toggle.pdf-selection",
+          "group": "navigation@4"
+        },
+        {
+          "command": "mewReader.toggle.source-diff",
+          "group": "navigation@5"
+        }
       ]
-    }
+    },
+    "submenus": [
+      {
+        "id": "mewReader.diffSettings",
+        "label": "差异设置"
+      }
+    ]
   },
   "scripts": {
     "check": "node --check extension.cjs && node --check editor-core.js && node --check reader-core.cjs && node --check reader-pdf.js && node --check pdf-source.mjs && node --check pdf-worker.mjs && node --check generate-mew-brief-config.mjs && node --test test/*.test.cjs",

@@ -70,11 +70,12 @@ test("native source snapshots preserve CRLF offsets and send decorations without
   editor.setSelection(editor.getSelection());
   assert.deepEqual(sent.at(-1).data.selections, snapshot.selections);
   editor.receive({ ...snapshot, layout: { splitView: true } });
-  const fields = Object.fromEntries(['title', 'position', 'status', 'comparison', 'prev', 'next', 'apply', 'advance', 'all', 'save', 'preview-diff', 'close'].map(name =>
-    [name, { textContent: name, children: [], hidden: false, disabled: false, getAttribute: () => null }]));
-  editor.showReviewPopup({ hidden: false, querySelector: selector => fields[selector.slice(6, -1)] }, editor.getSelection(), true);
-  assert.equal(sent.at(-1).type, 'reviewPopup');
-  assert.deepEqual(sent.at(-1).data.popup.range, snapshot.selections[0]);
+  const hover = [{ value: 'HTML: b\n\nPDF: B' }];
+  editor.showReviewHover(editor.getSelection(), hover, true);
+  assert.equal(sent.at(-1).type, 'reviewHover');
+  assert.deepEqual(sent.at(-1).data.range, snapshot.selections[0]);
+  assert.deepEqual(sent.at(-1).data.hover, hover);
+  assert.equal(sent.at(-1).data.focus, true);
   await editor.applyReviewEdits([{ start: 3, end: 4, text: "B" }], snapshot.text);
   assert.equal(sent.at(-1).type, "reviewApply");
   assert.equal(model.getValue(), snapshot.text);

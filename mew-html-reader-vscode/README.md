@@ -27,7 +27,9 @@
 
 PDF 文本映射、差异计算和字体检测复用当前 `pdf-selection-diff.js` 与 `pdf-review-provider.js`。扩展内的 `replacement-review.js`、`pdf-selection.js` 是 VS Code 专用实现，分别负责审阅操作与选区、高亮同步；两者同时提供扩展宿主入口和 PDF Webview 入口，复用同一份探测候选。
 
-`editor-core.js` 的 `VSCodeController` 负责在 Webview 中接收源码快照、发送原生操作请求。`replacement-review.js` 直接注册 VS Code 悬浮提示、代码操作、补全和原生 diff 预览，执行带文件、版本校验的编辑和保存；`pdf-selection.js` 直接订阅文档及选区变化并设置原生高亮。`extension.cjs` 只加载模块，不保留 `PdfReview` 类。设置保存在扩展 `globalState`。`prepare-assets.mjs` 只同步通用探测文件和样式，不覆盖这两个专用模块。
+`editor-core.js` 的 `VSCodeController` 负责在 Webview 中接收源码快照、发送原生操作请求。`replacement-review.js` 直接注册 VS Code 悬浮提示、代码操作、补全和原生 diff 预览，执行带文件、版本校验的编辑和保存；`pdf-selection.js` 直接订阅文档及选区变化并设置原生高亮。`extension.cjs` 只加载模块，不保留 `PdfReview` 类。设置保存在扩展 `globalState`。通用探测文件与网页端同步，保留这两个模块的 VS Code 专用入口。
+
+HTML 编辑器右键菜单提供“PDF 与源码选区联动”和“差异设置”，复用 PDF 页眉的同一组审阅开关与持久化设置。关闭联动时停止映射、审阅准备与异步高亮；重新开启后恢复准备。候选对照仅展示实际差异，不再额外生成整行预览；替换等待原生编辑成功后再刷新候选和保存。
 
 ## 性能验证
 

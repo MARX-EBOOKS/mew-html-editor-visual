@@ -82,6 +82,9 @@ if (typeof module === 'object' && module.exports) {
       if (request.save) return;
       panel.reveal(undefined, false); await focusPdf();
     }));
+    for (const id of ["pdf-selection-sync","pdf-ocr","pdf-font","pdf-bold","pdf-selection","source-diff"])
+      subscriptions.push(vscode.commands.registerCommand(`mewReader.toggle.${id}`, () =>
+        panel.webview.postMessage({ type: 'reviewToggle', id })));
     subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => { returningToSource = true; }));
     subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event => {
       popup = null;
@@ -356,6 +359,17 @@ if (typeof module === 'object' && module.exports) {
     }
     return { items, choices };
   }
+  function toggle(provider, enabled) {
+    if (!provider?.setEnabled || provider.available?.() === false) return;
+    provider.setEnabled(enabled);
+    if (!enabled && (session?.provider === provider || lastRequest?.id === provider.id)) close();
+    updateMenu();
+  }
+  window.addEventListener('message', event => {
+    if (event.data?.type !== 'reviewToggle') return;
+    const provider = providers.get(event.data.id);
+    toggle(provider, provider?.isEnabled?.() === false);
+  });
   function updateMenu() {
     if (!menu) return;
     menu.replaceChildren();
@@ -367,11 +381,7 @@ if (typeof module === 'object' && module.exports) {
         input.type = 'checkbox'; input.checked = provider.isEnabled?.() !== false;
         input.disabled = provider.available?.() === false;
         input.setAttribute('aria-label', `启用${provider.label}`);
-        input.onchange = () => {
-          provider.setEnabled(input.checked);
-          if (!input.checked && (session?.provider === provider || lastRequest?.id === provider.id)) close();
-          updateMenu();
-        };
+        input.onchange = () => toggle(provider, input.checked);
         label.append(input);
         if (provider.toggleOnly) label.append(document.createTextNode(provider.label));
         row.append(label);
@@ -406,7 +416,7 @@ if (typeof module === 'object' && module.exports) {
     const saved = session;
     if (!saved.manualPending) saved.resumeOffset = saved.anchorOffset ?? 0;
     // Native document changes use offsets in the previous source.
-    const offset = saved.resumeOffset;
+    const offset = saved.resumeOffset ?? saved.anchorOffset ?? 0;
     saved.resumeOffset = offset + (event?.changes || []).reduce((delta, change) => delta + (
       change.rangeOffset >= offset ? 0 : change.rangeOffset + change.rangeLength <= offset
         ? change.text.length - change.rangeLength : change.rangeOffset - offset
@@ -434,7 +444,7 @@ if (typeof module === 'object' && module.exports) {
       });
       Object.assign(saved, { items, choices, position: found < 0 ? items.length : found,
         context, stale: false, manualPending: false });
-      if (!saved.saving) render(true);
+      render(true);
     } catch (error) { if (session === saved && request === generation) message(error.message); }
     })().finally(() => {
       saved.refreshTask = null;
@@ -444,12 +454,13 @@ if (typeof module === 'object' && module.exports) {
   }
   function controls() {
     const item = current(), currentVersion = valid(), busy = !!(session?.applying || session?.saving);
-    const ready = (currentVersion || session?.manualPending) && !!item && !busy && !session.waitingApply;
+    const ready = currentVersion && !!item && !busy && !session.waitingApply;
     const canApply = ready && session.provider.apply && session.content?.apply !== false;
     get('apply').disabled = !currentVersion || !item || busy;
     get('preview-diff').disabled = !currentVersion || !item || busy;
     for (const name of ['advance', 'all']) get(name).disabled = !canApply;
     get('save').disabled = !workspace()?.save || !canApply;
+    get('save').textContent = session?.manualPending ? '更新中....' : '替换&保存';
     const blocked = !currentVersion || !!session?.applying;
     get('prev').disabled = blocked || session.position <= 0;
     get('next').disabled = blocked || session.position >= session.items.length - 1;
@@ -517,10 +528,15 @@ if (typeof module === 'object' && module.exports) {
   function render(preserveSelection = false) {
     if (!session) return;
     const item = current(), { editor, model, source, version } = session.context;
+    if (session.stale) {
+      revisionMarks.clearMarks();
+      session.context.highlightedItems = item ? [item] : [];
+    }
+    panel.hidden = false;
     session.content = session.provider.content?.(session, item) || {};
     const content = session.content;
     let previewEnabled = false;
-    try { previewEnabled = !session.provider.compact && localStorage.getItem(previewKey) === 'true'; } catch {}
+    try { previewEnabled = !session.stale && !session.provider.compact && localStorage.getItem(previewKey) === 'true'; } catch {}
     get('apply').setAttribute('aria-pressed', String(previewEnabled));
     get('options').replaceChildren(); controls();
     message(content.message || ''); comparison(content.comparison);
@@ -535,14 +551,14 @@ if (typeof module === 'object' && module.exports) {
       }
       const range = preserveSelection && editor.getSelection() || content.range;
       session.anchor = content.range ? model.validateRange(content.range) : range;
-      if (range) {
+      if (range && !session.stale) {
         session.anchorOffset = model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn });
         if (!preserveSelection) editor.setSelection(session.anchor);
         editor.revealRangeInCenterIfOutsideViewport(session.anchor);
       }
       session.provider.onSelect?.(item, session.context, session.items, previewEnabled);
     } else session.provider.onClose?.(session.context);
-    if (editor.getDomNode()?.ownerDocument === document) {
+    if (!session.stale && editor.getDomNode()?.ownerDocument === document) {
       paintRevision(editor, model, [model, version ?? source, item, session.choices.get(item?.id), previewEnabled],
         previewEnabled ? selectedEdits() : [], previewEnabled ? content.previewDecorations : []);
     }
@@ -625,10 +641,10 @@ if (typeof module === 'object' && module.exports) {
     } catch (error) { if (session === saved) message(error.message); }
   }
   async function apply(all) {
-    const saved = session, model = saved?.context.model;
+    const saved = session, model = saved?.context.model, position = saved?.position;
     if (saved?.waitingApply) return;
     if (saved?.refreshTask || saved?.manualPending)
-      await (saved.waitingApply = saved.refreshTask || refreshAfterEdit(saved)).finally(() => { saved.waitingApply = null; });
+      await (saved.waitingApply = refreshAfterEdit(saved)).finally(() => { saved.waitingApply = null; });
     if (session !== saved || !valid()) return;
     if (!current() || !saved.provider.apply || saved.applying) return;
     saved.applying = true; controls();
@@ -637,20 +653,27 @@ if (typeof module === 'object' && module.exports) {
       const result = await saved.provider.apply({ ...saved, context: { ...saved.context } }, all);
       if (session !== saved) return true;
       if (result.offset !== undefined) {
-        saved.resumeOffset = result.offset; saved.manualPending = true;
+        saved.resumeOffset = result.offset; saved.stale = saved.manualPending = true;
+        if (result.position !== undefined) { saved.position = result.position; panelMoved = false; }
+        render(true);
+        if (panel.dataset.side === 'pdf') await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
+        if (session !== saved) return;
+        await result.apply?.();
         await refreshAfterEdit(saved);
         return true;
       }
-      Object.assign(saved, { items: result.items, choices: result.choices || saved.choices,
-        position: result.position, context: { ...saved.context, ...result.context,
-          source: model.getValue(), version: model.getVersionId?.() } });
+      Object.assign(saved, { ...validateCandidates(result, saved.choices),
+        position: result.position, context: { ...saved.context,
+          source: model.getValue(), version: model.getVersionId?.(), ...result.context } });
       if (saved.context.request) saved.context.request = { ...saved.context.request, snapshot: null };
       if (!valid()) { stale(); return; }
-      if (!saved.saving) render();
+      render();
       return true;
     } catch (error) {
       if (session !== saved) return;
+      saved.position = position; saved.stale = saved.manualPending = false;
       if (model.getValue() !== saved.context.source) stale();
+      else render(true);
       message(error.message);
     } finally { saved.applying = false; controls(); }
   }
@@ -696,9 +719,10 @@ if (typeof module === 'object' && module.exports) {
       // Each free band ends above a highlight or starts below one.
       for (const box of [...layout.highlights, { top: bottom + 8, bottom }].sort((a, b) => a.top - b.top)) {
         const end = Math.min(bottom, box.top - 8), room = Math.min(height, Math.max(0, end - edge));
-        if (room > available) {
+        const nextY = end <= anchor ? end - room : edge;
+        if (room > available || room > 0 && room === available && Math.abs(nextY + room / 2 - anchor) < Math.abs(y + available / 2 - anchor)) {
           available = room;
-          y = end <= anchor ? end - room : edge;
+          y = nextY;
         }
         edge = Math.max(edge, box.bottom + 8);
       }
