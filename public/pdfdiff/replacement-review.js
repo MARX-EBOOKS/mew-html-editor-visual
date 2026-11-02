@@ -430,32 +430,57 @@
     message('正在自动重新计算差异…'); controls();
     if (!composing) manualTimer = setTimeout(() => void refreshAfterEdit(saved), 350);
   }
-  function refreshAfterEdit(saved) {
+  function refreshAfterEdit(saved, priority = false) {
     if (saved.refreshTask) return saved.refreshTask;
     if (session !== saved || !saved.manualPending || composing || saved.context.editor.getModel() !== saved.context.model || saved.provider.available?.(saved.context.editor) === false) return Promise.resolve();
     const request = ++generation, source = saved.context.model.getValue(), version = saved.context.model.getVersionId?.();
     const context = { ...saved.context, source, version, request: { side: saved.context.request?.side } };
-    return saved.refreshTask = (async () => {
-    try {
-      const result = saved.provider.locator ? await saved.provider.locator.reviewItems(context) : await saved.provider.provide(context);
+    let resolveReady;
+    const task = saved.refreshTask = new Promise(resolve => { resolveReady = resolve; });
+    const ready = () => {
+      if (saved.refreshTask === task) saved.refreshTask = null;
+      resolveReady();
+    };
+    const accept = result => {
       if (session !== saved || request !== generation || saved.context.model.getValue() !== source
-        || saved.context.model.getVersionId?.() !== version || (saved.provider.isCurrent && !saved.provider.isCurrent(context))) return;
+        || saved.context.model.getVersionId?.() !== version || (saved.provider.isCurrent && !saved.provider.isCurrent(context))) return false;
       const { items, choices } = validateCandidates(result, saved.choices);
-      const found = items.findIndex(item => {
+      const selectedId = !saved.stale && saved.items[saved.position]?.id;
+      let found = selectedId ? items.findIndex(item => item.id === selectedId) : -1;
+      if (found < 0) found = items.findIndex(item => {
         const range = item.range || saved.provider.content({ ...saved, context, items, choices }, item).range;
         return range && (saved.context.model.getOffsetAt({ lineNumber: range.endLineNumber, column: range.endColumn }) > saved.resumeOffset
           || saved.context.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn }) >= saved.resumeOffset);
       });
       Object.assign(saved, { items, choices, position: found < 0 ? items.length : found,
-        context, stale: false, manualPending: false });
+        context, stale: false, manualPending: false, partial: !!result.partial });
       render(true);
+      return true;
+    };
+    void (async () => {
+    try {
+      const result = saved.provider.locator ? await saved.provider.locator.reviewItems({ ...context,
+        priority: priority ? { offset: saved.resumeOffset } : undefined,
+        onProgress: partial => {
+          if (!accept(partial)) return false;
+          ready();
+          return new Promise(resolve => {
+            const painted = () => setTimeout(() => resolve(session === saved && request === generation), 0);
+            if (document.visibilityState === 'hidden') painted();
+            else requestAnimationFrame(painted);
+          });
+        }
+      }) : await saved.provider.provide(context);
+      accept(result);
     } catch (error) { if (session === saved && request === generation) message(error.message); }
     })().finally(() => {
-      saved.refreshTask = null;
-      if (session === saved && saved.manualPending && !composing && request !== generation)
+      ready();
+      if (session === saved && saved.manualPending && !composing && request !== generation && !saved.refreshTask)
         manualTimer = setTimeout(() => void refreshAfterEdit(saved), 0);
     });
+    return task;
   }
+
   function controls() {
     const item = current(), currentVersion = valid(), busy = !!(session?.applying || session?.saving);
     const canApply = currentVersion && !!item && !busy && !session.waitingApply && session.provider.apply && session.content?.apply !== false;
@@ -466,7 +491,7 @@
     const blocked = !currentVersion || !!session?.applying;
     get('prev').disabled = blocked || session.position <= 0;
     get('next').disabled = blocked || session.position >= session.items.length - 1;
-    get('position').textContent = session ? `${Math.min(session.position + 1, session.items.length)} / ${session.items.length}` : '';
+    get('position').textContent = session ? `${Math.min(session.position + 1, session.items.length)} / ${session.items.length}${session.partial ? '+' : ''}` : '';
   }
   function subscribe(target, event, callback) {
     const listener = target[event]?.(callback);
@@ -530,7 +555,7 @@
       if (found < 0) found = provider.focusIndex?.(items, requestData) ?? -1;
       Object.assign(session, { items,
         position: found >= 0 ? found : Math.max(0, Math.min(fallbackPosition, items.length - 1)),
-        choices });
+        choices, partial: !!(result.partial || snapshot?.partial) });
       render(!!requestData, !!requestData?.mirror);
     } catch (error) { if (request === generation) {
       if (provider.isCurrent && !provider.isCurrent(context)) stale();
@@ -552,7 +577,7 @@
     let previewEnabled = false;
     try { previewEnabled = !session.stale && localStorage.getItem(previewKey) === 'true'; } catch {}
     get('apply').setAttribute('aria-pressed', String(previewEnabled));
-    if (!session.stale) editorSuggestions.get(editor)?.refreshActions();
+    if (!session.stale && !session.partial) editorSuggestions.get(editor)?.refreshActions();
     get('options').replaceChildren(); controls();
     message(content.message || ''); comparison(content.comparison);
     get('title').textContent = content.title || session.provider.label;
@@ -660,7 +685,7 @@
         if (panel.dataset.side === 'pdf') await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
         if (session !== saved) return;
         result.apply?.();
-        await refreshAfterEdit(saved);
+        await refreshAfterEdit(saved, result.priority);
         return true;
       }
       Object.assign(saved, { ...validateCandidates(result, saved.choices),
@@ -820,7 +845,7 @@
         ++generation; clearTimeout(manualTimer);
         Object.assign(session, { items: saved.items, position: saved.position,
           choices: new Map(saved.choices),
-          context: { ...saved.context, request }, stale: !!saved.stale, manualPending: !!saved.manualPending });
+          context: { ...saved.context, request }, stale: !!saved.stale, manualPending: !!saved.manualPending, partial: !!saved.partial });
         if (saved.stale) panelMoved = false;
         render(true, true);
       } else void open(saved.provider.id, saved.context.editor, saved.items[saved.position]?.id, saved.position, request);
