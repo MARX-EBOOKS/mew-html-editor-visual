@@ -6,6 +6,8 @@ if (typeof module === 'object' && module.exports) {
     const subscriptions = [], previews = new Map();
     let hovers = [], plans = null, popup = null, token = 0, disposed = false, preferenceWrite = Promise.resolve();
     let returningToSource = true;
+    const contains = (mark, document, position) => sameUri(document.uri, mark.uri)
+      && document.version === mark.version && mark.range.contains(position);
     const hoverMarkdown = value => {
       const markdown = new vscode.MarkdownString(typeof value === 'string' ? value : value.value);
       markdown.isTrusted = { enabledCommands: ['mewReader:mew.pdf-difference'] }; return markdown;
@@ -50,9 +52,9 @@ if (typeof module === 'object' && module.exports) {
       provideTextDocumentContent: uri => previews.get(uri.toString()) || ''
     }), vscode.languages.registerHoverProvider(selector, {
       provideHover(document, position) {
-        if (popup && sameUri(document.uri, popup.uri) && document.version === popup.version && popup.range.contains(position))
+        if (popup && contains(popup, document, position))
           return new vscode.Hover(popup.markdown, popup.range);
-        const hits = hovers.filter(mark => sameUri(document.uri, mark.uri) && document.version === mark.version && mark.range.contains(position));
+        const hits = hovers.filter(mark => contains(mark, document, position));
         if (hits.length) return new vscode.Hover(hits.flatMap(mark => mark.markdown), hits[0].range);
       }
     }), vscode.languages.registerCodeActionsProvider(selector, {
@@ -77,28 +79,36 @@ if (typeof module === 'object' && module.exports) {
       })
     }), vscode.commands.registerCommand('mewReader.reviewPlan', (id, index, action) => runPlan(id, index, action).catch(reader.report)),
     vscode.commands.registerCommand('mewReader:mew.pdf-difference', async request => {
+      const revision = request?.save ? reader.focusRevision : ++reader.focusRevision;
       await source.document({ uri: request?.model, version: request?.version });
-      if (!await panel.webview.postMessage({ type: 'reviewSourceAction', action: 'mew.pdf-difference', request })) return;
-      if (request.save) return;
-      panel.reveal(undefined, false); await focusPdf();
+      if (disposed || reader.panel !== panel || (!request.save && revision !== reader.focusRevision)) return;
+      // Complete the handoff before the webview starts selection/popup work.
+      if (!request.save) {
+        panel.reveal(undefined, false); await focusPdf();
+        if (disposed || reader.panel !== panel || revision !== reader.focusRevision) return;
+      }
+      await panel.webview.postMessage({ type: 'reviewSourceAction', action: 'mew.pdf-difference', request });
     }));
     for (const id of ["pdf-selection-sync","pdf-ocr","pdf-font","pdf-bold","pdf-selection","source-diff"])
       subscriptions.push(vscode.commands.registerCommand(`mewReader.toggle.${id}`, () =>
         panel.webview.postMessage({ type: 'reviewToggle', id })));
     subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => { returningToSource = true; }));
     subscriptions.push(vscode.window.onDidChangeTextEditorSelection(event => {
-      popup = null;
-      if (event.kind === vscode.TextEditorSelectionChangeKind.Mouse) {
-        if (!returningToSource) void panel.webview.postMessage({ type: 'reviewClose' });
-        returningToSource = false;
-      } else if (event.kind === vscode.TextEditorSelectionChangeKind.Keyboard) returningToSource = false;
-      if (event.textEditor !== vscode.window.activeTextEditor || !event.textEditor.selection.isEmpty) return;
       const { document, selection } = event.textEditor;
-      if (hovers.some(mark => sameUri(document.uri, mark.uri) && document.version === mark.version && mark.range.contains(selection.active)))
+      const mouse = event.kind === vscode.TextEditorSelectionChangeKind.Mouse;
+      const interactive = mouse || event.kind === vscode.TextEditorSelectionChangeKind.Keyboard;
+      if (popup && (interactive || !contains(popup, document, selection.active))) popup = null;
+      if (mouse) {
+        if (!returningToSource) void panel.webview.postMessage({ type: 'reviewClose' });
+      }
+      if (interactive) returningToSource = false;
+      if (panel.active || !interactive || event.textEditor !== vscode.window.activeTextEditor || !selection.isEmpty) return;
+      if (hovers.some(mark => contains(mark, document, selection.active)))
         void vscode.commands.executeCommand('editor.action.showHover', { focus: 'noAutoFocus' }).then(undefined, reader.report);
     }));
     subscriptions.push(panel.webview.onDidReceiveMessage(message => {
       if (!['reviewPreference', 'reviewDecorations', 'reviewPlans', 'reviewHover', 'reviewPreview', 'reviewApply', 'reviewSave'].includes(message?.type)) return;
+      const focusRevision = message.type === 'reviewHover' && message.focus ? ++reader.focusRevision : reader.focusRevision;
       void (async () => {
         if (disposed || reader.panel !== panel) return;
         if (message.type === 'reviewPreference') {
@@ -126,18 +136,29 @@ if (typeof module === 'object' && module.exports) {
         }
         if (message.type === 'reviewHover') {
           const data = message.hover;
+          const hit = source.range(message.range);
+          if (focusRevision !== reader.focusRevision || (!message.focus && panel.active)) return;
+          const column = message.focus ? source.editors()[0]?.viewColumn ?? (await source.snapshot())?.layout?.sourceViewColumn ?? vscode.ViewColumn.Active : null;
+          if (disposed || reader.panel !== panel || focusRevision !== reader.focusRevision) return;
           const editor = message.focus ? await vscode.window.showTextDocument(document, {
-            viewColumn: source.editors()[0]?.viewColumn ?? (await source.snapshot())?.layout?.sourceViewColumn ?? vscode.ViewColumn.Active,
-            selection: source.range(message.range),
+            viewColumn: column,
+            selection: new vscode.Selection(hit.end, hit.start),
             preserveFocus: false, preview: false
           }) : vscode.window.activeTextEditor;
           if (!editor || editor.document !== document || !data) return;
           await source.document(message);
-          const hit = source.range(message.range);
+          // Auxiliary-window focus state can lag behind showTextDocument.
+          // An explicit handoff is guarded by its revision, not that old state.
+          if (disposed || reader.panel !== panel || focusRevision !== reader.focusRevision
+            || (!message.focus && (panel.active || vscode.window.activeTextEditor !== editor))) return;
           if (!hit.intersection(editor.selection)) return;
           const range = hit.union(editor.selection);
           popup = { uri: document.uri, version: document.version, range, markdown: data.map(hoverMarkdown) };
-          return vscode.commands.executeCommand('editor.action.showHover', { focus: 'noAutoFocus' });
+          if (message.focus) {
+            await vscode.commands.executeCommand('editor.action.hideHover');
+            if (disposed || reader.panel !== panel || focusRevision !== reader.focusRevision) return;
+          }
+          return vscode.commands.executeCommand('editor.action.showHover', { focus: message.focus ? 'autoFocusImmediately' : 'noAutoFocus' });
         }
         if (message.type === 'reviewPreview') {
           if (message.before !== document.getText()) throw new Error('原文已变化，请重新预览。');
@@ -150,7 +171,7 @@ if (typeof module === 'object' && module.exports) {
         await source.reply(message, { result: true });
       })().catch(error => {
         if (message.id) void source.reply(message, { error: error.message }).catch(reader.report);
-        else if (['reviewPlans', 'reviewHover'].includes(message.type)) void source.publish().catch(reader.report);
+        else if (['reviewDecorations', 'reviewPlans', 'reviewHover'].includes(message.type)) void source.publish().catch(reader.report);
         else reader.report(error);
       });
     }));
@@ -312,9 +333,6 @@ if (typeof module === 'object' && module.exports) {
   document.body.append(panel);
   const fields = Object.create(null);
   const get = name => fields[name] ||= panel.querySelector(`[data-${name}]`);
-  function workspace() {
-    return window.readerMonaco;
-  }
   function message(text) { get('status').textContent = text; get('status').hidden = !text; }
   function current() { return session?.items[session.position]; }
   function selectedEdits(all = false) {
@@ -426,45 +444,69 @@ if (typeof module === 'object' && module.exports) {
     message('正在自动重新计算差异…'); controls();
     manualTimer = setTimeout(() => void refreshAfterEdit(saved), 350);
   }
-  function refreshAfterEdit(saved) {
+  function refreshAfterEdit(saved, priority = false) {
     if (saved.refreshTask) return saved.refreshTask;
     if (session !== saved || !saved.manualPending || saved.context.editor.getModel() !== saved.context.model || saved.provider.available?.(saved.context.editor) === false) return Promise.resolve();
     const request = ++generation, source = saved.context.model.getValue(), version = saved.context.model.getVersionId?.();
     const context = { ...saved.context, source, version, request: { side: saved.context.request?.side } };
-    return saved.refreshTask = (async () => {
-    try {
-      const result = saved.provider.locator ? await saved.provider.locator.reviewItems(context) : await saved.provider.provide(context);
+    let resolveReady;
+    const task = saved.refreshTask = new Promise(resolve => { resolveReady = resolve; });
+    const ready = () => {
+      if (saved.refreshTask === task) saved.refreshTask = null;
+      resolveReady();
+    };
+    const accept = result => {
       if (session !== saved || request !== generation || saved.context.model.getValue() !== source
-        || saved.context.model.getVersionId?.() !== version || (saved.provider.isCurrent && !saved.provider.isCurrent(context))) return;
+        || saved.context.model.getVersionId?.() !== version || (saved.provider.isCurrent && !saved.provider.isCurrent(context))) return false;
       const { items, choices } = validateCandidates(result, saved.choices);
-      const found = items.findIndex(item => {
+      const selectedId = !saved.stale && saved.items[saved.position]?.id;
+      let found = selectedId ? items.findIndex(item => item.id === selectedId) : -1;
+      if (found < 0) found = items.findIndex(item => {
         const range = item.range || saved.provider.content({ ...saved, context, items, choices }, item).range;
         return range && (saved.context.model.getOffsetAt({ lineNumber: range.endLineNumber, column: range.endColumn }) > saved.resumeOffset
           || saved.context.model.getOffsetAt({ lineNumber: range.startLineNumber, column: range.startColumn }) >= saved.resumeOffset);
       });
       Object.assign(saved, { items, choices, position: found < 0 ? items.length : found,
-        context, stale: false, manualPending: false });
+        context, stale: false, manualPending: false, partial: !!result.partial });
       render(true);
+      return true;
+    };
+    void (async () => {
+    try {
+      const result = saved.provider.locator ? await saved.provider.locator.reviewItems({ ...context,
+        priority: priority ? { offset: saved.resumeOffset } : undefined,
+        onProgress: partial => {
+          if (!accept(partial)) return false;
+          ready();
+          return new Promise(resolve => {
+            const painted = () => setTimeout(() => resolve(session === saved && request === generation), 0);
+            if (document.visibilityState === 'hidden') painted();
+            else requestAnimationFrame(painted);
+          });
+        }
+      }) : await saved.provider.provide(context);
+      accept(result);
     } catch (error) { if (session === saved && request === generation) message(error.message); }
     })().finally(() => {
-      saved.refreshTask = null;
-      if (session === saved && saved.manualPending && request !== generation)
+      ready();
+      if (session === saved && saved.manualPending && request !== generation && !saved.refreshTask)
         manualTimer = setTimeout(() => void refreshAfterEdit(saved), 0);
     });
+    return task;
   }
+
   function controls() {
     const item = current(), currentVersion = valid(), busy = !!(session?.applying || session?.saving);
     const ready = currentVersion && !!item && !busy && !session.waitingApply;
     const canApply = ready && session.provider.apply && session.content?.apply !== false;
-    get('apply').disabled = !currentVersion || !item || busy;
-    get('preview-diff').disabled = !currentVersion || !item || busy;
+    for (const name of ['apply', 'preview-diff']) get(name).disabled = !currentVersion || !item || busy;
     for (const name of ['advance', 'all']) get(name).disabled = !canApply;
-    get('save').disabled = !workspace()?.save || !canApply;
+    get('save').disabled = !window.readerMonaco?.save || !canApply;
     get('save').textContent = session?.manualPending ? '更新中....' : '替换&保存';
     const blocked = !currentVersion || !!session?.applying;
     get('prev').disabled = blocked || session.position <= 0;
     get('next').disabled = blocked || session.position >= session.items.length - 1;
-    get('position').textContent = session ? `${Math.min(session.position + 1, session.items.length)} / ${session.items.length}` : '';
+    get('position').textContent = session ? `${Math.min(session.position + 1, session.items.length)} / ${session.items.length}${session.partial ? '+' : ''}` : '';
   }
   function subscribe(target, event, callback) {
     const listener = target[event]?.(callback);
@@ -517,7 +559,7 @@ if (typeof module === 'object' && module.exports) {
       if (found < 0) found = provider.focusIndex?.(items, requestData) ?? -1;
       Object.assign(session, { items,
         position: found >= 0 ? found : Math.max(0, Math.min(fallbackPosition, items.length - 1)),
-        choices });
+        choices, partial: !!(result.partial || snapshot?.partial) });
       render(!!requestData);
     } catch (error) { if (request === generation) {
       if (provider.isCurrent && !provider.isCurrent(context)) stale();
@@ -659,7 +701,7 @@ if (typeof module === 'object' && module.exports) {
         if (panel.dataset.side === 'pdf') await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
         if (session !== saved) return;
         await result.apply?.();
-        await refreshAfterEdit(saved);
+        await refreshAfterEdit(saved, result.priority);
         return true;
       }
       Object.assign(saved, { ...validateCandidates(result, saved.choices),
@@ -688,9 +730,6 @@ if (typeof module === 'object' && module.exports) {
     });
   }
   function place(target = session?.context.editor) {
-    placeFallback(target);
-  }
-  function placeFallback(target) {
     if (panel.hidden) return;
     get('switch').hidden = target?.splitView !== true;
     get('switch').textContent = '查看HTML';
@@ -760,7 +799,7 @@ if (typeof module === 'object' && module.exports) {
   get('advance').onclick = () => apply(false);
   get('all').onclick = () => apply(true);
   get('save').onclick = async () => {
-    const saved = session, owner = workspace(), model = saved?.context.model;
+    const saved = session, owner = window.readerMonaco, model = saved?.context.model;
     if (!saved || !owner?.save || get('save').disabled) return;
     saved.saving = true; controls();
     try {
@@ -768,7 +807,7 @@ if (typeof module === 'object' && module.exports) {
       // A popup refresh must not cancel saving an already applied replacement.
       if (saved.context.editor.getModel() !== model) throw new Error('文件已切换，未保存替换。');
       const source = model.getValue();
-      if (await owner.save({ followPdf: false, model: model }) === false) throw new Error('保存失败，修改仍未保存，请重试。');
+      if (await owner.save({ followPdf: false, model }) === false) throw new Error('保存失败，修改仍未保存，请重试。');
       if (session === saved && model.getValue() === source) {
         if (valid()) render();
         else message('已保存。差异更新中…');
@@ -788,11 +827,13 @@ if (typeof module === 'object' && module.exports) {
     if (document.hasFocus() && !['Alt', 'Control', 'Meta', 'Shift'].includes(event.key)
       && !(event.key === 'Tab' && event.altKey)) returningToWindow = false;
   }, true);
+  // Close after the PDF viewer updates interactionId, so pointerup cannot
+  // reopen the dismissed passage as a new interaction.
   document.addEventListener('pointerdown', event => {
-    const returning = event.returningToWindow = returningToWindow || !document.hasFocus();
+    event.returningToWindow = returningToWindow;
     returningToWindow = false;
-    if (!panel.hidden && !returning && !event.composedPath().includes(panel)) close(true, false);
-  }, true);
+    if (!panel.hidden && !event.composedPath().includes(panel)) close(true, false);
+  });
   new ResizeObserver(queuePlace).observe(panel);
   window.addEventListener('resize', queuePlace);
   window.addEventListener('storage', event => {

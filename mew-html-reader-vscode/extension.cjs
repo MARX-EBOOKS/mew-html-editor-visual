@@ -666,6 +666,7 @@ class ReaderController {
     this.panelPdfUri = null;
     this.syncRevision = 0;
     this.navigationRevision = 0;
+    this.focusRevision = 0;
     this.report = error => {
       console.error("MEW Reader", error);
       vscode.window.showErrorMessage(`MEW Reader：${error.message || error}`);
@@ -863,6 +864,7 @@ class ReaderController {
     panel.webview.onDidReceiveMessage(message => {
       if (disposed || this.panel !== panel) return;
       if (message?.type === "focusPdf") {
+        ++this.focusRevision;
         panel.reveal(undefined, false);
         focusReaderWindow().catch(this.report);
       }
@@ -933,6 +935,7 @@ class ReaderController {
     await this.panel.webview.postMessage({
       type: "showPdf",
       ...document,
+      maxPage: current?.volume.pages.at(-1) ?? document.maxPage,
       nativeData: pdfUri.scheme === "file",
       url: this.panel.webview.asWebviewUri(pdfUri).toString()
     });

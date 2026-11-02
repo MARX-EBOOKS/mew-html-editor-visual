@@ -38,54 +38,53 @@ function applyEdits(editor, model, version, source, edits, origin = 'review-repl
   return applied;
 }
 function textDiff(left, right, details = false, limit = Infinity, condense = false) {
-  if (left === right) return { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
+  const local = condense || !diffComputer || !details && Number.isFinite(limit);
+  let result, fallback;
+  if (left === right) result = { distance: 0, parts: details ? (left ? [{ html: left, pdf: right, changed: false }] : []) : undefined };
   // A bounded match cannot span more extra characters than its edit limit.
-  if (Number.isFinite(limit) && Math.abs(left.length - right.length) > limit && Math.abs(Array.from(left).length - Array.from(right).length) > limit)
-    return { distance: limit + 1, parts: details ? [{ html: left, pdf: right, changed: true }] : undefined };
+  else if (Number.isFinite(limit) && Math.abs(left.length - right.length) > limit && Math.abs(Array.from(left).length - Array.from(right).length) > limit)
+    result = { distance: limit + 1, parts: details ? [{ html: left, pdf: right, changed: true }] : undefined };
   // Connections condense word runs before the same character refinement used by selections.
-  if (condense || !diffComputer || !details && Number.isFinite(limit)) return localTextDiff(left, right, details, condense ? limit : details ? Math.min(limit, 128) : limit);
-  const fallback = details ? localTextDiff(left, right, true, 128) : null;
-  if (fallback?.distance <= 128) return fallback;
-  try {
-    const result = diffComputer.computeDiff(left.split("\n"), right.split("\n"), {
+  else if (local) result = localTextDiff(left, right, details, condense ? limit : details ? Math.min(limit, 128) : limit);
+  else if ((fallback = details ? localTextDiff(left, right, true, 128) : null)?.distance <= 128) result = fallback;
+  if (!result) try {
+    const alignment = diffComputer.computeDiff(left.split("\n"), right.split("\n"), {
       ignoreTrimWhitespace: false, maxComputationTimeMs: 1000,
       computeMoves: false, extendToSubwords: false
     });
-    if (result.hitTimeout) throw new Error("Monaco diff timed out");
+    if (alignment.hitTimeout) throw new Error("Monaco diff timed out");
     const offsets = text => {
       const starts = [0];
       for (let i = 0; i < text.length; i++) if (text[i] === "\n") starts.push(i + 1);
-      return range => starts[range.startLineNumber - 1] + range.startColumn - 1;
+      return range => [starts[range.startLineNumber - 1] + range.startColumn - 1,
+        starts[range.endLineNumber - 1] + range.endColumn - 1];
     };
     const offsetA = offsets(left), offsetB = offsets(right), parts = [];
     let a = 0, b = 0, distance = 0;
-    for (const change of result.changes) {
+    for (const change of alignment.changes) {
       if (!change.innerChanges?.length) throw new Error("Missing Monaco character ranges");
       for (const { originalRange: x, modifiedRange: y } of change.innerChanges) {
-        const startA = offsetA(x), startB = offsetB(y);
-        const endA = offsetA({ startLineNumber: x.endLineNumber, startColumn: x.endColumn });
-        const endB = offsetB({ startLineNumber: y.endLineNumber, startColumn: y.endColumn });
+        const [startA, endA] = offsetA(x), [startB, endB] = offsetB(y);
         if (![startA, endA, startB, endB].every(Number.isInteger) || startA < a || startB < b
           || endA < startA || endB < startB || endA > left.length || endB > right.length
           || left.slice(a, startA) !== right.slice(b, startB)) throw new Error("Invalid Monaco ranges");
-        let changeDistance = Math.max(Array.from(left.slice(startA, endA)).length, Array.from(right.slice(startB, endB)).length);
+        const html = left.slice(startA, endA), pdf = right.slice(startB, endB);
+        // Refine each hunk even when the whole passage exceeds the edit budget.
+        const refined = details ? localTextDiff(html, pdf, true, 128) : null;
+        distance += refined?.distance <= 128 ? refined.distance : Math.max([...html].length, [...pdf].length);
         if (details) {
           appendPart(parts, left.slice(a, startA), right.slice(b, startB), false);
-          // Refine each hunk even when the whole passage exceeds the edit budget.
-          const html = left.slice(startA, endA), pdf = right.slice(startB, endB);
-          const refined = localTextDiff(html, pdf, true, 128);
-          if (refined.distance <= 128) changeDistance = refined.distance;
           for (const part of refined.parts) appendPart(parts, part.html, part.pdf, part.changed);
         }
-        distance += changeDistance;
         a = endA; b = endB;
       }
     }
     if (left.slice(a) !== right.slice(b)) throw new Error("Incomplete Monaco ranges");
     if (details) appendPart(parts, left.slice(a), right.slice(b), false);
-    return { distance, parts: details ? parts : undefined };
+    result = { distance, parts: details ? parts : undefined };
   } catch { /* Retry Monaco on the next comparison. */ }
-  return fallback && limit >= 128 ? fallback : localTextDiff(left, right, details, limit);
+  result ||= fallback && limit >= 128 ? fallback : localTextDiff(left, right, details, limit);
+  return result;
 }
 // Detailed unbounded text uses word alignment; bounded/token checks use the edit wavefront.
 function localTextDiff(left, right, details = false, limit = Infinity, equal = (a, b) => a === b, substitutions = true) {
@@ -616,6 +615,16 @@ class PdfSourceIndex {
       const lastPage = this.pages?.find(page => this.normalized.starts[last.end - 1] >= page.start && this.normalized.starts[last.end - 1] <= page.end);
       scope = { start: Math.max(this.normalized.starts[start], firstPage?.start ?? 0), end: Math.min(this.normalized.ends[end - 1], lastPage?.end ?? this.raw.length) };
     }
+    let end = this.raw.length - this.raw.trimStart().length;
+    for (const next of connect ? [...(this.connections.get(page) || [])].sort((a, b) => a.start - b.start) : []) {
+      if (next.start > end && next.start - end <= 32) {
+        const hit = page.locate({ text: this.raw.slice(end, next.start), before: '',
+          after: this.raw.slice(next.start, Math.min(next.end, next.start + 24)) },
+          { start: Math.max(0, next.targetStart - (next.start - end) - 32), end: next.targetEnd });
+        if (hit && hit.end <= next.targetStart) this.rememberConnection(end, next.start, page, hit);
+      }
+      end = Math.max(end, next.end);
+    }
     this.pageScopes.set(page, { scope, matches, prepared: connect, connections: connect ? this.connections.get(page) || [] : undefined });
     return scope;
   }
@@ -729,15 +738,17 @@ class PdfSourceIndex {
     const left = alignment?.left || (start === 0 && end === this.raw.length ? this.normalized : normalized(this.raw.slice(start, end))),
       right = alignment?.right || (hit.start === 0 && hit.end === target.raw.length ? target.normalized : normalized(target.raw.slice(hit.start, hit.end)));
     if (!left.text && !right.text) return null;
+    const previous = alignment?.previous, raw = previous?.editorDiff;
+    // Recompare the affected connection: old hunk boundaries can change the optimal alignment.
+    // Unchanged connections are still retained by editorSourceIndex.
     const diff = alignment?.diff || textDiff(left.text, right.text, true, alignment?.recover ? 128 : Infinity);
     if (diff.distance > 128 && diff.parts.some(part => part.changed && Math.max(part.html.length, part.pdf.length) > 128)
       || alignment?.recover && diff.distance > 32 && !diff.parts.some(part => !part.changed && /[\p{L}\p{N}]{3}/u.test(part.html))) {
       if (!alignment?.recover) return null;
       // Recover word runs, keeping bounded OCR differences in the normal diff path.
-      const words = text => text.match(left.text.includes('...') || right.text.includes('...') ? /\S+?\.(?=\.|\s|$)|\S+\s*|\s+/gu : /\S+\s*|\s+/gu) || [];
-      const coarse = localTextDiff(words(left.text), words(right.text), true, 512, undefined, false);
+      const words = left.text.includes('...') || right.text.includes('...') ? /\S+?\.(?=\.|\s|$)|\S+\s*|\s+/gu : /\S+\s*|\s+/gu;
       let a = 0, b = 0;
-      for (const part of coarse.parts) {
+      for (const part of localTextDiff(left.text.match(words) || [], right.text.match(words) || [], true, 512, undefined, false).parts) {
         const x = a, y = b;
         a += part.html.length; b += part.pdf.length;
         if (!/[\p{L}\p{N}]{3}/u.test(part.html) || part.changed && !textDiff(part.html, part.pdf, true).parts
@@ -749,7 +760,8 @@ class PdfSourceIndex {
       }
       return null;
     }
-    const connection = { start, end, targetStart: hit.start, targetEnd: hit.end, normalized: left, distance: diff.distance, spans: diff.parts };
+    const connection = { ...previous, start, end, targetStart: hit.start, targetEnd: hit.end, normalized: left, distance: diff.distance, spans: diff.parts };
+    if (raw) connection.editorDiff = textDiff(this.raw.slice(start, end), target.raw.slice(hit.start, hit.end), true, Infinity, true);
     this.connections.set(target, [connection, ...cached.filter(item => item.start !== start || item.end !== end)].slice(0, Math.max(16, this.raw.length)));
     return connection;
   }

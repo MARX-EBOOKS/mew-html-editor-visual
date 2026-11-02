@@ -23,10 +23,15 @@ if (typeof module === 'object' && module.exports) {
         || groups.find(group => group.tabs.some(tab => sameUri(tab.input?.uri, current.uri)));
       const pdf = groups.find(group => group.tabs.some(tab => tab.input?.viewType === 'mewReader.pdf'
         && sameUri(tab.input.uri, reader.panelPdfUri)));
+      const sourceColumn = editor?.viewColumn ?? html?.viewColumn ?? null;
+      const pdfColumn = pdf?.viewColumn ?? panel.viewColumn ?? null;
       return { ...reviewSourceSnapshot(document, current, editor?.selections),
         changes: lastChange?.uri === document.uri.toString(true) && lastChange.version === document.version ? lastChange.changes : undefined,
-        layout: { sourceViewColumn: html?.viewColumn ?? null, pdfViewColumn: pdf?.viewColumn ?? null,
-          splitView: html && pdf ? html !== pdf : null } };
+        layout: { sourceViewColumn: sourceColumn, pdfViewColumn: pdfColumn,
+          // Columns alone cannot distinguish groups in different windows.
+          // Simultaneously visible native editors must be in separate views.
+          splitView: editor && panel.visible ? true : html && pdf ? html !== pdf
+            : sourceColumn != null && pdfColumn != null ? sourceColumn !== pdfColumn : null } };
     }
     async function publish() {
       if (disposed || reader.panel !== panel || !reader.ready) return;
@@ -54,6 +59,7 @@ if (typeof module === 'object' && module.exports) {
           ...result, snapshot: await snapshot() });
       } };
     const changed = () => void publish().catch(reader.report);
+    if (panel.onDidChangeViewState) subscriptions.push(panel.onDidChangeViewState(changed));
     subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
       if (!sameUri(event.document.uri, reader.current?.uri)) return;
       if (event.contentChanges.length) lastChange = { uri: event.document.uri.toString(true), version: event.document.version,
@@ -66,12 +72,14 @@ if (typeof module === 'object' && module.exports) {
       if (owner?.[event]) subscriptions.push(owner[event](changed));
     subscriptions.push(panel.webview.onDidReceiveMessage(message => {
       if (!['reviewSelection', 'reviewFocus', 'reviewDecorations'].includes(message?.type)) return;
+      const focusRevision = message.type === 'reviewFocus' ? ++reader.focusRevision : reader.focusRevision;
       void (async () => {
         const doc = await document(message);
-        if (message.type === 'reviewFocus') return vscode.window.showTextDocument(doc, {
-          viewColumn: editors()[0]?.viewColumn ?? (await snapshot())?.layout?.sourceViewColumn ?? vscode.ViewColumn.Active,
-          preserveFocus: false, preview: false
-        });
+        if (message.type === 'reviewFocus') {
+          const column = editors()[0]?.viewColumn ?? (await snapshot())?.layout?.sourceViewColumn ?? vscode.ViewColumn.Active;
+          if (disposed || reader.panel !== panel || focusRevision !== reader.focusRevision) return;
+          return vscode.window.showTextDocument(doc, { viewColumn: column, preserveFocus: false, preview: false });
+        }
         if (message.type === 'reviewSelection') {
           for (const editor of editors()) {
             const selections = message.selections.map(value => new vscode.Selection(

@@ -58,7 +58,8 @@ function persistState() {
     htmlUri: pending.htmlUri,
     pdfUri: pending.pdfUri,
     fileName: pending.fileName,
-    pageLabel: pending.pageLabel
+    pageLabel: pending.pageLabel,
+    maxPage: pending.maxPage
   } : undefined };
   vscode.setState(saved);
   vscode.postMessage({ type: "pdfState", state: saved });
@@ -88,7 +89,7 @@ function showScale() { zoom.value = viewer?.currentScale ? `${scalePercent(viewe
 function showPage(number = viewer?.currentPageNumber || 1) {
   const count = viewer?.pagesCount || 0;
   pageNumber.value = String(labels?.[number - 1] ?? number);
-  pageCount.value = String(count);
+  pageCount.value = String(pending?.maxPage ?? "");
   document.querySelector("#previous").disabled = number <= 1;
   document.querySelector("#next").disabled = !count || number >= count;
 }
@@ -277,6 +278,7 @@ async function loadPdf(message) {
     Boolean(message.htmlUri) && message.htmlUri === pending?.htmlUri;
   pending = message;
   persistState();
+  showPage();
   title.textContent = message.fileName || "MEW PDF";
   title.title = title.textContent;
   // HTML navigation can resend the same volume while it is still opening.
