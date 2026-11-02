@@ -619,6 +619,16 @@ class PdfSourceIndex {
         end: Math.min(this.normalized.ends[Math.min(this.normalized.text.length, last.end + page.normalized.text.length - last.at - size + 32) - 1], lastPage?.end ?? this.raw.length)
       };
     }
+    let end = this.raw.length - this.raw.trimStart().length;
+    for (const next of connect ? [...(this.connections.get(page) || [])].sort((a, b) => a.start - b.start) : []) {
+      if (next.start > end && next.start - end <= 32) {
+        const hit = page.locate({ text: this.raw.slice(end, next.start), before: '',
+          after: this.raw.slice(next.start, Math.min(next.end, next.start + 24)) },
+          { start: Math.max(0, next.targetStart - (next.start - end) - 32), end: next.targetEnd });
+        if (hit && hit.end <= next.targetStart) this.rememberConnection(end, next.start, page, hit);
+      }
+      end = Math.max(end, next.end);
+    }
     this.pageScopes.set(page, { scope, matches, prepared: connect, connections: connect ? this.connections.get(page) || [] : undefined });
     return scope;
   }
@@ -737,7 +747,7 @@ class PdfSourceIndex {
     // Unchanged connections are still retained by editorSourceIndex.
     const diff = alignment?.diff || textDiff(left.text, right.text, true, alignment?.recover ? 128 : Infinity);
     if (diff.distance > 128 && diff.parts.some(part => part.changed && Math.max(part.html.length, part.pdf.length) > 128)
-      || alignment?.recover && diff.distance > 32 && !diff.parts.some(part => !part.changed && /[\p{L}\p{N}]{3}/u.test(part.html))) {
+      || alignment?.recover && diff.distance > 32 && !diff.parts.some(part => !part.changed && /[\p{L}\p{N}]{2}/u.test(part.html))) {
       if (!alignment?.recover) return null;
       // Recover word runs, keeping bounded OCR differences in the normal diff path.
       const words = left.text.includes('...') || right.text.includes('...') ? /\S+?\.(?=\.|\s|$)|\S+\s*|\s+/gu : /\S+\s*|\s+/gu;
